@@ -38,6 +38,7 @@ impl BookId {
 	}
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Book {
 	pub id: BookId,

@@ -18,7 +18,10 @@ use log::error;
 use log::info;
 use log::trace;
 use log::warn;
+use winit::dpi::PhysicalPosition;
 use winit::error::EventLoopError;
+use winit::event::Touch;
+use winit::event::TouchPhase;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoopProxy;
 #[cfg(target_os = "android")]
@@ -28,6 +31,7 @@ use winit::application::ApplicationHandler;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 
+use crate::gestures::GestureTracker;
 use crate::renderer::Renderer;
 use crate::scribe::BookId;
 use crate::scribe::Scribe;
@@ -80,6 +84,8 @@ struct App<'window> {
 	egui_ctx: egui::Context,
 	fps: FpsCalculator,
 	request_redraw: Instant,
+	gestures: GestureTracker<10>,
+	position: PhysicalPosition<f64>,
 }
 
 impl App<'_> {
@@ -148,6 +154,11 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			.create_window(Window::default_attributes())
 			.unwrap();
 		window.set_title("Scribble-reader");
+
+		let size = window.inner_size();
+		self.gestures
+			.set_min_distance_by_screen(size.width, size.height);
+
 		if let Some(renderer) = self.renderer.as_mut() {
 			match renderer.resume(window, &self.egui_ctx) {
 				Ok(_) => {}
@@ -284,6 +295,43 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				self.renderer = None;
 				event_loop.exit();
 			}
+			WindowEvent::CursorMoved { position, .. } => {
+				self.position = position;
+				self.gestures.touch_move(0, position);
+			}
+			WindowEvent::MouseInput { state, .. } => match state {
+				winit::event::ElementState::Pressed => {
+					self.gestures.touch_start(0, self.position);
+				}
+				winit::event::ElementState::Released => {
+					if self.gestures.touch_end(0, self.position).idle() {
+						self.gestures.reset();
+					}
+				}
+			},
+			WindowEvent::Touch(Touch {
+				id,
+				location,
+				phase,
+				..
+			}) => match phase {
+				TouchPhase::Started => {
+					log::info!("Started {event:?}");
+					self.gestures.touch_start(id, location);
+				}
+				TouchPhase::Moved => self.gestures.touch_move(id, location),
+				TouchPhase::Ended => {
+					log::info!("Ended {event:?}");
+					if self.gestures.touch_end(id, location).idle() {
+						self.gestures.reset();
+					}
+				}
+				TouchPhase::Cancelled => {
+					if self.gestures.touch_cancel(id).idle() {
+						self.gestures.reset();
+					}
+				}
+			},
 			event => {
 				let Some(renderer) = self.renderer.as_mut() else {
 					warn!("Renderer not initialized");
@@ -294,8 +342,10 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				let response = renderer.handle_gui_event(&event);
 
 				match event {
-					WindowEvent::Resized(physical_size) => {
-						renderer.resize(physical_size);
+					WindowEvent::Resized(size) => {
+						self.gestures
+							.set_min_distance_by_screen(size.width, size.height);
+						renderer.resize(size);
 						self.request_redraw();
 					}
 					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -508,6 +558,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 		.into();
 	});
 	let fps = FpsCalculator::new();
+	let gestures = GestureTracker::<10>::new();
 
 	let mut app = App {
 		renderer: None,
@@ -517,6 +568,8 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 		egui_ctx,
 		fps,
 		request_redraw: Instant::now(),
+		gestures,
+		position: PhysicalPosition::default(),
 	};
 
 	event_loop.run_app(&mut app)?;
