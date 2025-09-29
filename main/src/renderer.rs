@@ -4,8 +4,8 @@ use winit::dpi::PhysicalSize;
 use egui_wgpu::wgpu::{
 	self,
 };
-use winit::event::WindowEvent;
 use std::sync::Arc;
+use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::ui::GuiView;
@@ -67,7 +67,10 @@ pub(crate) struct Renderer<'window> {
 }
 
 impl Renderer<'_> {
-	pub(crate) async fn create(window: Window, egui_ctx: &egui::Context) -> Result<Self, RendererError> {
+	pub(crate) async fn create(
+		window: Window,
+		egui_ctx: &egui::Context,
+	) -> Result<Self, RendererError> {
 		let window = Arc::new(window);
 		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
 			backends: wgpu::Backends::all(),
@@ -81,10 +84,11 @@ impl Renderer<'_> {
 		let (device, queue) = adapter
 			.request_device(&wgpu::DeviceDescriptor {
 				label: None,
-				// required_features: adapter.features(),
 				required_features: wgpu::Features::empty(),
+				#[cfg(target_os = "android")]
 				required_limits: wgpu::Limits::downlevel_webgl2_defaults()
 					.using_resolution(adapter.limits()),
+				required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
 				memory_hints: wgpu::MemoryHints::MemoryUsage,
 				trace: wgpu::Trace::Off,
 			})
@@ -203,7 +207,9 @@ impl Renderer<'_> {
 
 	pub(crate) fn handle_gui_event(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
 		if let Some(surface_state) = self.surface_state.as_mut() {
-			surface_state.egui_state.on_window_event(&surface_state.window, event)
+			surface_state
+				.egui_state
+				.on_window_event(&surface_state.window, event)
 		} else {
 			egui_winit::EventResponse {
 				repaint: false,
