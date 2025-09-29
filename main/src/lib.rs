@@ -7,6 +7,11 @@ mod ui;
 use std::time::Duration;
 use std::time::Instant;
 
+use egui::Color32;
+use egui::FontFamily;
+use egui::FontId;
+use egui::Stroke;
+use egui::TextStyle;
 use egui::Vec2;
 use log::error;
 use log::info;
@@ -25,7 +30,9 @@ use winit::window::Window;
 use crate::renderer::Renderer;
 use crate::scribe::BookId;
 use crate::scribe::Scribe;
+use crate::ui::theme;
 use crate::ui::BookCard;
+use crate::ui::FeatureView;
 use crate::ui::ListView;
 use crate::ui::MainView;
 
@@ -167,46 +174,44 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 						author: b.author,
 					})
 				});
-				self.view.list = Some(ListView { page: 0, cards });
+				self.view.feature = FeatureView::List(ListView { page: 0, cards });
 			}
-			AppPoke::BookUpdated(id) => {
-				if let Some(list) = self.view.list.as_mut() {
-					let mut updated = false;
-					for card in list.cards.iter_mut().flatten() {
-						if card.id == id
-							&& let Some(book) = self.scribe.library().book(id)
-						{
-							card.title = book.title;
-							card.author = book.author;
-							log::info!("Updated book {id:?}");
-							updated = true;
-							break;
-						}
-					}
-					if !updated {
-						log::info!("No updated needed for {id:?}");
+			AppPoke::BookUpdated(id) => match &mut self.view.feature {
+				ui::FeatureView::Empty => {}
+				ui::FeatureView::List(list) => {
+					let card = list.cards.iter_mut().flatten().find(|c| c.id == id);
+					if let Some(card) = card
+						&& let Some(book) = self.scribe.library().book(id)
+					{
+						card.title = book.title;
+						card.author = book.author;
+						log::info!("Updated book {id:?}");
 					}
 				}
-			}
-			AppPoke::NextPage => {
-				if let Some(list) = self.view.list.as_mut() {
+			},
+			AppPoke::NextPage => match &mut self.view.feature {
+				ui::FeatureView::Empty => {}
+				ui::FeatureView::List(list) => {
 					let page = list.page + 1;
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
 					let mut books = self.scribe.library().books(r);
-					self.scribe.assistant().poke_list(&books);
-					let cards = std::array::from_fn(|_| {
-						books.pop().map(|b| BookCard {
-							id: b.id,
-							title: b.title,
-							author: b.author,
-						})
-					});
-					list.page = page;
-					list.cards = cards;
+					if !books.is_empty() {
+						self.scribe.assistant().poke_list(&books);
+						let cards = std::array::from_fn(|_| {
+							books.pop().map(|b| BookCard {
+								id: b.id,
+								title: b.title,
+								author: b.author,
+							})
+						});
+						list.page = page;
+						list.cards = cards;
+					}
 				}
-			}
-			AppPoke::PreviousPage => {
-				if let Some(list) = self.view.list.as_mut() {
+			},
+			AppPoke::PreviousPage => match &mut self.view.feature {
+				ui::FeatureView::Empty => {}
+				ui::FeatureView::List(list) => {
 					let page = list.page.saturating_sub(1);
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
 					let mut books = self.scribe.library().books(r);
@@ -221,7 +226,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					list.page = page;
 					list.cards = cards;
 				}
-			}
+			},
 		}
 	}
 
@@ -352,17 +357,51 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 
 	let egui_ctx = egui::Context::default();
 	egui_extras::install_image_loaders(&egui_ctx);
+
 	egui_ctx.add_font(egui::epaint::text::FontInsert::new(
 		"lucide-icons",
 		egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES),
 		vec![egui::epaint::text::InsertFontFamily {
-			family: ui::ICON_FONT_FAMILY.clone(),
+			family: theme::ICON_FONT_FAMILY.clone(),
 			priority: egui::epaint::text::FontPriority::Lowest,
 		}],
 	));
+	egui_ctx.set_theme(egui::Theme::Light);
 	egui_ctx.style_mut(|style| {
 		style.animation_time = 0.0;
 		style.spacing.item_spacing = Vec2::new(5.0, 5.0);
+		style.wrap_mode = Some(egui::TextWrapMode::Truncate);
+		style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.open.weak_bg_fill = Color32::TRANSPARENT;
+		style.visuals.widgets.open.bg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+		style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.active.expansion = 0.0;
+		style.visuals.widgets.active.weak_bg_fill = Color32::LIGHT_GRAY;
+		style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.hovered.expansion = 0.0;
+		style.visuals.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
+		style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+
+		style.text_styles = [
+			(TextStyle::Heading, FontId::new(25.0, FontFamily::Proportional)),
+			(theme::HEADING2.clone(), FontId::new(theme::M_SIZE, FontFamily::Proportional)),
+			(TextStyle::Body, FontId::new(theme::DEFAULT_SIZE, FontFamily::Proportional)),
+			(TextStyle::Monospace, FontId::new(theme::DEFAULT_SIZE, FontFamily::Monospace)),
+			(TextStyle::Button, FontId::new(theme::M_SIZE, FontFamily::Proportional)),
+			(TextStyle::Small, FontId::new(theme::S_SIZE, FontFamily::Proportional)),
+			(theme::ICON_STYLE.clone(), FontId::new(theme::DEFAULT_SIZE, theme::ICON_FONT_FAMILY.clone())),
+			(theme::ICON_L_STYLE.clone(), FontId::new(theme::L_SIZE, theme::ICON_FONT_FAMILY.clone())),
+			(theme::ICON_XL_STYLE.clone(), FontId::new(theme::XL_SIZE, theme::ICON_FONT_FAMILY.clone())),
+		]
+		.into();
 	});
 	let fps = FpsCalculator::new();
 

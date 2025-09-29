@@ -49,17 +49,13 @@ pub(crate) trait ScribeBell {
 
 	fn book_updated(&self, id: BookId);
 
-	fn complete(&self, ticket: ScribeTicket) {
-		let _ = ticket;
-	}
-
 	fn fail(&self, error: String);
 }
 
 #[derive(Debug)]
 pub(crate) enum ScribeRequest {
 	Scan,
-	List(Vec<BookId>),
+	Show(BookId),
 	Sort(library::SortOrder),
 }
 
@@ -126,7 +122,7 @@ impl Scribe {
 		let options = ScribeOptions::from(&settings);
 		let lib = library::Library::default();
 		let worker_lib = lib.clone();
-		let storage = secret_storage::connect(&options.state_db_path)?;
+		let storage = secret_storage::create(&options.state_db_path, &settings.cache_path)?;
 		let (order_tx, order_rx) = channel();
 		let handle = spawn_scribe(bell, lib_path, worker_lib, storage, order_rx);
 
@@ -189,7 +185,7 @@ where
 			let request = order_rx.recv();
 			log::info!("Request received: {request:?}");
 			match request {
-				Ok((ticket, ScribeRequest::Scan)) => {
+				Ok((_ticket, ScribeRequest::Scan)) => {
 					let books: BTreeMap<_, _> = storage
 						.scan(&lib_path)
 						.inspect_err(|e| log::error!("{e}"))?;
@@ -206,16 +202,12 @@ where
 					}
 					log::info!("Library loaded with {books_len} books");
 					bell.library_loaded();
-					bell.complete(ticket);
 				}
-				Ok((ticket, ScribeRequest::List(ids))) => {
+				Ok((_ticket, ScribeRequest::Show(id))) => {
 					// TODO: Actually do something
-					for id in ids {
-						bell.book_updated(id);
-					}
-					bell.complete(ticket);
+					bell.book_updated(id);
 				}
-				Ok((ticket, ScribeRequest::Sort(order))) => {
+				Ok((_ticket, ScribeRequest::Sort(order))) => {
 					let SortOrder(field, dir) = order;
 					let sorted = {
 						let lib = lib.read().unwrap();
@@ -227,7 +219,6 @@ where
 						lib.sorted = sorted;
 					}
 					bell.library_sorted();
-					bell.complete(ticket);
 				}
 				Err(RecvError) => {
 					log::info!("Scribe worker terminated");
@@ -292,10 +283,19 @@ impl ScribeAssistant {
 		};
 	}
 
-	pub fn poke_list(&self, books: &[library::Book]) -> () {
+	pub fn poke_list(&self, books: &[library::Book]) {
 		let ids = books.iter().map(|b| b.id).collect::<Vec<_>>();
-		if !ids.is_empty() {
-			self.send(ScribeRequest::List(ids));
+		let ticket = self.new_ticket();
+		for id in ids {
+			match self.order_tx.send((ticket, ScribeRequest::Show(id))) {
+				Ok(_) => {
+					// TODO: Do something with ticket
+				}
+				Err(e) => {
+					log::info!("Error sending to scribe: {e}");
+					todo!()
+				}
+			};
 		}
 	}
 }
@@ -338,7 +338,7 @@ mod library {
 		pub path: PathBuf,
 		pub title: Option<Arc<String>>,
 		pub author: Option<Arc<String>>,
-		pub size: i64,
+		pub size: u64,
 		pub modified_at: DateTime<Utc>,
 		pub added_at: DateTime<Utc>,
 	}
@@ -390,7 +390,7 @@ mod library {
 				.flatten()
 				.filter_map(|id| lib.books.get(id).cloned())
 				.collect::<Vec<_>>();
-			log::info!(
+			log::trace!(
 				"Requested books {start}..{end}, received {} from all books {}",
 				books.len(),
 				lib.sorted.len()
@@ -404,7 +404,9 @@ mod secret_storage {
 	use chrono::DateTime;
 	use chrono::Utc;
 	use chrono::serde::ts_seconds;
-	use epub::doc::EpubDoc;
+	use rbook::Ebook;
+	use rbook::ebook::metadata::MetaEntry;
+	use rbook::ebook::metadata::Metadata;
 	use rusqlite_migration::M;
 	use rusqlite_migration::Migrations;
 	use serde::Deserialize;
@@ -437,7 +439,7 @@ mod secret_storage {
 		#[error(transparent)]
 		SystemTime(#[from] std::time::SystemTimeError),
 		#[error(transparent)]
-		Doc(#[from] epub::doc::DocError),
+		Ebook(#[from] rbook::ebook::errors::EbookError),
 		#[error("Scan path is not directory")]
 		ScanPathNotDir,
 	}
@@ -469,7 +471,7 @@ mod secret_storage {
 		pub(crate) path: PathBuf,
 		pub(crate) title: Option<String>,
 		pub(crate) author: Option<String>,
-		pub(crate) size: i64,
+		pub(crate) size: u64,
 		#[serde(with = "ts_seconds")]
 		pub(crate) modified_at: DateTime<Utc>,
 		#[serde(with = "ts_seconds")]
@@ -490,8 +492,9 @@ mod secret_storage {
 		}
 	}
 
-	const MIGRATIONS_SLICE: &[M<'_>] = &[M::up(
-		"create table books (
+	const MIGRATIONS_SLICE: &[M<'_>] = &[
+		M::up(
+			"create table books (
 			id integer primary key,
 			path text not null unique,
 			title text,
@@ -501,35 +504,45 @@ mod secret_storage {
 			added_at integer not null,
 			exist boolean not null
 		);",
-	)];
+		),
+		M::up(
+			"create table book_cache_thumbnail (
+			book_id integer primary key,
+			path text not null,
+			added_at integer not null,
+			foreign key (book_id) references books(id)
+				on update cascade
+				on delete cascade
+		);",
+		),
+	];
 	const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
 
-	pub fn connect(db_path: &Path) -> Result<SecretStorage, SecretStorageError> {
+	pub fn create(db_path: &Path, cache_path: &Path) -> Result<SecretStorage, SecretStorageError> {
 		let mut conn = rusqlite::Connection::open(db_path)?;
 
-		conn.pragma_update(None, "mmap_size", 30000000000u64)?;
-		conn.pragma_update(None, "page_size", 32768u64)?;
 		conn.pragma_update(None, "foreign_keys", "on")?;
 		conn.pragma_update(None, "journal_mode", "WAL")?;
 
 		MIGRATIONS.to_latest(&mut conn).unwrap();
 
-		Ok(SecretStorage { conn })
+		let cache_path = cache_path.to_path_buf();
+		Ok(SecretStorage { conn, cache_path })
 	}
 
 	#[derive(Debug, Serialize)]
-	struct InsertBook {
+	struct InsertBook<'a> {
 		path: PathBuf,
-		title: Option<String>,
-		author: Option<String>,
-		size: i64,
+		title: Option<&'a str>,
+		author: Option<&'a str>,
+		size: u64,
 		#[serde(with = "ts_seconds")]
 		modified_at: DateTime<Utc>,
 		#[serde(with = "ts_seconds")]
 		added_at: DateTime<Utc>,
 	}
 
-	impl From<(i64, InsertBook)> for library::Book {
+	impl From<(i64, InsertBook<'_>)> for library::Book {
 		fn from(value: (i64, InsertBook)) -> library::Book {
 			let (
 				id,
@@ -545,8 +558,8 @@ mod secret_storage {
 			library::Book {
 				id: library::BookId(id),
 				path,
-				title: title.map(Arc::new),
-				author: author.map(Arc::new),
+				title: title.map(|s| Arc::new(s.to_string())),
+				author: author.map(|s| Arc::new(s.to_string())),
 				size,
 				modified_at,
 				added_at,
@@ -556,6 +569,7 @@ mod secret_storage {
 
 	pub struct SecretStorage {
 		conn: rusqlite::Connection,
+		cache_path: PathBuf,
 	}
 
 	impl SecretStorage {
@@ -587,33 +601,27 @@ mod secret_storage {
 				)?;
 				for entry in fs::read_dir(path)? {
 					let entry = entry?;
-					match scan_book(&entry) {
-						Ok(book) => {
-							log::trace!(
-								"Found {} by {}",
-								book.title.as_deref().unwrap_or("Unknown"),
-								book.author.as_deref().unwrap_or("Unknown")
-							);
-							let params = to_params_named(&book)?;
-							let params = params.to_slice();
-							let book_id =
-								upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
-							let book: library::Book = (book_id, book).into();
-							books.insert(book.id, book);
+					match scan_book(&mut upsert_stmt, &entry) {
+						Ok((id, book)) => {
+							books.insert(id, book);
 						}
 						Err(e) => {
 							log::error!(
-								"Failed to read book '{}': {e}",
+								"Failed to scan file '{}': {e}",
 								entry.file_name().display()
 							);
 						}
-					};
+					}
 				}
 			}
 			log::trace!("Total {} books", books.len());
 
 			tx.commit()?;
 			Ok(books)
+		}
+
+		pub fn refresh_thumbnail(&self, id: library::BookId) -> Result<(), SecretStorageError> {
+			Ok(())
 		}
 
 		pub fn get_books(
@@ -639,22 +647,38 @@ mod secret_storage {
 		}
 	}
 
-	fn scan_book(entry: &fs::DirEntry) -> Result<InsertBook, SecretStorageError> {
+	fn scan_book(
+		upsert_stmt: &mut rusqlite::Statement<'_>,
+		entry: &fs::DirEntry,
+	) -> Result<(library::BookId, library::Book), SecretStorageError> {
 		let path = entry.path();
-		let doc = EpubDoc::new(&path)?;
-		let title = doc.mdata("title");
-		let author = doc.mdata("creator");
-		let size = entry.metadata()?.size() as i64;
-		let modified_at = entry.metadata()?.modified()?.into();
+		let epub = rbook::Epub::open(&path)?;
+		let epub_metadata = epub.metadata();
+		let title = epub_metadata.title().map(|t| t.value());
+		let author = epub_metadata.creators().next().map(|c| c.value());
+		let entry_metadata = entry.metadata()?;
+		let size = entry_metadata.size();
+		let modified_at = entry_metadata
+			.modified()
+			.or_else(|_| entry_metadata.created())?
+			.into();
 		let added_at = Utc::now();
-
-		Ok(InsertBook {
+		let book = InsertBook {
 			path,
 			title,
 			author,
 			size,
 			modified_at,
 			added_at,
-		})
+		};
+		log::trace!(
+			"Found {} by {}",
+			book.title.unwrap_or("Unknown"),
+			book.author.unwrap_or("Unknown")
+		);
+		let params = to_params_named(&book)?;
+		let params = params.to_slice();
+		let book_id = upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
+		Ok((library::BookId(book_id), (book_id, book).into()))
 	}
 }

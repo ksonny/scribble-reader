@@ -48,7 +48,7 @@ impl GuiRenderer {
 			egui::ViewportId::ROOT,
 			window,
 			Some(scale_factor as f32),
-			window.theme(),
+			None,
 			Some(max_texture_size),
 		);
 

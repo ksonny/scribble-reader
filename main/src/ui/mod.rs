@@ -1,18 +1,41 @@
 use std::sync::Arc;
 
+use egui::Color32;
 use egui::Context;
 use egui::FontFamily;
 use egui::FontId;
 use egui::Layout;
+use egui::RichText;
+use egui::Style;
 use egui::TextFormat;
+use egui::TextStyle;
 use egui::text::LayoutJob;
-use lazy_static::lazy_static;
 use lucide_icons::Icon;
 
 use crate::scribe::BookId;
 
-lazy_static! {
-	pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
+pub mod theme {
+	use egui::FontFamily;
+	use egui::FontId;
+	use egui::TextStyle;
+	use lazy_static::lazy_static;
+
+	pub const DEFAULT_SIZE: f32 = 14.0;
+	pub const S_SIZE: f32 = 12.0;
+	pub const M_SIZE: f32 = 18.0;
+	pub const L_SIZE: f32 = 24.0;
+	pub const XL_SIZE: f32 = 48.0;
+
+	lazy_static! {
+		pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
+		pub static ref ICON_FONT: FontId = FontId::new(DEFAULT_SIZE, ICON_FONT_FAMILY.clone());
+		pub static ref ICON_L_FONT: FontId = FontId::new(L_SIZE, ICON_FONT_FAMILY.clone());
+		pub static ref ICON_XL_FONT: FontId = FontId::new(XL_SIZE, ICON_FONT_FAMILY.clone());
+		pub static ref ICON_STYLE: TextStyle = TextStyle::Name("ICON_STYLE".into());
+		pub static ref ICON_L_STYLE: TextStyle = TextStyle::Name("ICON_L_STYLE".into());
+		pub static ref ICON_XL_STYLE: TextStyle = TextStyle::Name("ICON_XL_STYLE".into());
+		pub static ref HEADING2: TextStyle = TextStyle::Name("HEADING2".into());
+	}
 }
 
 pub trait GuiView {
@@ -35,13 +58,12 @@ impl BookCard {
 				ui.set_height(height);
 				ui.set_width(width);
 				ui.group(|ui| {
-					ui.set_width(height * 0.5);
-					// ui.set_min_size([height, height].into());
+					ui.set_width(height * 0.66);
 					ui.label("Test");
 				});
 				ui.vertical(|ui| {
 					let title = self.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
-					ui.label(title);
+					ui.label(RichText::new(title).text_style(TextStyle::Heading));
 					ui.end_row();
 					let author = self
 						.author
@@ -86,26 +108,51 @@ pub trait MainPokeStick {
 }
 
 #[derive(Default)]
+pub enum FeatureView {
+	#[default]
+	Empty,
+	List(ListView),
+}
+
+#[derive(Default)]
 pub struct MainView {
-	pub list: Option<ListView>,
+	pub feature: FeatureView,
 }
 
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context, poke_stick: &impl MainPokeStick) {
 		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-			egui::MenuBar::new().ui(ui, |ui| {
-				ui.menu_button(icon_text(Icon::Hamburger, "Scribble reader", 18.0), |ui| {
-					if ui
-						.button(icon_text(Icon::RefreshCw, "Refresh", 18.0))
-						.clicked()
-					{
-						poke_stick.scan_library();
-					}
-					if ui.button(icon_text(Icon::DoorOpen, "Quit", 18.0)).clicked() {
-						ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-					}
+			egui::MenuBar::new()
+				.style(|style: &mut Style| {
+					style.visuals.weak_text_alpha = 0.0;
+				})
+				.ui(ui, |ui| {
+					ui.menu_button(
+						UiIcon::new(Icon::Menu)
+							.large()
+							.build(),
+						|ui| {
+							if ui
+								.button(
+									UiIcon::new(Icon::RefreshCw)
+										.text("Rescan library")
+										.large()
+										.build(),
+								)
+								.clicked()
+							{
+								poke_stick.scan_library();
+							}
+							if ui
+								.button(UiIcon::new(Icon::DoorOpen).text("Quit").large().build())
+								.clicked()
+							{
+								ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+							}
+						},
+					);
+					ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
 				});
-			});
 		});
 
 		egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
@@ -118,7 +165,10 @@ impl GuiView for MainView {
 							|ui| {
 								let width = ui.available_width();
 								ui.set_height(width * 0.5);
-								if ui.button(icon(Icon::MoveLeft, 64.0)).clicked() {
+								if ui
+									.button(UiIcon::new(Icon::MoveLeft).xlarge().build())
+									.clicked()
+								{
 									poke_stick.previous_page();
 								}
 							},
@@ -127,7 +177,10 @@ impl GuiView for MainView {
 							Layout::centered_and_justified(egui::Direction::RightToLeft),
 							|ui| {
 								ui.set_height(ui.available_width() * 0.5);
-								if ui.button(icon(Icon::MoveRight, 64.0)).clicked() {
+								if ui
+									.button(UiIcon::new(Icon::MoveRight).xlarge().build())
+									.clicked()
+								{
 									poke_stick.next_page();
 								}
 							},
@@ -138,33 +191,84 @@ impl GuiView for MainView {
 			});
 		});
 
-		if let Some(list) = &self.list {
-			egui::CentralPanel::default().show(ctx, |ui| list.draw(ui));
+		match &self.feature {
+			FeatureView::Empty => {}
+			FeatureView::List(list) => {
+				egui::CentralPanel::default().show(ctx, |ui| list.draw(ui));
+			}
 		}
 	}
 }
 
-fn icon(icon: Icon, size: f32) -> egui::RichText {
-	egui::RichText::new(icon.unicode()).font(FontId::new(size, ICON_FONT_FAMILY.clone()))
+struct UiIcon<'a> {
+	color: Color32,
+	icon_font: FontId,
+	icon: Icon,
+	text_font: FontId,
+	text: Option<&'a str>,
 }
 
-fn icon_text(icon: Icon, text: &str, size: f32) -> egui::text::LayoutJob {
-	let mut job = LayoutJob::default();
-	job.append(
-		&icon.unicode().to_string(),
-		0.0,
-		TextFormat {
-			font_id: FontId::new(size, ICON_FONT_FAMILY.clone()),
-			..Default::default()
-		},
-	);
-	job.append(
-		text,
-		5.0,
-		TextFormat {
-			font_id: FontId::new(size, FontFamily::Proportional),
-			..Default::default()
-		},
-	);
-	job
+impl UiIcon<'_> {
+	fn new(icon: Icon) -> Self {
+		UiIcon {
+			color: Color32::BLACK,
+			icon_font: theme::ICON_FONT.clone(),
+			icon,
+			text_font: FontId::new(theme::DEFAULT_SIZE, FontFamily::Proportional),
+			text: None,
+		}
+	}
+
+	fn color(self, color: Color32) -> Self {
+		Self { color, ..self }
+	}
+
+	fn text<'a>(self, text: &'a str) -> UiIcon<'a> {
+		UiIcon {
+			text: Some(text),
+			..self
+		}
+	}
+
+	fn large(self) -> Self {
+		Self {
+			icon_font: theme::ICON_L_FONT.clone(),
+			text_font: FontId::new(theme::L_SIZE, FontFamily::Proportional),
+			..self
+		}
+	}
+
+	fn xlarge(self) -> Self {
+		Self {
+			icon_font: theme::ICON_XL_FONT.clone(),
+			text_font: FontId::new(theme::XL_SIZE, FontFamily::Proportional),
+			..self
+		}
+	}
+
+	fn build(self) -> egui::text::LayoutJob {
+		let mut job = LayoutJob::default();
+		let mut char_buf = [0; 4];
+		job.append(
+			self.icon.unicode().encode_utf8(&mut char_buf),
+			0.0,
+			TextFormat {
+				font_id: self.icon_font,
+				color: self.color,
+				..Default::default()
+			},
+		);
+		if let Some(text) = self.text {
+			job.append(
+				text,
+				5.0,
+				TextFormat {
+					font_id: self.text_font,
+					color: self.color,
+					..Default::default()
+				},
+			);
+		}
+		job
+	}
 }
