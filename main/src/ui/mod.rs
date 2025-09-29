@@ -118,7 +118,7 @@ impl ListView {
 	pub const SIZE: u32 = 5;
 
 	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl PokeStick) {
-		let height = ui.available_height() - Self::SIZE as f32 * ui.spacing().item_spacing.y;
+		let height = ui.available_height() - (Self::SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
 		let card_height = height / 5.0;
 
 		ui.vertical(|ui| {
