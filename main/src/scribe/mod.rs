@@ -12,7 +12,7 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::thread::JoinHandle;
 
-use crate::scribe::library::BookId;
+pub use crate::scribe::library::BookId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScribeCreateError {
@@ -227,7 +227,9 @@ mod library {
 	#[derive(Debug, Default)]
 	pub(crate) enum SortField {
 		#[default]
-		Date,
+		Added,
+		Modified,
+		Name,
 	}
 
 	#[derive(Debug, Default)]
@@ -249,7 +251,9 @@ mod library {
 		pub path: PathBuf,
 		pub title: Option<Arc<String>>,
 		pub author: Option<Arc<String>>,
-		pub timestamp: DateTime<Utc>,
+		pub size: i64,
+		pub modified_at: DateTime<Utc>,
+		pub added_at: DateTime<Utc>,
 	}
 
 	#[derive(Debug, Default)]
@@ -296,6 +300,7 @@ mod secret_storage {
 	use serde_rusqlite::to_params_named;
 
 	use std::fs;
+	use std::os::unix::fs::MetadataExt;
 	use std::path::Path;
 	use std::path::PathBuf;
 	use std::sync::Arc;
@@ -350,8 +355,11 @@ mod secret_storage {
 		pub(crate) path: PathBuf,
 		pub(crate) title: Option<String>,
 		pub(crate) author: Option<String>,
+		pub(crate) size: i64,
 		#[serde(with = "ts_seconds")]
-		pub(crate) timestamp: DateTime<Utc>,
+		pub(crate) modified_at: DateTime<Utc>,
+		#[serde(with = "ts_seconds")]
+		pub(crate) added_at: DateTime<Utc>,
 	}
 
 	impl From<SecretBook> for library::Book {
@@ -361,7 +369,9 @@ mod secret_storage {
 				path: value.path,
 				title: value.title.map(Arc::new),
 				author: value.author.map(Arc::new),
-				timestamp: value.timestamp,
+				size: value.size,
+				modified_at: value.modified_at,
+				added_at: value.added_at,
 			}
 		}
 	}
@@ -372,7 +382,9 @@ mod secret_storage {
 			path text not null unique,
 			title text,
 			author text,
-			timestamp integer not null,
+			size integer not null,
+			modified_at integer not null,
+			added_at integer not null,
 			exist boolean not null
 		);",
 	)];
@@ -396,8 +408,11 @@ mod secret_storage {
 		path: PathBuf,
 		title: Option<String>,
 		author: Option<String>,
+		size: i64,
 		#[serde(with = "ts_seconds")]
-		timestamp: DateTime<Utc>,
+		modified_at: DateTime<Utc>,
+		#[serde(with = "ts_seconds")]
+		added_at: DateTime<Utc>,
 	}
 
 	impl From<(i64, InsertBook)> for library::Book {
@@ -408,7 +423,9 @@ mod secret_storage {
 					path,
 					title,
 					author,
-					timestamp,
+					size,
+					modified_at,
+					added_at,
 				},
 			) = value;
 			library::Book {
@@ -416,7 +433,9 @@ mod secret_storage {
 				path,
 				title: title.map(Arc::new),
 				author: author.map(Arc::new),
-				timestamp,
+				size,
+				modified_at,
+				added_at,
 			}
 		}
 	}
@@ -437,37 +456,40 @@ mod secret_storage {
 			let mut books = Vec::new();
 			{
 				let mut upsert_stmt = tx.prepare(
-					"
-					insert into books (path, title, author, timestamp, exist)
-					values (:path, :title, :author, :timestamp, true)
+					"insert into books (path, title, author, size, modified_at, added_at, exist)
+					values (:path, :title, :author, :size, :modified_at, :added_at, true)
 					on conflict (path)
 					do update set
 						title = :title,
 						author = :author,
-						timestamp = :timestamp,
+						size = :size,
+						modified_at = :modified_at,
 						exist = true
 					returning id;
 				",
 				)?;
 				for entry in fs::read_dir(path)? {
 					let entry = entry?;
-					let path = entry.path();
-					let doc = EpubDoc::new(&path)?;
-					let title = doc.mdata("title");
-					let author = doc.mdata("author");
-					let book = InsertBook {
-						path,
-						title,
-						author,
-						timestamp: entry.metadata()?.modified()?.into(),
+					match scan_book(&entry) {
+						Ok(book) => {
+							log::trace!(
+								"Found {} by {}",
+								book.title.as_deref().unwrap_or("Unknown"),
+								book.author.as_deref().unwrap_or("Unknown")
+							);
+							let params = to_params_named(&book)?;
+							let params = params.to_slice();
+							let book_id =
+								upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
+							books.push((book_id, book).into());
+						}
+						Err(e) => {
+							log::error!(
+								"Failed to read book '{}': {e}",
+								entry.file_name().display()
+							);
+						}
 					};
-					log::trace!("Found {}", book.path.display());
-					let params = to_params_named(&book)?;
-					let params = params.to_slice();
-
-					let book_id = upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
-
-					books.push((book_id, book).into());
 				}
 			}
 			log::trace!("Total {} books", books.len());
@@ -478,11 +500,14 @@ mod secret_storage {
 
 		pub fn get_books(&self) -> Result<Vec<library::Book>, SecretStorageError> {
 			let mut stmt = self.conn.prepare(
-				"
-				select
+				"select
 					id,
 					path,
-					timestamp
+					title,
+					author,
+					size,
+					modified_at,
+					added_at
 				from books
 				where exist = true;
 			",
@@ -492,5 +517,24 @@ mod secret_storage {
 				.collect::<Result<Vec<_>, _>>()?;
 			Ok(series)
 		}
+	}
+
+	fn scan_book(entry: &fs::DirEntry) -> Result<InsertBook, SecretStorageError> {
+		let path = entry.path();
+		let doc = EpubDoc::new(&path)?;
+		let title = doc.mdata("title");
+		let author = doc.mdata("creator");
+		let size = entry.metadata()?.size() as i64;
+		let modified_at = entry.metadata()?.modified()?.into();
+		let added_at = Utc::now();
+
+		Ok(InsertBook {
+			path,
+			title,
+			author,
+			size,
+			modified_at,
+			added_at,
+		})
 	}
 }

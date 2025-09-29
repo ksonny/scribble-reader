@@ -9,6 +9,7 @@ use egui::text::LayoutJob;
 use lazy_static::lazy_static;
 use lucide_icons::Icon;
 
+use crate::scribe::BookId;
 use crate::scribe::ScribeAssistant;
 
 lazy_static! {
@@ -20,46 +21,45 @@ pub trait GuiView {
 }
 
 pub struct BookCard {
-	name: Arc<String>,
+	id: BookId,
+	name: Option<Arc<String>>,
+	author: Option<Arc<String>>,
 }
 
-pub struct PageView {
+pub struct ListView {
+	cards: [BookCard; 5],
+}
 
+impl ListView {
+	fn draw(&self, ui: &mut egui::Ui) {
+		let height = ui.available_height();
+		let card_height = height / 5.0;
+
+		ui.vertical(|ui| {
+			for i in 0..5 {
+				ui.group(|ui| {
+					ui.set_width(ui.available_width());
+					ui.set_height(card_height);
+					ui.group(|ui| {
+						ui.set_width(ui.available_height() * 0.75);
+						ui.set_height(ui.available_height());
+						ui.label(format!("Book {}", i))
+					});
+				});
+			}
+		});
+	}
 }
 
 pub struct MainView {
 	scribe: ScribeAssistant,
+	page: Option<ListView>,
 }
 
 impl MainView {
 	pub fn new(scribe: ScribeAssistant) -> Self {
-		Self { scribe }
+		Self { scribe, page: None }
 	}
-}
-
-fn icon(icon: Icon, size: f32) -> egui::RichText {
-	egui::RichText::new(icon.unicode()).font(FontId::new(size, ICON_FONT_FAMILY.clone()))
-}
-
-fn icon_text(icon: Icon, text: &str, size: f32) -> egui::text::LayoutJob {
-	let mut job = LayoutJob::default();
-	job.append(
-		&icon.unicode().to_string(),
-		0.0,
-		TextFormat {
-			font_id: FontId::new(size, ICON_FONT_FAMILY.clone()),
-			..Default::default()
-		},
-	);
-	job.append(
-		text,
-		5.0,
-		TextFormat {
-			font_id: FontId::new(size, FontFamily::Proportional),
-			..Default::default()
-		},
-	);
-	job
 }
 
 impl GuiView for MainView {
@@ -112,22 +112,34 @@ impl GuiView for MainView {
 			.y;
 
 		egui::CentralPanel::default().show(ctx, |ui| {
-			let height = ui.available_height() - bb_height;
-			let card_height = height / 5.0;
-
-			ui.vertical(|ui| {
-				for i in 0..5 {
-					ui.group(|ui| {
-						ui.set_width(ui.available_width());
-						ui.set_height(card_height);
-						ui.group(|ui| {
-							ui.set_width(ui.available_height() * 0.75);
-							ui.set_height(ui.available_height());
-							ui.label(format!("Book {}", i))
-						});
-					});
-				}
-			});
+			if let Some(list) = &self.page {
+				list.draw(ui)
+			}
 		});
 	}
+}
+
+fn icon(icon: Icon, size: f32) -> egui::RichText {
+	egui::RichText::new(icon.unicode()).font(FontId::new(size, ICON_FONT_FAMILY.clone()))
+}
+
+fn icon_text(icon: Icon, text: &str, size: f32) -> egui::text::LayoutJob {
+	let mut job = LayoutJob::default();
+	job.append(
+		&icon.unicode().to_string(),
+		0.0,
+		TextFormat {
+			font_id: FontId::new(size, ICON_FONT_FAMILY.clone()),
+			..Default::default()
+		},
+	);
+	job.append(
+		text,
+		5.0,
+		TextFormat {
+			font_id: FontId::new(size, FontFamily::Proportional),
+			..Default::default()
+		},
+	);
+	job
 }
