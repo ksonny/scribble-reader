@@ -1,11 +1,15 @@
+use std::sync::Arc;
+
 use egui::Context;
 use egui::FontFamily;
 use egui::FontId;
 use egui::Layout;
+use egui::TextFormat;
+use egui::text::LayoutJob;
 use lazy_static::lazy_static;
 use lucide_icons::Icon;
 
-use crate::scribe::Scribe;
+use crate::scribe::ScribeAssistant;
 
 lazy_static! {
 	pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
@@ -15,20 +19,65 @@ pub trait GuiView {
 	fn draw(&mut self, ctx: &Context);
 }
 
+pub struct BookCard {
+	name: Arc<String>,
+}
+
+pub struct PageView {
+
+}
+
 pub struct MainView {
-	scribe: Scribe,
+	scribe: ScribeAssistant,
 }
 
 impl MainView {
-	pub fn create(scribe: Scribe) -> Self {
+	pub fn new(scribe: ScribeAssistant) -> Self {
 		Self { scribe }
 	}
+}
+
+fn icon(icon: Icon, size: f32) -> egui::RichText {
+	egui::RichText::new(icon.unicode()).font(FontId::new(size, ICON_FONT_FAMILY.clone()))
+}
+
+fn icon_text(icon: Icon, text: &str, size: f32) -> egui::text::LayoutJob {
+	let mut job = LayoutJob::default();
+	job.append(
+		&icon.unicode().to_string(),
+		0.0,
+		TextFormat {
+			font_id: FontId::new(size, ICON_FONT_FAMILY.clone()),
+			..Default::default()
+		},
+	);
+	job.append(
+		text,
+		5.0,
+		TextFormat {
+			font_id: FontId::new(size, FontFamily::Proportional),
+			..Default::default()
+		},
+	);
+	job
 }
 
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context) {
 		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-			ui.label("Scribble-reader");
+			egui::MenuBar::new().ui(ui, |ui| {
+				ui.menu_button(icon_text(Icon::Hamburger, "Scribble reader", 18.0), |ui| {
+					if ui
+						.button(icon_text(Icon::RefreshCw, "Refresh", 18.0))
+						.clicked()
+					{
+						self.scribe.request(crate::scribe::ScribeRequest::Scan);
+					}
+					if ui.button(icon_text(Icon::DoorOpen, "Quit", 18.0)).clicked() {
+						ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+					}
+				});
+			});
 		});
 
 		let response = egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
@@ -41,20 +90,14 @@ impl GuiView for MainView {
 							|ui| {
 								let width = ui.available_width();
 								ui.set_height(width * 0.5);
-								ui.add(egui::Button::new(
-									egui::RichText::new(Icon::MoveLeft.unicode())
-										.font(FontId::new(64.0, ICON_FONT_FAMILY.clone())),
-								));
+								ui.add(egui::Button::new(icon(Icon::MoveLeft, 64.0)));
 							},
 						);
 						columns[5].with_layout(
 							Layout::centered_and_justified(egui::Direction::RightToLeft),
 							|ui| {
 								ui.set_height(ui.available_width() * 0.5);
-								ui.add(egui::Button::new(
-									egui::RichText::new(Icon::MoveRight.unicode())
-										.font(FontId::new(64.0, ICON_FONT_FAMILY.clone())),
-								));
+								ui.add(egui::Button::new(icon(Icon::MoveRight, 64.0)));
 							},
 						);
 					});

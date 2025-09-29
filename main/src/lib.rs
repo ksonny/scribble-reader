@@ -7,6 +7,7 @@ mod ui;
 use std::time::Duration;
 use std::time::Instant;
 
+use egui::Vec2;
 use log::error;
 use log::info;
 use log::trace;
@@ -24,7 +25,10 @@ use winit::window::Window;
 use crate::renderer::Renderer;
 use crate::scribe::Scribe;
 use crate::scribe::ScribeBell;
+use crate::scribe::ScribePoke;
 use crate::ui::MainView;
+
+pub use crate::scribe::Settings;
 
 struct FpsCalculator {
 	last_frame: Instant,
@@ -59,6 +63,7 @@ impl FpsCalculator {
 
 struct App<'window> {
 	renderer: Option<Renderer<'window>>,
+	scribe: Scribe,
 	view: MainView,
 	egui_ctx: egui::Context,
 	fps: FpsCalculator,
@@ -73,7 +78,7 @@ impl App<'_> {
 	const SLEEP_TICK: u64 = 1000;
 }
 
-impl<'window> ApplicationHandler<ScribeEvent> for App<'window> {
+impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 	fn new_events(
 		&mut self,
 		_event_loop: &winit::event_loop::ActiveEventLoop,
@@ -139,15 +144,16 @@ impl<'window> ApplicationHandler<ScribeEvent> for App<'window> {
 		self.renderer = None;
 	}
 
-	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: ScribeEvent) {
+	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: ScribePoke) {
 		match event {
-			ScribeEvent::TicketComplete(_scribe_ticket) => {
-				self.request_redraw = true;
-				self.request_redraw_time = Instant::now();
-				// TODO: Take care of ticket
+			ScribePoke::LibraryLoad => {
+				log::info!("Library loaded");
 			}
-			ScribeEvent::TicketFailed(_scribe_ticket, _error) => {
-				// TODO: Report error on main thread
+			ScribePoke::Page { index, size } => {
+				log::info!("Open page");
+			},
+			ScribePoke::Update(doc_id) => {
+				log::info!("Thumbnail poke for {doc_id:?}");
 			}
 		}
 	}
@@ -212,33 +218,32 @@ impl<'window> ApplicationHandler<ScribeEvent> for App<'window> {
 	}
 }
 
-pub enum ScribeEvent {
-	TicketComplete(scribe::ScribeTicket),
-	TicketFailed(scribe::ScribeTicket, String),
-}
-
-impl ScribeBell for EventLoopProxy<ScribeEvent> {
-	fn completed(&self, ticket: scribe::ScribeTicket) {
-		match self.send_event(ScribeEvent::TicketComplete(ticket)) {
-			Ok(()) => {},
+impl ScribeBell for EventLoopProxy<ScribePoke> {
+	fn push(&self, event: ScribePoke) {
+		match self.send_event(event) {
+			Ok(()) => {}
 			Err(_) => todo!(),
 		}
 	}
 
-	fn failed(&self, ticket: scribe::ScribeTicket, error: String) {
-		match self.send_event(ScribeEvent::TicketFailed(ticket, error)) {
-			Ok(()) => {},
-			Err(_) => todo!(),
-		}
+	fn fail(&self, error: String) {
+		log::error!("Error occured in lib process: {error}");
 	}
 }
 
-pub fn start(event_loop: EventLoop<ScribeEvent>) -> Result<(), EventLoopError> {
-	let scribe = Scribe::create(event_loop.create_proxy());
-	let view = MainView::create(scribe);
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+	#[error(transparent)]
+	EventLoop(#[from] EventLoopError),
+	#[error(transparent)]
+	ScribeCreate(#[from] scribe::ScribeCreateError),
+}
+
+pub fn start(event_loop: EventLoop<ScribePoke>, settings: Settings) -> Result<(), Error> {
+	let scribe = Scribe::create(event_loop.create_proxy(), settings)?;
+	let view = MainView::new(scribe.assistant());
 
 	let egui_ctx = egui::Context::default();
-
 	egui_extras::install_image_loaders(&egui_ctx);
 	egui_ctx.add_font(egui::epaint::text::FontInsert::new(
 		"lucide-icons",
@@ -248,10 +253,14 @@ pub fn start(event_loop: EventLoop<ScribeEvent>) -> Result<(), EventLoopError> {
 			priority: egui::epaint::text::FontPriority::Lowest,
 		}],
 	));
+	egui_ctx.style_mut(|style| {
+		style.spacing.item_spacing = Vec2::new(5.0, 5.0);
+	});
 	let fps = FpsCalculator::new();
 
 	let mut app = App {
 		renderer: None,
+		scribe,
 		view,
 		egui_ctx,
 		fps,
@@ -261,7 +270,9 @@ pub fn start(event_loop: EventLoop<ScribeEvent>) -> Result<(), EventLoopError> {
 		next_tick: Instant::now(),
 	};
 
-	event_loop.run_app(&mut app)
+	event_loop.run_app(&mut app)?;
+
+	Ok(())
 }
 
 #[cfg(target_os = "android")]

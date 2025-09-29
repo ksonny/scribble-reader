@@ -1,138 +1,496 @@
 #![allow(dead_code)]
+mod settings;
+
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::fs;
+use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::rc::Rc;
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::thread::JoinHandle;
 
-#[derive(PartialOrd, Ord, PartialEq, Eq)]
-pub(crate) struct DocumentId(usize);
+use crate::scribe::library::BookId;
 
-pub(crate) struct Document {
-	path: PathBuf,
+#[derive(Debug, thiserror::Error)]
+pub enum ScribeCreateError {
+	#[error(transparent)]
+	Io(#[from] io::Error),
+	#[error(transparent)]
+	Config(#[from] config::ConfigError),
+	#[error("Library path is not directory: {0}")]
+	LibraryPathNotDir(PathBuf),
+	#[error(transparent)]
+	SecretStorage(#[from] secret_storage::SecretStorageError),
 }
-
-#[derive(Default)]
-pub(crate) enum SortField {
-	#[default]
-	Date,
-}
-
-#[derive(Default)]
-pub(crate) enum SortDirection {
-	#[default]
-	Ascending,
-	Descending,
-}
-
-#[derive(Default)]
-pub(crate) struct SortOrder(SortField, SortDirection);
-
-#[derive(Default)]
-pub(crate) struct Library {
-	docs: BTreeMap<DocumentId, Document>,
-	order: SortOrder,
-	sorted: Vec<DocumentId>,
-}
-
-#[derive(Clone, Copy)]
-pub struct ScribeTicket(usize);
-
-pub(crate) trait ScribeBell {
-	fn completed(&self, ticket: ScribeTicket);
-	fn failed(&self, ticket: ScribeTicket, error: String);
-}
-
-pub(crate) enum ScribeOrder {
-	RefreshMetadatas(Vec<DocumentId>),
-	Thumbnails(Vec<DocumentId>),
-	Sort(SortOrder),
-	Quit,
-}
-
-struct ScribeRequest(ScribeTicket, ScribeOrder);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScribeError {
 	#[error(transparent)]
 	Recv(#[from] RecvError),
-	#[error("Failed to send order")]
-	SendFailed,
+	#[error(transparent)]
+	SecretStorage(#[from] secret_storage::SecretStorageError),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScribeTicket(usize);
+
+pub enum ScribePoke {
+	LibraryLoad,
+	Page { index: u32, size: u32 },
+	Update(BookId),
+}
+
+pub(crate) trait ScribeBell {
+	fn complete(&self, ticket: ScribeTicket) {
+		let _ = ticket;
+	}
+	fn push(&self, event: ScribePoke);
+	fn fail(&self, error: String);
+}
+
+#[derive(Debug)]
+pub(crate) enum ScribeRequest {
+	Scan,
+	Page { index: u32, size: u32 },
+	Sort(library::SortOrder),
 }
 
 pub(crate) struct Scribe {
-	lib: Arc<RwLock<Library>>,
-	order_tx: Sender<ScribeRequest>,
+	lib: library::Library,
+	order_tx: Sender<(ScribeTicket, ScribeRequest)>,
 	handle: JoinHandle<Result<(), ScribeError>>,
-	ticket_cnt: Cell<usize>,
+	ticket_cnt: Rc<Cell<usize>>,
+}
+
+pub(crate) struct ScribeAssistant {
+	order_tx: Sender<(ScribeTicket, ScribeRequest)>,
+	ticket_cnt: Rc<Cell<usize>>,
+}
+
+#[derive(Debug)]
+pub struct Settings {
+	pub cache_path: PathBuf,
+	pub config_path: PathBuf,
+	pub data_path: PathBuf,
+}
+
+pub struct ScribeOptions {
+	state_db_path: PathBuf,
+	thumbnail_path: PathBuf,
+}
+
+impl From<&Settings> for ScribeOptions {
+	fn from(value: &Settings) -> Self {
+		let state_db_path = value.data_path.join("state.db");
+		let thumbnail_path = value.cache_path.join("thumbnails");
+
+		Self {
+			state_db_path,
+			thumbnail_path,
+		}
+	}
 }
 
 impl Scribe {
-	pub fn create<Bell>(bell: Bell) -> Self
+	pub(crate) fn create<Bell>(bell: Bell, settings: Settings) -> Result<Self, ScribeCreateError>
 	where
 		Bell: ScribeBell + Send + 'static,
 	{
-		let lib = Arc::new(RwLock::new(Library::default()));
+		let config_path = settings.config_path.join("config.toml");
+		let scribe_settings: settings::Scribe = config::Config::builder()
+			.add_source(config::File::from_str(
+				settings::DEFAULT_SCRIBE_CONFIG,
+				config::FileFormat::Toml,
+			))
+			.add_source(config::File::from(config_path).required(false))
+			.add_source(config::Environment::with_prefix("SCRAPE").separator("_"))
+			.build()?
+			.try_deserialize()?;
+
+		let lib_path = settings.data_path.join(scribe_settings.library.path);
+		if !lib_path.try_exists()? {
+			fs::create_dir_all(&lib_path)?;
+		}
+		if !lib_path.is_dir() {
+			return Err(ScribeCreateError::LibraryPathNotDir(lib_path.to_path_buf()));
+		}
+
+		let options = ScribeOptions::from(&settings);
+		let lib = library::Library::default();
+		let worker_lib = lib.clone();
+		let mut storage = secret_storage::connect(&options.state_db_path)?;
 
 		let (order_tx, order_rx) = channel();
-		let worker_lib = Arc::new(RwLock::new(Library::default())).clone();
 		let handle = thread::spawn(move || -> Result<(), ScribeError> {
-			let bell = bell;
-			let _lib = worker_lib;
-			let order_rx = order_rx;
+			let lib = worker_lib;
+			log::info!("Started scribe worker");
+
+			{
+				let books = storage
+					.get_books()
+					.inspect_err(|e| log::error!("{e}"))?
+					.into_iter()
+					.map(|book| (book.id, book))
+					.collect();
+				log::info!("Books loaded");
+				let mut lib = lib.write().unwrap();
+				lib.books = books;
+				bell.push(ScribePoke::LibraryLoad);
+			}
+			log::info!("Library loaded");
+
 			loop {
-				let order = order_rx.recv();
-				match order {
-					Ok(ScribeRequest(ticket, ScribeOrder::RefreshMetadatas(_docs))) => {
-						// TODO: Refresh
-						bell.completed(ticket);
+				let request = order_rx.recv();
+				log::info!("Request received: {request:?}");
+				match request {
+					Ok((ticket, ScribeRequest::Scan)) => {
+						let books = storage
+							.scan(&lib_path)
+							.inspect_err(|e| log::error!("{e}"))?
+							.into_iter()
+							.map(|book| (book.id, book))
+							.collect();
+						let mut lib = lib.write().unwrap();
+						lib.books = books;
+						bell.push(ScribePoke::LibraryLoad);
+						bell.complete(ticket);
 					}
-					Ok(ScribeRequest(ticket, ScribeOrder::Thumbnails(_docs))) => {
-						// TODO: Generate thumbnails
-						bell.completed(ticket);
+					Ok((ticket, ScribeRequest::Page { .. })) => {
+						// TODO
+						bell.complete(ticket);
 					}
-					Ok(ScribeRequest(ticket, ScribeOrder::Sort(_order))) => {
-						// TODO: Sort documents
-						bell.completed(ticket);
+					Ok((ticket, ScribeRequest::Sort(_order))) => {
+						// TODO
+						bell.complete(ticket);
 					}
-					Ok(ScribeRequest(_, ScribeOrder::Quit)) => {
+					Err(RecvError) => {
+						log::info!("Scribe worker terminated");
 						break Ok(());
-					}
-					Err(e) => {
-						break Err(e.into());
 					}
 				}
 			}
 		});
 
-		Scribe {
+		Ok(Scribe {
 			lib,
 			order_tx,
 			handle,
-			ticket_cnt: Cell::new(0),
+			ticket_cnt: Rc::new(Cell::new(0)),
+		})
+	}
+
+	pub fn quit(self) -> Result<(), ScribeError> {
+		drop(self.order_tx);
+		self.handle.join().unwrap()?;
+		Ok(())
+	}
+
+	pub fn assistant(&self) -> ScribeAssistant {
+		ScribeAssistant {
+			order_tx: self.order_tx.clone(),
+			ticket_cnt: self.ticket_cnt.clone(),
 		}
 	}
 
-	fn ticket(&self) -> ScribeTicket {
+	pub fn library(&self) -> &library::Library {
+		&self.lib
+	}
+}
+
+impl ScribeAssistant {
+	fn new_ticket(&self) -> ScribeTicket {
 		let ticket_id = self.ticket_cnt.get();
 		self.ticket_cnt.set(ticket_id + 1);
 		ScribeTicket(ticket_id)
 	}
 
-	pub fn request(&self, order: ScribeOrder) -> Result<ScribeTicket, ScribeError> {
-		let ticket = self.ticket();
-		self.order_tx
-			.send(ScribeRequest(ticket, order))
-			.map_err(|_| ScribeError::SendFailed)?;
-		Ok(ticket)
+	pub fn request(&self, order: ScribeRequest) {
+		let ticket = self.new_ticket();
+		let r = self.order_tx.send((ticket, order));
+		log::info!("Result {r:?}");
+		// TODO: Do something with ticket
+	}
+}
+
+mod library {
+	use std::collections::BTreeMap;
+	use std::path::PathBuf;
+	use std::sync::Arc;
+	use std::sync::RwLock;
+
+	use chrono::DateTime;
+	use chrono::Utc;
+
+	#[derive(Debug, Default)]
+	pub(crate) enum SortField {
+		#[default]
+		Date,
 	}
 
-	pub fn library(&self) -> &RwLock<Library> {
-		&self.lib
+	#[derive(Debug, Default)]
+	pub(crate) enum SortDirection {
+		#[default]
+		Ascending,
+		Descending,
+	}
+
+	#[derive(Debug, Default)]
+	pub(crate) struct SortOrder(SortField, SortDirection);
+
+	#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
+	pub struct BookId(pub i64);
+
+	#[derive(Debug)]
+	pub struct Book {
+		pub id: BookId,
+		pub path: PathBuf,
+		pub title: Option<Arc<String>>,
+		pub author: Option<Arc<String>>,
+		pub timestamp: DateTime<Utc>,
+	}
+
+	#[derive(Debug, Default)]
+	pub(crate) struct SecretLibrary {
+		pub(crate) books: BTreeMap<BookId, Book>,
+	}
+
+	#[derive(Default, Clone)]
+	pub struct Library(Arc<RwLock<SecretLibrary>>);
+
+	impl Library {
+		pub(crate) fn read(
+			&self,
+		) -> Result<
+			std::sync::RwLockReadGuard<'_, SecretLibrary>,
+			std::sync::PoisonError<std::sync::RwLockReadGuard<'_, SecretLibrary>>,
+		> {
+			let Library(lib) = self;
+			lib.read()
+		}
+
+		pub(crate) fn write(
+			&self,
+		) -> std::result::Result<
+			std::sync::RwLockWriteGuard<'_, SecretLibrary>,
+			std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, SecretLibrary>>,
+		> {
+			let Library(lib) = self;
+			lib.write()
+		}
+	}
+}
+
+mod secret_storage {
+	use chrono::DateTime;
+	use chrono::Utc;
+	use chrono::serde::ts_seconds;
+	use epub::doc::EpubDoc;
+	use rusqlite_migration::M;
+	use rusqlite_migration::Migrations;
+	use serde::Deserialize;
+	use serde::Serialize;
+	use serde_rusqlite::from_rows;
+	use serde_rusqlite::to_params_named;
+
+	use std::fs;
+	use std::path::Path;
+	use std::path::PathBuf;
+	use std::sync::Arc;
+
+	use crate::scribe::library;
+
+	#[derive(Debug, thiserror::Error)]
+	pub enum SecretStorageError {
+		#[error("at {1}: {0}")]
+		Io(std::io::Error, &'static std::panic::Location<'static>),
+		#[error("at {1}: {0}")]
+		Rusqlite(rusqlite::Error, &'static std::panic::Location<'static>),
+		#[error("at {1}: {0}")]
+		RusqliteFromSql(
+			rusqlite::types::FromSqlError,
+			&'static std::panic::Location<'static>,
+		),
+		#[error(transparent)]
+		SerdeRusqlite(#[from] serde_rusqlite::Error),
+		#[error(transparent)]
+		SystemTime(#[from] std::time::SystemTimeError),
+		#[error(transparent)]
+		Doc(#[from] epub::doc::DocError),
+		#[error("Scan path is not directory")]
+		ScanPathNotDir,
+	}
+
+	impl From<rusqlite::Error> for SecretStorageError {
+		#[track_caller]
+		fn from(err: rusqlite::Error) -> Self {
+			Self::Rusqlite(err, std::panic::Location::caller())
+		}
+	}
+
+	impl From<rusqlite::types::FromSqlError> for SecretStorageError {
+		#[track_caller]
+		fn from(err: rusqlite::types::FromSqlError) -> Self {
+			Self::RusqliteFromSql(err, std::panic::Location::caller())
+		}
+	}
+
+	impl From<std::io::Error> for SecretStorageError {
+		#[track_caller]
+		fn from(err: std::io::Error) -> Self {
+			Self::Io(err, std::panic::Location::caller())
+		}
+	}
+
+	#[derive(Debug, Deserialize)]
+	pub struct SecretBook {
+		pub(crate) id: i64,
+		pub(crate) path: PathBuf,
+		pub(crate) title: Option<String>,
+		pub(crate) author: Option<String>,
+		#[serde(with = "ts_seconds")]
+		pub(crate) timestamp: DateTime<Utc>,
+	}
+
+	impl From<SecretBook> for library::Book {
+		fn from(value: SecretBook) -> Self {
+			library::Book {
+				id: library::BookId(value.id),
+				path: value.path,
+				title: value.title.map(Arc::new),
+				author: value.author.map(Arc::new),
+				timestamp: value.timestamp,
+			}
+		}
+	}
+
+	const MIGRATIONS_SLICE: &[M<'_>] = &[M::up(
+		"create table books (
+			id integer primary key,
+			path text not null unique,
+			title text,
+			author text,
+			timestamp integer not null,
+			exist boolean not null
+		);",
+	)];
+	const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
+
+	pub fn connect(db_path: &Path) -> Result<SecretStorage, SecretStorageError> {
+		let mut conn = rusqlite::Connection::open(db_path)?;
+
+		conn.pragma_update(None, "mmap_size", 30000000000u64)?;
+		conn.pragma_update(None, "page_size", 32768u64)?;
+		conn.pragma_update(None, "foreign_keys", "on")?;
+		conn.pragma_update(None, "journal_mode", "WAL")?;
+
+		MIGRATIONS.to_latest(&mut conn).unwrap();
+
+		Ok(SecretStorage { conn })
+	}
+
+	#[derive(Debug, Serialize)]
+	struct InsertBook {
+		path: PathBuf,
+		title: Option<String>,
+		author: Option<String>,
+		#[serde(with = "ts_seconds")]
+		timestamp: DateTime<Utc>,
+	}
+
+	impl From<(i64, InsertBook)> for library::Book {
+		fn from(value: (i64, InsertBook)) -> library::Book {
+			let (
+				id,
+				InsertBook {
+					path,
+					title,
+					author,
+					timestamp,
+				},
+			) = value;
+			library::Book {
+				id: library::BookId(id),
+				path,
+				title: title.map(Arc::new),
+				author: author.map(Arc::new),
+				timestamp,
+			}
+		}
+	}
+
+	pub struct SecretStorage {
+		conn: rusqlite::Connection,
+	}
+
+	impl SecretStorage {
+		pub fn scan(&mut self, path: &Path) -> Result<Vec<library::Book>, SecretStorageError> {
+			if !path.is_dir() {
+				return Err(SecretStorageError::ScanPathNotDir);
+			}
+
+			let tx = self.conn.transaction()?;
+			tx.execute("update books set exist = false;", [])?;
+
+			let mut books = Vec::new();
+			{
+				let mut upsert_stmt = tx.prepare(
+					"
+					insert into books (path, title, author, timestamp, exist)
+					values (:path, :title, :author, :timestamp, true)
+					on conflict (path)
+					do update set
+						title = :title,
+						author = :author,
+						timestamp = :timestamp,
+						exist = true
+					returning id;
+				",
+				)?;
+				for entry in fs::read_dir(path)? {
+					let entry = entry?;
+					let path = entry.path();
+					let doc = EpubDoc::new(&path)?;
+					let title = doc.mdata("title");
+					let author = doc.mdata("author");
+					let book = InsertBook {
+						path,
+						title,
+						author,
+						timestamp: entry.metadata()?.modified()?.into(),
+					};
+					log::trace!("Found {}", book.path.display());
+					let params = to_params_named(&book)?;
+					let params = params.to_slice();
+
+					let book_id = upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
+
+					books.push((book_id, book).into());
+				}
+			}
+			log::trace!("Total {} books", books.len());
+
+			tx.commit()?;
+			Ok(books)
+		}
+
+		pub fn get_books(&self) -> Result<Vec<library::Book>, SecretStorageError> {
+			let mut stmt = self.conn.prepare(
+				"
+				select
+					id,
+					path,
+					timestamp
+				from books
+				where exist = true;
+			",
+			)?;
+			let series = from_rows::<SecretBook>(stmt.query([])?)
+				.map(|book| book.map(|b| b.into()))
+				.collect::<Result<Vec<_>, _>>()?;
+			Ok(series)
+		}
 	}
 }
