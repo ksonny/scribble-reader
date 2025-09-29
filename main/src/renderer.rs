@@ -7,10 +7,7 @@ use winit::dpi::PhysicalSize;
 use egui_wgpu::wgpu::{
 	self,
 };
-use lazy_static::lazy_static;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
@@ -30,38 +27,6 @@ pub(crate) enum RendererError {
 	NoTextureFormat,
 }
 
-lazy_static! {
-	static ref FRAME_SLEEP: Duration = Duration::from_millis(100);
-}
-
-struct FpsCalculator<const N: usize> {
-	last_frame: Instant,
-	index: usize,
-	times_ms: [u64; N],
-}
-
-impl<const N: usize> FpsCalculator<N> {
-	fn new() -> FpsCalculator<N> {
-		FpsCalculator {
-			last_frame: Instant::now(),
-			index: 0,
-			times_ms: [0; N],
-		}
-	}
-
-	fn tick(&mut self) {
-		let instant = Instant::now();
-		let frame_time = instant.duration_since(self.last_frame);
-		self.times_ms[self.index] = frame_time.as_millis() as u64;
-		self.index = (self.index + 1) % N;
-		self.last_frame = instant;
-	}
-
-	fn fps(&self) -> u64 {
-		let sum: u64 = self.times_ms.iter().sum();
-		(N as u64 * 1000_u64).checked_div(sum).unwrap_or(0)
-	}
-}
 
 pub struct GuiRenderer {
 	ctx: egui::Context,
@@ -76,12 +41,11 @@ impl GuiRenderer {
 		window: &Window,
 		device: &wgpu::Device,
 		texture_format: wgpu::TextureFormat,
+		egui_ctx: &egui::Context,
 	) -> Self {
 		let scale_factor = window.scale_factor();
 		let max_texture_size = device.limits().max_texture_dimension_2d as usize;
 
-		let egui_ctx = egui::Context::default();
-		egui_extras::install_image_loaders(&egui_ctx);
 		let egui_state = egui_winit::State::new(
 			egui_ctx.clone(),
 			egui::ViewportId::ROOT,
@@ -95,7 +59,7 @@ impl GuiRenderer {
 		let textures = TexturesDelta::default();
 
 		Self {
-			ctx: egui_ctx,
+			ctx: egui_ctx.clone(),
 			state: egui_state,
 			renderer,
 			paint_jobs: vec![],
@@ -179,7 +143,6 @@ pub(crate) struct Renderer<'window> {
 	size: PhysicalSize<u32>,
 	scale_factor: f64,
 	pub(crate) gui_renderer: GuiRenderer,
-	fps: FpsCalculator<60>,
 }
 
 impl<'window> Renderer<'window> {
@@ -236,7 +199,7 @@ impl<'window> Renderer<'window> {
 		}
 	}
 
-	pub(crate) async fn create(window: Window) -> Result<Self, RendererError> {
+	pub(crate) async fn create(window: Window, egui_ctx: &egui::Context) -> Result<Self, RendererError> {
 		let window = Arc::new(window);
 		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
 			backends: wgpu::Backends::all(),
@@ -250,8 +213,7 @@ impl<'window> Renderer<'window> {
 		let size = window.inner_size();
 		surface.configure(&device, &Self::surface_config(size, format));
 
-		let gui_renderer = GuiRenderer::new(&window, &device, format);
-		let fps = FpsCalculator::new();
+		let gui_renderer = GuiRenderer::new(&window, &device, format, egui_ctx);
 
 		Ok(Renderer {
 			window: window.clone(),
@@ -265,12 +227,7 @@ impl<'window> Renderer<'window> {
 			size,
 			scale_factor,
 			gui_renderer,
-			fps,
 		})
-	}
-
-	pub(crate) fn fps(&self) -> u64 {
-		self.fps.fps()
 	}
 
 	pub(crate) fn resize(&mut self, physical_size: PhysicalSize<u32>) {
@@ -280,13 +237,11 @@ impl<'window> Renderer<'window> {
 		);
 		self.did_resize = true;
 		self.size = physical_size;
-		self.window.request_redraw();
 	}
 
 	pub(crate) fn rescale(&mut self, scale_factor: f64) {
 		info!("rescale: {}", scale_factor,);
 		self.scale_factor = scale_factor;
-		self.window.request_redraw();
 	}
 
 	pub(crate) fn render(&mut self, gui: &mut impl GuiView) -> Result<(), RendererError> {
@@ -298,8 +253,6 @@ impl<'window> Renderer<'window> {
 
 		match self.surface.get_current_texture() {
 			Ok(frame) => {
-				self.fps.tick();
-
 				self.gui_renderer.prepare(&self.window, gui);
 
 				let view = frame
@@ -351,10 +304,25 @@ impl<'window> Renderer<'window> {
 				return Err(e.into());
 			}
 			Err(e) => {
-				warn!("Error, request redraw: {e}");
-				self.window.request_redraw();
+				warn!("Hopefully recoverable error in render: {e}");
 			}
 		}
 		Ok(())
+	}
+}
+
+
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn check_math() {
+		let total = 32 * 17;
+		let fps_a = (32 * 1000) / total;
+		let fps_b = 1000 / (total / 32);
+
+		assert_eq!(fps_a, fps_b);
+
+		let a = 20;
+		assert_eq!(a << 6, a * 64);
 	}
 }

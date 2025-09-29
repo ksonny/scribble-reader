@@ -3,6 +3,9 @@
 mod renderer;
 mod ui;
 
+use std::time::Duration;
+use std::time::Instant;
+
 use log::error;
 use log::info;
 use log::trace;
@@ -19,19 +22,78 @@ use winit::window::Window;
 use crate::renderer::Renderer;
 use crate::ui::MainView;
 
-#[derive(Default)]
+struct FpsCalculator {
+	last_frame: Instant,
+	total_ms: u64,
+}
+
+impl FpsCalculator {
+	const FRAME_MS: u64 = 16;
+	const DIVIDER_2: u64 = 5;
+
+	fn new() -> FpsCalculator {
+		FpsCalculator {
+			last_frame: Instant::now(),
+			total_ms: 0,
+		}
+	}
+
+	fn tick(&mut self) {
+		let instant = Instant::now();
+		let frame = instant.duration_since(self.last_frame).as_millis() as u64;
+		let avg = self.total_ms >> Self::DIVIDER_2;
+		self.total_ms = self.total_ms + frame - avg;
+		self.last_frame = instant;
+	}
+
+	fn next_frame(&self) -> Instant {
+		self.last_frame + Duration::from_millis(Self::FRAME_MS)
+	}
+
+	fn fps(&self) -> u64 {
+		(1000_u64 << Self::DIVIDER_2).checked_div(self.total_ms).unwrap_or(0_u64)
+	}
+}
+
 struct App<'window> {
 	renderer: Option<Renderer<'window>>,
 	view: MainView,
+	egui_ctx: egui::Context,
+	fps: FpsCalculator,
+	request_redraw: bool,
+	wait_cancelled: bool,
 }
 
 impl<'window> ApplicationHandler for App<'window> {
+	fn new_events(
+		&mut self,
+		_event_loop: &winit::event_loop::ActiveEventLoop,
+		cause: winit::event::StartCause,
+	) {
+		self.wait_cancelled = matches!(cause, winit::event::StartCause::WaitCancelled { .. });
+	}
+
+	fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+		if self.request_redraw
+			&& !self.wait_cancelled
+			&& let Some(renderer) = self.renderer.as_mut()
+		{
+			renderer.window.request_redraw();
+		}
+
+		if !self.wait_cancelled {
+			event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+				self.fps.next_frame(),
+			));
+		}
+	}
+
 	fn resumed(&mut self, event_loop: &egui_winit::winit::event_loop::ActiveEventLoop) {
-		info!("Window resumed");
+		trace!("Window resumed");
 		let window = event_loop
 			.create_window(Window::default_attributes())
 			.unwrap();
-		let renderer = match pollster::block_on(Renderer::create(window)) {
+		let renderer = match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
 			Ok(renderer) => renderer,
 			Err(e) => {
 				error!("Failed to resume renderer: {e}");
@@ -67,16 +129,22 @@ impl<'window> ApplicationHandler for App<'window> {
 				trace!("event: {event:?}");
 
 				let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
+				if response.repaint {
+					self.request_redraw = true;
+				}
 
 				match event {
 					WindowEvent::Resized(physical_size) => {
 						renderer.resize(physical_size);
+						self.request_redraw = true;
 					}
 					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
 						renderer.rescale(scale_factor);
+						self.request_redraw = true;
 					}
 					WindowEvent::RedrawRequested => {
-						self.view.set_fps(renderer.fps());
+						self.fps.tick();
+						self.view.set_fps(self.fps.fps());
 
 						match renderer.render(&mut self.view) {
 							Ok(_) => {}
@@ -86,11 +154,7 @@ impl<'window> ApplicationHandler for App<'window> {
 							}
 						}
 					}
-					_ => {
-						if response.repaint {
-							renderer.window.request_redraw();
-						}
-					}
+					_ => {}
 				};
 			}
 		}
@@ -98,7 +162,20 @@ impl<'window> ApplicationHandler for App<'window> {
 }
 
 pub fn start(event_loop: EventLoop<()>) -> Result<(), EventLoopError> {
-	event_loop.run_app(&mut App::default())
+	let view = MainView::default();
+	let egui_ctx = egui::Context::default();
+	let fps = FpsCalculator::new();
+
+	let mut app = App {
+		renderer: None,
+		view,
+		egui_ctx,
+		fps,
+		request_redraw: false,
+		wait_cancelled: false,
+	};
+
+	event_loop.run_app(&mut app)
 }
 
 #[cfg(target_os = "android")]

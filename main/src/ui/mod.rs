@@ -1,8 +1,14 @@
 use egui::Color32;
 use egui::Context;
+use egui::FontFamily;
+use lazy_static::lazy_static;
+
+lazy_static! {
+	pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
+}
 
 pub trait GuiView {
-	fn draw(&mut self, ctx: &egui::Context);
+	fn draw(&mut self, ctx: &Context);
 }
 
 #[derive(Debug, Default)]
@@ -15,6 +21,7 @@ impl MainView {
 	pub fn set_fps(&mut self, fps: u64) {
 		self.fps = fps;
 	}
+
 }
 
 impl GuiView for MainView {
