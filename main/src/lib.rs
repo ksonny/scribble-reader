@@ -164,6 +164,18 @@ impl<'window> ApplicationHandler for App<'window> {
 pub fn start(event_loop: EventLoop<()>) -> Result<(), EventLoopError> {
 	let view = MainView::default();
 	let egui_ctx = egui::Context::default();
+
+	egui_extras::install_image_loaders(&egui_ctx);
+	egui_ctx.add_font(egui::epaint::text::FontInsert::new(
+		"lucide-icons",
+		egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES),
+		vec![
+			egui::epaint::text::InsertFontFamily {
+				family: ui::ICON_FONT_FAMILY.clone(),
+				priority: egui::epaint::text::FontPriority::Lowest,
+			}
+		],
+	));
 	let fps = FpsCalculator::new();
 
 	let mut app = App {
