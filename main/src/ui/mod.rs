@@ -57,10 +57,7 @@ impl BookCard {
 			ui.horizontal(|ui| {
 				ui.set_height(height);
 				ui.set_width(width);
-				ui.group(|ui| {
-					ui.set_width(height * 0.66);
-					ui.label("Test");
-				});
+				ui.label(UiIcon::new(Icon::Book).size(height * 0.75).color(Color32::GRAY).build());
 				ui.vertical(|ui| {
 					let title = self.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
 					ui.label(RichText::new(title).text_style(TextStyle::Heading));
@@ -226,6 +223,14 @@ impl UiIcon<'_> {
 	fn text<'a>(self, text: &'a str) -> UiIcon<'a> {
 		UiIcon {
 			text: Some(text),
+			..self
+		}
+	}
+
+	fn size(self, size: f32) -> Self {
+		Self {
+			icon_font: FontId::new(size, theme::ICON_FONT_FAMILY.clone()),
+			text_font: FontId::new(size, FontFamily::Proportional),
 			..self
 		}
 	}
