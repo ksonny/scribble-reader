@@ -30,11 +30,12 @@ use winit::window::Window;
 use crate::renderer::Renderer;
 use crate::scribe::BookId;
 use crate::scribe::Scribe;
-use crate::ui::theme;
+use crate::scribe::library;
 use crate::ui::BookCard;
 use crate::ui::FeatureView;
 use crate::ui::ListView;
 use crate::ui::MainView;
+use crate::ui::theme;
 
 pub use crate::scribe::Settings;
 
@@ -81,7 +82,7 @@ struct App<'window> {
 
 impl App<'_> {
 	const ACTIVE_TICK: u64 = 32;
-	const SLEEP_TIMEOUT: u64 = 64;
+	const SLEEP_TIMEOUT: u64 = 256;
 
 	fn request_redraw(&mut self) {
 		trace!("Request redraw");
@@ -165,27 +166,46 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		match event {
 			AppPoke::LibraryLoad | AppPoke::LibrarySorted => {
 				log::info!("Event {event:?}");
-				let mut books = self.scribe.library().books(0..ListView::SIZE);
+				let books = self.scribe.library().books(0..ListView::SIZE);
 				self.scribe.assistant().poke_list(&books);
-				let cards = std::array::from_fn(|_| {
-					books.pop().map(|b| BookCard {
-						id: b.id,
-						title: b.title,
-						author: b.author,
-					})
-				});
-				self.view.feature = FeatureView::List(ListView { page: 0, cards });
+				let mut books_iter = books.into_iter();
+				let cards =
+					std::array::from_fn(|_| {
+						books_iter.next().map(|b| BookCard {
+							id: b.id,
+							title: b.title,
+							author: b.author,
+							thumbnail: self.scribe.library().thumbnail(b.id).and_then(
+								|tn| match tn {
+									library::Thumbnail::Bytes { bytes } => {
+										Some(ui::Thumbnail { bytes })
+									}
+									library::Thumbnail::None => None,
+								},
+							),
+						})
+					});
+				self.view.feature = FeatureView::List(Box::new(ListView { page: 0, cards }));
+				self.request_redraw();
 			}
 			AppPoke::BookUpdated(id) => match &mut self.view.feature {
 				ui::FeatureView::Empty => {}
 				ui::FeatureView::List(list) => {
 					let card = list.cards.iter_mut().flatten().find(|c| c.id == id);
-					if let Some(card) = card
-						&& let Some(book) = self.scribe.library().book(id)
-					{
-						card.title = book.title;
-						card.author = book.author;
+					if let Some(card) = card {
+						if let Some(book) = self.scribe.library().book(id) {
+							card.title = book.title;
+							card.author = book.author;
+						}
+						card.thumbnail =
+							self.scribe.library().thumbnail(id).and_then(|tn| match tn {
+								library::Thumbnail::Bytes { bytes } => {
+									Some(ui::Thumbnail { bytes })
+								}
+								library::Thumbnail::None => None,
+							});
 						log::info!("Updated book {id:?}");
+						self.request_redraw();
 					}
 				}
 			},
@@ -194,18 +214,27 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				ui::FeatureView::List(list) => {
 					let page = list.page + 1;
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
-					let mut books = self.scribe.library().books(r);
+					let books = self.scribe.library().books(r);
 					if !books.is_empty() {
 						self.scribe.assistant().poke_list(&books);
-						let cards = std::array::from_fn(|_| {
-							books.pop().map(|b| BookCard {
+						let mut books_iter = books.into_iter();
+						list.cards = std::array::from_fn(|_| {
+							books_iter.next().map(|b| BookCard {
 								id: b.id,
 								title: b.title,
 								author: b.author,
+								thumbnail: self.scribe.library().thumbnail(b.id).and_then(|tn| {
+									match tn {
+										library::Thumbnail::Bytes { bytes } => {
+											Some(ui::Thumbnail { bytes })
+										}
+										library::Thumbnail::None => None,
+									}
+								}),
 							})
 						});
 						list.page = page;
-						list.cards = cards;
+						self.request_redraw();
 					}
 				}
 			},
@@ -214,17 +243,26 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				ui::FeatureView::List(list) => {
 					let page = list.page.saturating_sub(1);
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
-					let mut books = self.scribe.library().books(r);
+					let books = self.scribe.library().books(r);
 					self.scribe.assistant().poke_list(&books);
-					let cards = std::array::from_fn(|_| {
-						books.pop().map(|b| BookCard {
+					let mut books_iter = books.into_iter();
+					list.cards = std::array::from_fn(|_| {
+						books_iter.next().map(|b| BookCard {
 							id: b.id,
 							title: b.title,
 							author: b.author,
+							thumbnail: self.scribe.library().thumbnail(b.id).and_then(
+								|tn| match tn {
+									library::Thumbnail::Bytes { bytes } => {
+										Some(ui::Thumbnail { bytes })
+									}
+									library::Thumbnail::None => None,
+								},
+							),
 						})
 					});
 					list.page = page;
-					list.cards = cards;
+					self.request_redraw();
 				}
 			},
 		}
@@ -391,15 +429,42 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 		style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::BLACK);
 
 		style.text_styles = [
-			(TextStyle::Heading, FontId::new(25.0, FontFamily::Proportional)),
-			(theme::HEADING2.clone(), FontId::new(theme::M_SIZE, FontFamily::Proportional)),
-			(TextStyle::Body, FontId::new(theme::DEFAULT_SIZE, FontFamily::Proportional)),
-			(TextStyle::Monospace, FontId::new(theme::DEFAULT_SIZE, FontFamily::Monospace)),
-			(TextStyle::Button, FontId::new(theme::M_SIZE, FontFamily::Proportional)),
-			(TextStyle::Small, FontId::new(theme::S_SIZE, FontFamily::Proportional)),
-			(theme::ICON_STYLE.clone(), FontId::new(theme::DEFAULT_SIZE, theme::ICON_FONT_FAMILY.clone())),
-			(theme::ICON_L_STYLE.clone(), FontId::new(theme::L_SIZE, theme::ICON_FONT_FAMILY.clone())),
-			(theme::ICON_XL_STYLE.clone(), FontId::new(theme::XL_SIZE, theme::ICON_FONT_FAMILY.clone())),
+			(
+				TextStyle::Heading,
+				FontId::new(25.0, FontFamily::Proportional),
+			),
+			(
+				theme::HEADING2.clone(),
+				FontId::new(theme::M_SIZE, FontFamily::Proportional),
+			),
+			(
+				TextStyle::Body,
+				FontId::new(theme::DEFAULT_SIZE, FontFamily::Proportional),
+			),
+			(
+				TextStyle::Monospace,
+				FontId::new(theme::DEFAULT_SIZE, FontFamily::Monospace),
+			),
+			(
+				TextStyle::Button,
+				FontId::new(theme::M_SIZE, FontFamily::Proportional),
+			),
+			(
+				TextStyle::Small,
+				FontId::new(theme::S_SIZE, FontFamily::Proportional),
+			),
+			(
+				theme::ICON_STYLE.clone(),
+				FontId::new(theme::DEFAULT_SIZE, theme::ICON_FONT_FAMILY.clone()),
+			),
+			(
+				theme::ICON_L_STYLE.clone(),
+				FontId::new(theme::L_SIZE, theme::ICON_FONT_FAMILY.clone()),
+			),
+			(
+				theme::ICON_XL_STYLE.clone(),
+				FontId::new(theme::XL_SIZE, theme::ICON_FONT_FAMILY.clone()),
+			),
 		]
 		.into();
 	});

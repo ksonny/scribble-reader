@@ -4,11 +4,13 @@ use egui::Color32;
 use egui::Context;
 use egui::FontFamily;
 use egui::FontId;
+use egui::ImageSource;
 use egui::Layout;
 use egui::RichText;
 use egui::Style;
 use egui::TextFormat;
 use egui::TextStyle;
+use egui::load::Bytes;
 use egui::text::LayoutJob;
 use lucide_icons::Icon;
 
@@ -42,10 +44,15 @@ pub trait GuiView {
 	fn draw(&mut self, ctx: &Context, poke_stick: &impl MainPokeStick);
 }
 
+pub(crate) struct Thumbnail {
+	pub(crate) bytes: Arc<[u8]>,
+}
+
 pub(crate) struct BookCard {
 	pub(crate) id: BookId,
 	pub(crate) title: Option<Arc<String>>,
 	pub(crate) author: Option<Arc<String>>,
+	pub(crate) thumbnail: Option<Thumbnail>,
 }
 
 impl BookCard {
@@ -55,9 +62,24 @@ impl BookCard {
 			let height = ui.available_height();
 			let width = ui.available_width();
 			ui.horizontal(|ui| {
-				ui.set_height(height);
 				ui.set_width(width);
-				ui.label(UiIcon::new(Icon::Book).size(height * 0.75).color(Color32::GRAY).build());
+				let cover_width = height * 0.75;
+				ui.allocate_ui([cover_width, height].into(), |ui| {
+					ui.set_width(cover_width);
+					ui.centered_and_justified(|ui| match &self.thumbnail {
+						Some(Thumbnail { bytes }) => ui.add(egui::Image::new(ImageSource::Bytes {
+							uri: format!("bytes://thumbnail_{}.png", self.id.value()).into(),
+							bytes: Bytes::Shared(bytes.clone()),
+						})),
+						None => ui.label(
+							UiIcon::new(Icon::Book)
+								.size(cover_width)
+								.color(Color32::GRAY)
+								.build(),
+						),
+					});
+				});
+				ui.separator();
 				ui.vertical(|ui| {
 					let title = self.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
 					ui.label(RichText::new(title).text_style(TextStyle::Heading));
@@ -108,7 +130,7 @@ pub trait MainPokeStick {
 pub enum FeatureView {
 	#[default]
 	Empty,
-	List(ListView),
+	List(Box<ListView>),
 }
 
 #[derive(Default)]
@@ -124,30 +146,25 @@ impl GuiView for MainView {
 					style.visuals.weak_text_alpha = 0.0;
 				})
 				.ui(ui, |ui| {
-					ui.menu_button(
-						UiIcon::new(Icon::Menu)
-							.large()
-							.build(),
-						|ui| {
-							if ui
-								.button(
-									UiIcon::new(Icon::RefreshCw)
-										.text("Rescan library")
-										.large()
-										.build(),
-								)
-								.clicked()
-							{
-								poke_stick.scan_library();
-							}
-							if ui
-								.button(UiIcon::new(Icon::DoorOpen).text("Quit").large().build())
-								.clicked()
-							{
-								ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-							}
-						},
-					);
+					ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
+						if ui
+							.button(
+								UiIcon::new(Icon::RefreshCw)
+									.text("Rescan library")
+									.large()
+									.build(),
+							)
+							.clicked()
+						{
+							poke_stick.scan_library();
+						}
+						if ui
+							.button(UiIcon::new(Icon::DoorOpen).text("Quit").large().build())
+							.clicked()
+						{
+							ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+						}
+					});
 					ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
 				});
 		});
