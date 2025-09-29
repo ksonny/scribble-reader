@@ -1,7 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["main"]
+members = ["main", "reader"]
+default-members = ["main"]
 
+[workspace.dependencies]
+image = { version = "0.25.8", features = ["png", "jpeg", "ico"] }
+log = "0.4.28"
+rbook = { version = "0.6.6", default-features = false }
+thiserror = "2.0.16"
 
 [profile.dev-opt]
 inherits = "dev"
