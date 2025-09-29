@@ -1,0 +1,5 @@
+format_code_in_doc_comments = true
+imports_granularity = "item"
+imports_layout = "vertical"
+hard_tabs = true
+editon = "2024"
