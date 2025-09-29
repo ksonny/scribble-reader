@@ -67,61 +67,67 @@ struct App<'window> {
 	view: MainView,
 	egui_ctx: egui::Context,
 	fps: FpsCalculator,
-	request_redraw: bool,
-	request_redraw_time: Instant,
-	wait_cancelled: bool,
-	next_tick: Instant,
+	request_redraw: Instant,
 }
 
 impl App<'_> {
-	const ACTIVE_TICK: u64 = 16;
-	const SLEEP_TICK: u64 = 1000;
+	const ACTIVE_TICK: u64 = 32;
+	const SLEEP_TIMEOUT: u64 = 64;
+
+	fn request_redraw(&mut self) {
+		trace!("Request redraw");
+		self.request_redraw = Instant::now();
+	}
 }
 
 impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 	fn new_events(
 		&mut self,
-		_event_loop: &winit::event_loop::ActiveEventLoop,
+		event_loop: &winit::event_loop::ActiveEventLoop,
 		cause: winit::event::StartCause,
 	) {
-		self.wait_cancelled = match cause {
-			winit::event::StartCause::ResumeTimeReached { .. } => {
-				let now = Instant::now();
-				let since_last = now.duration_since(self.request_redraw_time).as_millis() as u64;
-
-				self.next_tick = if !self.request_redraw && since_last > Self::SLEEP_TICK {
-					trace!("Sleep tick");
-					self.request_redraw = true;
-					self.request_redraw_time = Instant::now();
-					now + Duration::from_millis(Self::SLEEP_TICK)
-				} else {
-					now + Duration::from_millis(Self::ACTIVE_TICK)
-				};
-				false
-			}
-			winit::event::StartCause::WaitCancelled { .. } => {
-				if self.request_redraw {
-					self.next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK)
+		match cause {
+			winit::event::StartCause::Init => {
+				if let Some(renderer) = self.renderer.as_mut() {
+					renderer.window.request_redraw();
 				}
-				true
 			}
-			_ => false,
-		}
-	}
-
-	fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-		trace!("about to wait");
-		if self.request_redraw
-			&& !self.wait_cancelled
-			&& let Some(renderer) = self.renderer.as_mut()
-		{
-			self.request_redraw = false;
-			renderer.window.request_redraw();
-		}
-
-		if !self.wait_cancelled {
-			event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(self.next_tick));
-		}
+			winit::event::StartCause::ResumeTimeReached {
+				requested_resume, ..
+			} => {
+				trace!("Resume time reached");
+				let since_redraw_request = requested_resume
+					.duration_since(self.request_redraw)
+					.as_millis() as u64;
+				if since_redraw_request < Self::SLEEP_TIMEOUT {
+					trace!("Render full speed: {}", since_redraw_request);
+					if let Some(renderer) = self.renderer.as_mut() {
+						trace!("Render");
+						renderer.window.request_redraw();
+					}
+					let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
+					event_loop
+						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
+				} else {
+					trace!("Render sleep");
+					event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait)
+				}
+			}
+			winit::event::StartCause::WaitCancelled {
+				requested_resume, ..
+			} => {
+				if requested_resume.is_none()
+					&& let Some(renderer) = self.renderer.as_mut()
+				{
+					trace!("Wait cancelled from sleep");
+					renderer.window.request_redraw();
+					let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
+					event_loop
+						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
+				}
+			}
+			_ => {}
+		};
 	}
 
 	fn resumed(&mut self, event_loop: &egui_winit::winit::event_loop::ActiveEventLoop) {
@@ -151,7 +157,7 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 			}
 			ScribePoke::Page { index, size } => {
 				log::info!("Open page");
-			},
+			}
 			ScribePoke::Update(doc_id) => {
 				log::info!("Thumbnail poke for {doc_id:?}");
 			}
@@ -186,13 +192,11 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 				match event {
 					WindowEvent::Resized(physical_size) => {
 						renderer.resize(physical_size);
-						self.request_redraw = true;
-						self.request_redraw_time = Instant::now();
+						self.request_redraw();
 					}
 					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
 						renderer.rescale(scale_factor);
-						self.request_redraw = true;
-						self.request_redraw_time = Instant::now();
+						self.request_redraw();
 					}
 					WindowEvent::RedrawRequested => {
 						self.fps.tick();
@@ -208,8 +212,7 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 					_ => {
 						let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
 						if response.repaint {
-							self.request_redraw = true;
-							self.request_redraw_time = Instant::now();
+							self.request_redraw();
 						}
 					}
 				};
@@ -264,10 +267,7 @@ pub fn start(event_loop: EventLoop<ScribePoke>, settings: Settings) -> Result<()
 		view,
 		egui_ctx,
 		fps,
-		request_redraw: false,
-		request_redraw_time: Instant::now(),
-		wait_cancelled: false,
-		next_tick: Instant::now(),
+		request_redraw: Instant::now(),
 	};
 
 	event_loop.run_app(&mut app)?;

@@ -209,9 +209,15 @@ impl ScribeAssistant {
 
 	pub fn request(&self, order: ScribeRequest) {
 		let ticket = self.new_ticket();
-		let r = self.order_tx.send((ticket, order));
-		log::info!("Result {r:?}");
-		// TODO: Do something with ticket
+		match self.order_tx.send((ticket, order)) {
+			Ok(_) => {
+				// TODO: Do something with ticket
+			}
+			Err(e) => {
+				log::info!("Error sending to scribe: {e}");
+				todo!()
+			}
+		};
 	}
 }
 
