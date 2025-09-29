@@ -1,5 +1,6 @@
 #![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
 
+mod gestures;
 mod renderer;
 mod scribe;
 mod ui;
@@ -148,7 +149,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		window.set_title("Scribble-reader");
 		if let Some(renderer) = self.renderer.as_mut() {
 			match renderer.resume(window, &self.egui_ctx) {
-				Ok(_) => {},
+				Ok(_) => {}
 				Err(e) => {
 					error!("Failed to resume renderer: {e}");
 					panic!("Failed to resume renderer: {e}");
@@ -156,9 +157,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			};
 		} else {
 			match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
-				Ok(renderer) => {
-					self.renderer = Some(renderer)
-				},
+				Ok(renderer) => self.renderer = Some(renderer),
 				Err(e) => {
 					error!("Failed to create renderer: {e}");
 					panic!("Failed to create renderer: {e}");
@@ -177,19 +176,8 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppPoke) {
 		trace!("user event: {event:?}");
 		match event {
-			AppPoke::OpenLibrary => {
-				let books = self.scribe.library().books(0..ListView::SIZE);
-				self.scribe.assistant().poke_list(&books);
-				let mut books_iter = books.into_iter().map(|b| {
-					let id = b.id;
-					(b, self.scribe.library().thumbnail(id))
-				});
-				self.view.invisible = false;
-				self.view.feature = FeatureView::List(Box::new(ListView {
-					cards: std::array::from_fn(|_| books_iter.next().map(create_card)),
-					page: 0,
-				}));
-				self.request_redraw();
+			AppPoke::ScanLibrary => {
+				self.scribe.assistant().send(scribe::ScribeRequest::Scan);
 			}
 			AppPoke::LibraryLoad | AppPoke::LibrarySorted => match &mut self.view.feature {
 				ui::FeatureView::Empty => {}
@@ -205,6 +193,20 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					self.request_redraw();
 				}
 			},
+			AppPoke::OpenLibrary => {
+				let books = self.scribe.library().books(0..ListView::SIZE);
+				self.scribe.assistant().poke_list(&books);
+				let mut books_iter = books.into_iter().map(|b| {
+					let id = b.id;
+					(b, self.scribe.library().thumbnail(id))
+				});
+				self.view.invisible = false;
+				self.view.feature = FeatureView::List(Box::new(ListView {
+					cards: std::array::from_fn(|_| books_iter.next().map(create_card)),
+					page: 0,
+				}));
+				self.request_redraw();
+			}
 			AppPoke::BookUpdated(id) => match &mut self.view.feature {
 				ui::FeatureView::Empty => {}
 				ui::FeatureView::List(list) => {
@@ -348,25 +350,24 @@ pub enum AppPoke {
 	PreviousPage,
 	OpenBook(BookId),
 	OpenLibrary,
+	ScanLibrary,
 }
 
 struct AppPokeStick {
 	event_loop: EventLoopProxy<AppPoke>,
-	assistant: scribe::ScribeAssistant,
 }
 
 impl AppPokeStick {
-	fn new(event_loop: EventLoopProxy<AppPoke>, assistant: scribe::ScribeAssistant) -> Self {
+	fn new(event_loop: EventLoopProxy<AppPoke>) -> Self {
 		Self {
 			event_loop,
-			assistant,
 		}
 	}
 }
 
 impl ui::PokeStick for AppPokeStick {
 	fn scan_library(&self) {
-		self.assistant.send(scribe::ScribeRequest::Scan);
+		self.event_loop.send_event(AppPoke::ScanLibrary).unwrap();
 	}
 
 	fn next_page(&self) {
@@ -415,7 +416,7 @@ pub enum Error {
 pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), Error> {
 	let scribe = Scribe::create(event_loop.create_proxy(), settings)?;
 	let view = MainView::default();
-	let poke_stick = AppPokeStick::new(event_loop.create_proxy(), scribe.assistant());
+	let poke_stick = AppPokeStick::new(event_loop.create_proxy());
 
 	let egui_ctx = egui::Context::default();
 	egui_extras::install_image_loaders(&egui_ctx);
@@ -515,18 +516,19 @@ fn android_main(app: AndroidApp) {
 	use android_logger::Config;
 	use winit::platform::android::EventLoopBuilderExtAndroid;
 
-	let ext_data_path = app.external_data_path().unwrap();
-	let s = Settings {
-		cache_path: ext_data_path.join("cache"),
-		config_path: ext_data_path.join("config"),
-		data_path: ext_data_path.join("data"),
-	};
-
 	android_logger::init_once(
 		Config::default()
 			.with_tag("scribble-reader")
 			.with_max_level(log::LevelFilter::Info),
 	);
+
+	let ext_data_path = app.external_data_path().unwrap();
+	let s = Settings {
+		cache_path: ext_data_path.parent().unwrap().join("cache"),
+		config_path: ext_data_path.join("config"),
+		data_path: ext_data_path.join("data"),
+	};
+
 	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
 		.build()

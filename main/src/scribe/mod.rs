@@ -16,6 +16,7 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::thread::JoinHandle;
 
+#[cfg(not(target_os = "android"))]
 use expand_tilde::expand_tilde_owned;
 
 pub use crate::scribe::library::BookId;
@@ -33,6 +34,8 @@ pub enum ScribeCreateError {
 	LibraryPathNotDir(PathBuf),
 	#[error("Cache path is not directory: {0}")]
 	CachePathNotDir(PathBuf),
+	#[error("Data path is not directory: {0}")]
+	DataPathNotDir(PathBuf),
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
 	#[error(transparent)]
@@ -124,6 +127,9 @@ impl Scribe {
 			.build()?
 			.try_deserialize()?;
 
+		#[cfg(target_os = "android")]
+		let lib_path = scribe_settings.library.path;
+		#[cfg(not(target_os = "android"))]
 		let lib_path = expand_tilde_owned(scribe_settings.library.path)?;
 		if !lib_path.try_exists()? {
 			fs::create_dir_all(&lib_path)?;
@@ -136,6 +142,12 @@ impl Scribe {
 		}
 		if !settings.cache_path.is_dir() {
 			return Err(ScribeCreateError::CachePathNotDir(settings.cache_path));
+		}
+		if !settings.data_path.try_exists()? {
+			fs::create_dir_all(&settings.data_path)?;
+		}
+		if !settings.data_path.is_dir() {
+			return Err(ScribeCreateError::DataPathNotDir(settings.data_path));
 		}
 
 		let options = ScribeOptions::from(&settings);
@@ -205,6 +217,7 @@ where
 			log::info!("Request received: {request:?}");
 			match request {
 				Ok((_ticket, ScribeRequest::Scan)) => {
+					log::info!("Scan library at {}", lib_path.display());
 					let books: BTreeMap<_, _> = storage
 						.scan(&lib_path)
 						.inspect_err(|e| log::error!("{e}"))?;

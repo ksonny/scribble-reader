@@ -55,6 +55,9 @@ keystore_password = "password"
 path = "/home/ksonny/.android/debug.keystore"
 keystore_password = "android"
 
+[[package.metadata.android.uses_permission]]
+name = "android.permission.MANAGE_EXTERNAL_STORAGE"
+
 [package.metadata.android]
 build_targets = ["aarch64-linux-android"]
 resources = "resources"
