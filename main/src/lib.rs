@@ -23,9 +23,10 @@ use winit::event_loop::EventLoop;
 use winit::window::Window;
 
 use crate::renderer::Renderer;
+use crate::scribe::BookId;
 use crate::scribe::Scribe;
-use crate::scribe::ScribeBell;
-use crate::scribe::ScribePoke;
+use crate::ui::BookCard;
+use crate::ui::ListView;
 use crate::ui::MainView;
 
 pub use crate::scribe::Settings;
@@ -65,6 +66,7 @@ struct App<'window> {
 	renderer: Option<Renderer<'window>>,
 	scribe: Scribe,
 	view: MainView,
+	poke_stick: AppPokeStick,
 	egui_ctx: egui::Context,
 	fps: FpsCalculator,
 	request_redraw: Instant,
@@ -80,7 +82,7 @@ impl App<'_> {
 	}
 }
 
-impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
+impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	fn new_events(
 		&mut self,
 		event_loop: &winit::event_loop::ActiveEventLoop,
@@ -135,6 +137,7 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 		let window = event_loop
 			.create_window(Window::default_attributes())
 			.unwrap();
+		window.set_title("Scribble-reader");
 		let renderer = match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
 			Ok(renderer) => renderer,
 			Err(e) => {
@@ -150,16 +153,74 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 		self.renderer = None;
 	}
 
-	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: ScribePoke) {
+	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppPoke) {
+		trace!("user event: {event:?}");
 		match event {
-			ScribePoke::LibraryLoad => {
-				log::info!("Library loaded");
+			AppPoke::LibraryLoad | AppPoke::LibrarySorted => {
+				log::info!("Event {event:?}");
+				let mut books = self.scribe.library().books(0..ListView::SIZE);
+				self.scribe.assistant().poke_list(&books);
+				let cards = std::array::from_fn(|_| {
+					books.pop().map(|b| BookCard {
+						id: b.id,
+						title: b.title,
+						author: b.author,
+					})
+				});
+				self.view.list = Some(ListView { page: 0, cards });
 			}
-			ScribePoke::Page { index, size } => {
-				log::info!("Open page");
+			AppPoke::BookUpdated(id) => {
+				if let Some(list) = self.view.list.as_mut() {
+					let mut updated = false;
+					for card in list.cards.iter_mut().flatten() {
+						if card.id == id
+							&& let Some(book) = self.scribe.library().book(id)
+						{
+							card.title = book.title;
+							card.author = book.author;
+							log::info!("Updated book {id:?}");
+							updated = true;
+							break;
+						}
+					}
+					if !updated {
+						log::info!("No updated needed for {id:?}");
+					}
+				}
 			}
-			ScribePoke::Update(doc_id) => {
-				log::info!("Thumbnail poke for {doc_id:?}");
+			AppPoke::NextPage => {
+				if let Some(list) = self.view.list.as_mut() {
+					let page = list.page + 1;
+					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
+					let mut books = self.scribe.library().books(r);
+					self.scribe.assistant().poke_list(&books);
+					let cards = std::array::from_fn(|_| {
+						books.pop().map(|b| BookCard {
+							id: b.id,
+							title: b.title,
+							author: b.author,
+						})
+					});
+					list.page = page;
+					list.cards = cards;
+				}
+			}
+			AppPoke::PreviousPage => {
+				if let Some(list) = self.view.list.as_mut() {
+					let page = list.page.saturating_sub(1);
+					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
+					let mut books = self.scribe.library().books(r);
+					self.scribe.assistant().poke_list(&books);
+					let cards = std::array::from_fn(|_| {
+						books.pop().map(|b| BookCard {
+							id: b.id,
+							title: b.title,
+							author: b.author,
+						})
+					});
+					list.page = page;
+					list.cards = cards;
+				}
 			}
 		}
 	}
@@ -201,7 +262,7 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 					WindowEvent::RedrawRequested => {
 						self.fps.tick();
 
-						match renderer.render(&mut self.view) {
+						match renderer.render(&mut self.view, &self.poke_stick) {
 							Ok(_) => {}
 							Err(e) => {
 								error!("Failure during render: {e:?}");
@@ -221,16 +282,58 @@ impl<'window> ApplicationHandler<ScribePoke> for App<'window> {
 	}
 }
 
-impl ScribeBell for EventLoopProxy<ScribePoke> {
-	fn push(&self, event: ScribePoke) {
-		match self.send_event(event) {
-			Ok(()) => {}
-			Err(_) => todo!(),
+#[derive(Debug)]
+pub enum AppPoke {
+	LibraryLoad,
+	LibrarySorted,
+	BookUpdated(BookId),
+	NextPage,
+	PreviousPage,
+}
+
+struct AppPokeStick {
+	event_loop: EventLoopProxy<AppPoke>,
+	assistant: scribe::ScribeAssistant,
+}
+
+impl AppPokeStick {
+	fn new(event_loop: EventLoopProxy<AppPoke>, assistant: scribe::ScribeAssistant) -> Self {
+		Self {
+			event_loop,
+			assistant,
 		}
+	}
+}
+
+impl ui::MainPokeStick for AppPokeStick {
+	fn scan_library(&self) {
+		self.assistant.send(scribe::ScribeRequest::Scan);
+	}
+
+	fn next_page(&self) {
+		self.event_loop.send_event(AppPoke::NextPage).unwrap();
+	}
+
+	fn previous_page(&self) {
+		self.event_loop.send_event(AppPoke::PreviousPage).unwrap();
+	}
+}
+
+impl scribe::ScribeBell for EventLoopProxy<AppPoke> {
+	fn library_loaded(&self) {
+		self.send_event(AppPoke::LibraryLoad).unwrap();
+	}
+
+	fn library_sorted(&self) {
+		self.send_event(AppPoke::LibrarySorted).unwrap();
+	}
+
+	fn book_updated(&self, id: BookId) {
+		self.send_event(AppPoke::BookUpdated(id)).unwrap();
 	}
 
 	fn fail(&self, error: String) {
-		log::error!("Error occured in lib process: {error}");
+		log::error!("Error in scribe: {error}");
 	}
 }
 
@@ -242,9 +345,10 @@ pub enum Error {
 	ScribeCreate(#[from] scribe::ScribeCreateError),
 }
 
-pub fn start(event_loop: EventLoop<ScribePoke>, settings: Settings) -> Result<(), Error> {
+pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), Error> {
 	let scribe = Scribe::create(event_loop.create_proxy(), settings)?;
-	let view = MainView::new(scribe.assistant());
+	let view = MainView::default();
+	let poke_stick = AppPokeStick::new(event_loop.create_proxy(), scribe.assistant());
 
 	let egui_ctx = egui::Context::default();
 	egui_extras::install_image_loaders(&egui_ctx);
@@ -257,6 +361,7 @@ pub fn start(event_loop: EventLoop<ScribePoke>, settings: Settings) -> Result<()
 		}],
 	));
 	egui_ctx.style_mut(|style| {
+		style.animation_time = 0.0;
 		style.spacing.item_spacing = Vec2::new(5.0, 5.0);
 	});
 	let fps = FpsCalculator::new();
@@ -265,6 +370,7 @@ pub fn start(event_loop: EventLoop<ScribePoke>, settings: Settings) -> Result<()
 		renderer: None,
 		scribe,
 		view,
+		poke_stick,
 		egui_ctx,
 		fps,
 		request_redraw: Instant::now(),

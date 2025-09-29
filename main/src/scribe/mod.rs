@@ -2,6 +2,8 @@
 mod settings;
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::collections::BinaryHeap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -13,6 +15,9 @@ use std::thread;
 use std::thread::JoinHandle;
 
 pub use crate::scribe::library::BookId;
+use crate::scribe::library::SortDirection;
+use crate::scribe::library::SortField;
+use crate::scribe::library::SortOrder;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScribeCreateError {
@@ -37,24 +42,24 @@ pub(crate) enum ScribeError {
 #[derive(Debug, Clone, Copy)]
 pub struct ScribeTicket(usize);
 
-pub enum ScribePoke {
-	LibraryLoad,
-	Page { index: u32, size: u32 },
-	Update(BookId),
-}
-
 pub(crate) trait ScribeBell {
+	fn library_loaded(&self);
+
+	fn library_sorted(&self);
+
+	fn book_updated(&self, id: BookId);
+
 	fn complete(&self, ticket: ScribeTicket) {
 		let _ = ticket;
 	}
-	fn push(&self, event: ScribePoke);
+
 	fn fail(&self, error: String);
 }
 
 #[derive(Debug)]
 pub(crate) enum ScribeRequest {
 	Scan,
-	Page { index: u32, size: u32 },
+	List(Vec<BookId>),
 	Sort(library::SortOrder),
 }
 
@@ -121,58 +126,9 @@ impl Scribe {
 		let options = ScribeOptions::from(&settings);
 		let lib = library::Library::default();
 		let worker_lib = lib.clone();
-		let mut storage = secret_storage::connect(&options.state_db_path)?;
-
+		let storage = secret_storage::connect(&options.state_db_path)?;
 		let (order_tx, order_rx) = channel();
-		let handle = thread::spawn(move || -> Result<(), ScribeError> {
-			let lib = worker_lib;
-			log::info!("Started scribe worker");
-
-			{
-				let books = storage
-					.get_books()
-					.inspect_err(|e| log::error!("{e}"))?
-					.into_iter()
-					.map(|book| (book.id, book))
-					.collect();
-				log::info!("Books loaded");
-				let mut lib = lib.write().unwrap();
-				lib.books = books;
-				bell.push(ScribePoke::LibraryLoad);
-			}
-			log::info!("Library loaded");
-
-			loop {
-				let request = order_rx.recv();
-				log::info!("Request received: {request:?}");
-				match request {
-					Ok((ticket, ScribeRequest::Scan)) => {
-						let books = storage
-							.scan(&lib_path)
-							.inspect_err(|e| log::error!("{e}"))?
-							.into_iter()
-							.map(|book| (book.id, book))
-							.collect();
-						let mut lib = lib.write().unwrap();
-						lib.books = books;
-						bell.push(ScribePoke::LibraryLoad);
-						bell.complete(ticket);
-					}
-					Ok((ticket, ScribeRequest::Page { .. })) => {
-						// TODO
-						bell.complete(ticket);
-					}
-					Ok((ticket, ScribeRequest::Sort(_order))) => {
-						// TODO
-						bell.complete(ticket);
-					}
-					Err(RecvError) => {
-						log::info!("Scribe worker terminated");
-						break Ok(());
-					}
-				}
-			}
-		});
+		let handle = spawn_scribe(bell, lib_path, worker_lib, storage, order_rx);
 
 		Ok(Scribe {
 			lib,
@@ -200,6 +156,122 @@ impl Scribe {
 	}
 }
 
+fn spawn_scribe<Bell>(
+	bell: Bell,
+	lib_path: PathBuf,
+	worker_lib: library::Library,
+	mut storage: secret_storage::SecretStorage,
+	order_rx: std::sync::mpsc::Receiver<(ScribeTicket, ScribeRequest)>,
+) -> JoinHandle<Result<(), ScribeError>>
+where
+	Bell: ScribeBell + Send + 'static,
+{
+	thread::spawn(move || -> Result<(), ScribeError> {
+		let lib = worker_lib;
+		log::info!("Started scribe worker");
+
+		let books: BTreeMap<_, _> = storage.get_books().inspect_err(|e| log::error!("{e}"))?;
+		let books_len = books.len();
+		let SortOrder(field, dir) = {
+			let lib = lib.read().unwrap();
+			lib.order
+		};
+		let sorted = sort_books(&books, field, dir);
+		{
+			let mut lib = lib.write().unwrap();
+			lib.books = books;
+			lib.sorted = sorted;
+		}
+		log::info!("Library loaded with {books_len} books");
+		bell.library_loaded();
+
+		loop {
+			let request = order_rx.recv();
+			log::info!("Request received: {request:?}");
+			match request {
+				Ok((ticket, ScribeRequest::Scan)) => {
+					let books: BTreeMap<_, _> = storage
+						.scan(&lib_path)
+						.inspect_err(|e| log::error!("{e}"))?;
+					let books_len = books.len();
+					let SortOrder(field, dir) = {
+						let lib = lib.read().unwrap();
+						lib.order
+					};
+					let sorted = sort_books(&books, field, dir);
+					{
+						let mut lib = lib.write().unwrap();
+						lib.books = books;
+						lib.sorted = sorted;
+					}
+					log::info!("Library loaded with {books_len} books");
+					bell.library_loaded();
+					bell.complete(ticket);
+				}
+				Ok((ticket, ScribeRequest::List(ids))) => {
+					// TODO: Actually do something
+					for id in ids {
+						bell.book_updated(id);
+					}
+					bell.complete(ticket);
+				}
+				Ok((ticket, ScribeRequest::Sort(order))) => {
+					let SortOrder(field, dir) = order;
+					let sorted = {
+						let lib = lib.read().unwrap();
+						sort_books(&lib.books, field, dir)
+					};
+					{
+						let mut lib = lib.write().unwrap();
+						lib.order = order;
+						lib.sorted = sorted;
+					}
+					bell.library_sorted();
+					bell.complete(ticket);
+				}
+				Err(RecvError) => {
+					log::info!("Scribe worker terminated");
+					break Ok(());
+				}
+			}
+		}
+	})
+}
+
+fn sort_books(
+	books: &BTreeMap<BookId, library::Book>,
+	field: SortField,
+	dir: SortDirection,
+) -> Vec<BookId> {
+	let mut sorted: Vec<BookId> = match field {
+		SortField::Added => books
+			.values()
+			.map(|book| (book.added_at, book.id))
+			.collect::<BinaryHeap<_>>()
+			.into_iter()
+			.map(|(_, id)| id)
+			.collect(),
+		SortField::Modified => books
+			.values()
+			.map(|book| (book.modified_at, book.id))
+			.collect::<BinaryHeap<_>>()
+			.into_iter()
+			.map(|(_, id)| id)
+			.collect(),
+		SortField::Title => books
+			.values()
+			.map(|book| (book.title.as_deref(), book.id))
+			.collect::<BinaryHeap<_>>()
+			.into_iter()
+			.map(|(_, id)| id)
+			.collect(),
+	};
+	if matches!(dir, SortDirection::Descending) {
+		sorted.reverse();
+	}
+	sorted
+}
+
 impl ScribeAssistant {
 	fn new_ticket(&self) -> ScribeTicket {
 		let ticket_id = self.ticket_cnt.get();
@@ -207,7 +279,7 @@ impl ScribeAssistant {
 		ScribeTicket(ticket_id)
 	}
 
-	pub fn request(&self, order: ScribeRequest) {
+	pub fn send(&self, order: ScribeRequest) {
 		let ticket = self.new_ticket();
 		match self.order_tx.send((ticket, order)) {
 			Ok(_) => {
@@ -218,6 +290,13 @@ impl ScribeAssistant {
 				todo!()
 			}
 		};
+	}
+
+	pub fn poke_list(&self, books: &[library::Book]) -> () {
+		let ids = books.iter().map(|b| b.id).collect::<Vec<_>>();
+		if !ids.is_empty() {
+			self.send(ScribeRequest::List(ids));
+		}
 	}
 }
 
@@ -230,28 +309,30 @@ mod library {
 	use chrono::DateTime;
 	use chrono::Utc;
 
-	#[derive(Debug, Default)]
+	use crate::scribe::library;
+
+	#[derive(Debug, Default, Clone, Copy)]
 	pub(crate) enum SortField {
 		#[default]
 		Added,
 		Modified,
-		Name,
+		Title,
 	}
 
-	#[derive(Debug, Default)]
+	#[derive(Debug, Default, Clone, Copy)]
 	pub(crate) enum SortDirection {
 		#[default]
 		Ascending,
 		Descending,
 	}
 
-	#[derive(Debug, Default)]
-	pub(crate) struct SortOrder(SortField, SortDirection);
+	#[derive(Debug, Default, Clone, Copy)]
+	pub(crate) struct SortOrder(pub SortField, pub SortDirection);
 
 	#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
 	pub struct BookId(pub i64);
 
-	#[derive(Debug)]
+	#[derive(Debug, Clone)]
 	pub struct Book {
 		pub id: BookId,
 		pub path: PathBuf,
@@ -265,6 +346,8 @@ mod library {
 	#[derive(Debug, Default)]
 	pub(crate) struct SecretLibrary {
 		pub(crate) books: BTreeMap<BookId, Book>,
+		pub(crate) order: SortOrder,
+		pub(crate) sorted: Vec<BookId>,
 	}
 
 	#[derive(Default, Clone)]
@@ -290,6 +373,30 @@ mod library {
 			let Library(lib) = self;
 			lib.write()
 		}
+
+		pub fn book(&self, id: BookId) -> Option<Book> {
+			let lib = self.read().unwrap();
+			lib.books.get(&id).cloned()
+		}
+
+		pub fn books(&self, n: std::ops::Range<u32>) -> Vec<library::Book> {
+			let lib = self.read().unwrap();
+			let start = n.start as usize;
+			let end = (n.end as usize).min(lib.sorted.len());
+			let books = lib
+				.sorted
+				.get(start..end)
+				.into_iter()
+				.flatten()
+				.filter_map(|id| lib.books.get(id).cloned())
+				.collect::<Vec<_>>();
+			log::info!(
+				"Requested books {start}..{end}, received {} from all books {}",
+				books.len(),
+				lib.sorted.len()
+			);
+			books
+		}
 	}
 }
 
@@ -305,6 +412,7 @@ mod secret_storage {
 	use serde_rusqlite::from_rows;
 	use serde_rusqlite::to_params_named;
 
+	use std::collections::BTreeMap;
 	use std::fs;
 	use std::os::unix::fs::MetadataExt;
 	use std::path::Path;
@@ -451,7 +559,10 @@ mod secret_storage {
 	}
 
 	impl SecretStorage {
-		pub fn scan(&mut self, path: &Path) -> Result<Vec<library::Book>, SecretStorageError> {
+		pub fn scan(
+			&mut self,
+			path: &Path,
+		) -> Result<BTreeMap<library::BookId, library::Book>, SecretStorageError> {
 			if !path.is_dir() {
 				return Err(SecretStorageError::ScanPathNotDir);
 			}
@@ -459,7 +570,7 @@ mod secret_storage {
 			let tx = self.conn.transaction()?;
 			tx.execute("update books set exist = false;", [])?;
 
-			let mut books = Vec::new();
+			let mut books = BTreeMap::new();
 			{
 				let mut upsert_stmt = tx.prepare(
 					"insert into books (path, title, author, size, modified_at, added_at, exist)
@@ -487,7 +598,8 @@ mod secret_storage {
 							let params = params.to_slice();
 							let book_id =
 								upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
-							books.push((book_id, book).into());
+							let book: library::Book = (book_id, book).into();
+							books.insert(book.id, book);
 						}
 						Err(e) => {
 							log::error!(
@@ -504,7 +616,9 @@ mod secret_storage {
 			Ok(books)
 		}
 
-		pub fn get_books(&self) -> Result<Vec<library::Book>, SecretStorageError> {
+		pub fn get_books(
+			&self,
+		) -> Result<BTreeMap<library::BookId, library::Book>, SecretStorageError> {
 			let mut stmt = self.conn.prepare(
 				"select
 					id,
@@ -519,8 +633,8 @@ mod secret_storage {
 			",
 			)?;
 			let series = from_rows::<SecretBook>(stmt.query([])?)
-				.map(|book| book.map(|b| b.into()))
-				.collect::<Result<Vec<_>, _>>()?;
+				.map(|book| book.map(|b| (library::BookId(b.id), b.into())))
+				.collect::<Result<BTreeMap<_, _>, _>>()?;
 			Ok(series)
 		}
 	}

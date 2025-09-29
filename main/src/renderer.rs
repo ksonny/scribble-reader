@@ -1,7 +1,4 @@
 use egui::TexturesDelta;
-use log::error;
-use log::info;
-use log::warn;
 use winit::dpi::PhysicalSize;
 
 use egui_wgpu::wgpu::{
@@ -11,7 +8,7 @@ use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::ui::GuiView;
+use crate::ui::{GuiView, MainPokeStick};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RendererError {
@@ -75,9 +72,9 @@ impl GuiRenderer {
 		self.state.on_window_event(window, event)
 	}
 
-	pub(crate) fn prepare(&mut self, window: &Window, view: &mut impl GuiView) {
+	pub(crate) fn prepare(&mut self, window: &Window, view: &mut impl GuiView, poke_stick: &impl MainPokeStick) {
 		let raw_input = self.state.take_egui_input(window);
-		let output = self.ctx.run(raw_input, |egui_ctx| view.draw(egui_ctx));
+		let output = self.ctx.run(raw_input, |egui_ctx| view.draw(egui_ctx, poke_stick));
 
 		self.state
 			.handle_platform_output(window, output.platform_output);
@@ -231,7 +228,7 @@ impl<'window> Renderer<'window> {
 	}
 
 	pub(crate) fn resize(&mut self, physical_size: PhysicalSize<u32>) {
-		info!(
+		log::trace!(
 			"resized: {} x {}",
 			physical_size.width, physical_size.height
 		);
@@ -240,11 +237,11 @@ impl<'window> Renderer<'window> {
 	}
 
 	pub(crate) fn rescale(&mut self, scale_factor: f64) {
-		info!("rescale: {}", scale_factor,);
+		log::trace!("rescale: {}", scale_factor,);
 		self.scale_factor = scale_factor;
 	}
 
-	pub(crate) fn render(&mut self, gui: &mut impl GuiView) -> Result<(), RendererError> {
+	pub(crate) fn render(&mut self, gui: &mut impl GuiView, poke_stick: &impl MainPokeStick) -> Result<(), RendererError> {
 		if self.did_resize {
 			self.surface
 				.configure(&self.device, &Self::surface_config(self.size, self.format));
@@ -253,7 +250,7 @@ impl<'window> Renderer<'window> {
 
 		match self.surface.get_current_texture() {
 			Ok(frame) => {
-				self.gui_renderer.prepare(&self.window, gui);
+				self.gui_renderer.prepare(&self.window, gui, poke_stick);
 
 				let view = frame
 					.texture
@@ -300,11 +297,11 @@ impl<'window> Renderer<'window> {
 				frame.present();
 			}
 			Err(e @ wgpu::SurfaceError::OutOfMemory) => {
-				error!("Swapchain error: {e}");
+				log::error!("Swapchain error: {e}");
 				return Err(e.into());
 			}
 			Err(e) => {
-				warn!("Hopefully recoverable error in render: {e}");
+				log::warn!("Hopefully recoverable error in render: {e}");
 			}
 		}
 		Ok(())
