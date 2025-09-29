@@ -7,7 +7,7 @@ fn main() -> Result<(), EventLoopError> {
 		.filter_level(log::LevelFilter::Info) // Default Log Level
 		.parse_default_env()
 		.init();
-	let event_loop = EventLoop::new().unwrap();
+	let event_loop = EventLoop::with_user_event().build().unwrap();
 	start(event_loop)?;
 	Ok(())
 }

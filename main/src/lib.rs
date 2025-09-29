@@ -1,6 +1,7 @@
 #![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
 
 mod renderer;
+mod scribe;
 mod ui;
 
 use std::time::Duration;
@@ -12,6 +13,7 @@ use log::trace;
 use log::warn;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent;
+use winit::event_loop::EventLoopProxy;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 
@@ -20,6 +22,8 @@ use winit::event_loop::EventLoop;
 use winit::window::Window;
 
 use crate::renderer::Renderer;
+use crate::scribe::Scribe;
+use crate::scribe::ScribeBell;
 use crate::ui::MainView;
 
 struct FpsCalculator {
@@ -45,6 +49,7 @@ impl FpsCalculator {
 		self.last_frame = instant;
 	}
 
+	#[allow(unused)]
 	fn fps(&self) -> u64 {
 		(1000_u64 << Self::DIVIDER_2)
 			.checked_div(self.total_ms)
@@ -68,7 +73,7 @@ impl App<'_> {
 	const SLEEP_TICK: u64 = 1000;
 }
 
-impl<'window> ApplicationHandler for App<'window> {
+impl<'window> ApplicationHandler<ScribeEvent> for App<'window> {
 	fn new_events(
 		&mut self,
 		_event_loop: &winit::event_loop::ActiveEventLoop,
@@ -134,6 +139,19 @@ impl<'window> ApplicationHandler for App<'window> {
 		self.renderer = None;
 	}
 
+	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: ScribeEvent) {
+		match event {
+			ScribeEvent::TicketComplete(_scribe_ticket) => {
+				self.request_redraw = true;
+				self.request_redraw_time = Instant::now();
+				// TODO: Take care of ticket
+			}
+			ScribeEvent::TicketFailed(_scribe_ticket, _error) => {
+				// TODO: Report error on main thread
+			}
+		}
+	}
+
 	fn window_event(
 		&mut self,
 		event_loop: &egui_winit::winit::event_loop::ActiveEventLoop,
@@ -172,7 +190,6 @@ impl<'window> ApplicationHandler for App<'window> {
 					}
 					WindowEvent::RedrawRequested => {
 						self.fps.tick();
-						self.view.set_fps(self.fps.fps());
 
 						match renderer.render(&mut self.view) {
 							Ok(_) => {}
@@ -195,8 +212,31 @@ impl<'window> ApplicationHandler for App<'window> {
 	}
 }
 
-pub fn start(event_loop: EventLoop<()>) -> Result<(), EventLoopError> {
-	let view = MainView::default();
+pub enum ScribeEvent {
+	TicketComplete(scribe::ScribeTicket),
+	TicketFailed(scribe::ScribeTicket, String),
+}
+
+impl ScribeBell for EventLoopProxy<ScribeEvent> {
+	fn completed(&self, ticket: scribe::ScribeTicket) {
+		match self.send_event(ScribeEvent::TicketComplete(ticket)) {
+			Ok(()) => {},
+			Err(_) => todo!(),
+		}
+	}
+
+	fn failed(&self, ticket: scribe::ScribeTicket, error: String) {
+		match self.send_event(ScribeEvent::TicketFailed(ticket, error)) {
+			Ok(()) => {},
+			Err(_) => todo!(),
+		}
+	}
+}
+
+pub fn start(event_loop: EventLoop<ScribeEvent>) -> Result<(), EventLoopError> {
+	let scribe = Scribe::create(event_loop.create_proxy());
+	let view = MainView::create(scribe);
+
 	let egui_ctx = egui::Context::default();
 
 	egui_extras::install_image_loaders(&egui_ctx);
@@ -232,7 +272,7 @@ fn android_main(app: AndroidApp) {
 	use winit::platform::android::EventLoopBuilderExtAndroid;
 
 	android_logger::init_once(Config::default().with_max_level(log::LevelFilter::Info));
-	let event_loop = EventLoopBuilder::new()
+	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
 		.build()
 		.unwrap();

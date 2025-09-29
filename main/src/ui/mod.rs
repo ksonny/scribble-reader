@@ -1,10 +1,11 @@
-use egui::Color32;
 use egui::Context;
 use egui::FontFamily;
 use egui::FontId;
 use egui::Layout;
 use lazy_static::lazy_static;
 use lucide_icons::Icon;
+
+use crate::scribe::Scribe;
 
 lazy_static! {
 	pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
@@ -14,21 +15,20 @@ pub trait GuiView {
 	fn draw(&mut self, ctx: &Context);
 }
 
-#[derive(Debug, Default)]
 pub struct MainView {
-	fps: u64,
+	scribe: Scribe,
 }
 
 impl MainView {
-	pub fn set_fps(&mut self, fps: u64) {
-		self.fps = fps;
+	pub fn create(scribe: Scribe) -> Self {
+		Self { scribe }
 	}
 }
 
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context) {
-		let response = egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-			ui.label(egui::RichText::new(format!("FPS: {0}", self.fps)).color(Color32::RED));
+		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+			ui.label("Scribble-reader");
 		});
 
 		let response = egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
@@ -62,7 +62,11 @@ impl GuiView for MainView {
 				ui.add_space(3.0);
 			});
 		});
-		let bb_height = response.response.intrinsic_size.unwrap_or(response.response.rect.size()).y;
+		let bb_height = response
+			.response
+			.intrinsic_size
+			.unwrap_or(response.response.rect.size())
+			.y;
 
 		egui::CentralPanel::default().show(ctx, |ui| {
 			let height = ui.available_height() - bb_height;
