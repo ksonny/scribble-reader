@@ -55,8 +55,13 @@ pub(crate) struct BookCard {
 	pub(crate) thumbnail: Option<Thumbnail>,
 }
 
-impl BookCard {
-	fn draw(&self, ui: &mut egui::Ui) {
+struct BookCardUi<'a> {
+	card: &'a BookCard,
+}
+
+impl egui::Widget for BookCardUi<'_> {
+	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		let card = self.card;
 		ui.group(|ui| {
 			ui.set_min_size(ui.available_size());
 			let height = ui.available_height();
@@ -66,9 +71,9 @@ impl BookCard {
 				let cover_width = height * 0.75;
 				ui.allocate_ui([cover_width, height].into(), |ui| {
 					ui.set_width(cover_width);
-					ui.centered_and_justified(|ui| match &self.thumbnail {
+					ui.centered_and_justified(|ui| match &card.thumbnail {
 						Some(Thumbnail { bytes }) => ui.add(egui::Image::new(ImageSource::Bytes {
-							uri: format!("bytes://thumbnail_{}.png", self.id.value()).into(),
+							uri: format!("bytes://thumbnail_{}.png", card.id.value()).into(),
 							bytes: Bytes::Shared(bytes.clone()),
 						})),
 						None => ui.label(
@@ -81,18 +86,27 @@ impl BookCard {
 				});
 				ui.separator();
 				ui.vertical(|ui| {
-					let title = self.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
+					if let Some(author) = card.author.as_ref().map(|t| t.as_str()) {
+						ui.label(author);
+						ui.end_row();
+					}
+					let title = card.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
 					ui.label(RichText::new(title).text_style(TextStyle::Heading));
-					ui.end_row();
-					let author = self
-						.author
-						.as_ref()
-						.map(|t| t.as_str())
-						.unwrap_or("Unknown");
-					ui.label(author);
 				});
 			});
-		});
+			ui.interact(
+				ui.min_rect(),
+				egui::Id::new(card.id.value()),
+				egui::Sense::click(),
+			)
+		})
+		.inner
+	}
+}
+
+impl BookCard {
+	fn ui<'a>(&'a self) -> BookCardUi<'a> {
+		BookCardUi { card: self }
 	}
 }
 
@@ -104,14 +118,16 @@ pub(crate) struct ListView {
 impl ListView {
 	pub const SIZE: u32 = 5;
 
-	fn draw(&self, ui: &mut egui::Ui) {
+	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl MainPokeStick) {
 		let height = ui.available_height() - Self::SIZE as f32 * ui.spacing().item_spacing.y;
 		let card_height = height / 5.0;
 
 		ui.vertical(|ui| {
 			for card in self.cards.iter().flatten() {
 				ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
-					card.draw(ui)
+					if ui.add(card.ui()).clicked() {
+						poke_stick.open_book(card.id);
+					}
 				});
 			}
 		});
@@ -124,29 +140,49 @@ pub trait MainPokeStick {
 	fn next_page(&self);
 
 	fn previous_page(&self);
+
+	fn open_book(&self, id: BookId);
+
+	fn open_library(&self);
 }
 
-#[derive(Default)]
 pub enum FeatureView {
-	#[default]
 	Empty,
 	List(Box<ListView>),
 }
 
+impl Default for FeatureView {
+	fn default() -> Self {
+		FeatureView::List(Box::new(ListView {
+			page: 0,
+			cards: Default::default(),
+		}))
+	}
+}
+
 #[derive(Default)]
 pub struct MainView {
+	pub invisible: bool,
 	pub feature: FeatureView,
 }
 
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context, poke_stick: &impl MainPokeStick) {
+		if self.invisible {
+			return;
+		}
+
 		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+			ui.add_space(20.0);
 			egui::MenuBar::new()
-				.style(|style: &mut Style| {
-					style.visuals.weak_text_alpha = 0.0;
-				})
 				.ui(ui, |ui| {
 					ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
+						if ui
+							.button(UiIcon::new(Icon::Library).text("Library").large().build())
+							.clicked()
+						{
+							poke_stick.open_library();
+						}
 						if ui
 							.button(
 								UiIcon::new(Icon::RefreshCw)
@@ -208,7 +244,7 @@ impl GuiView for MainView {
 		match &self.feature {
 			FeatureView::Empty => {}
 			FeatureView::List(list) => {
-				egui::CentralPanel::default().show(ctx, |ui| list.draw(ui));
+				egui::CentralPanel::default().show(ctx, |ui| list.draw(ui, poke_stick));
 			}
 		}
 	}

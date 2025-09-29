@@ -61,6 +61,9 @@ pub(crate) enum ScribeRequest {
 	Scan,
 	Show(BookId),
 	Sort(library::SortOrder),
+	OpenBook(BookId),
+	Next,
+	Previous,
 }
 
 pub(crate) struct Scribe {
@@ -251,6 +254,12 @@ where
 					}
 					bell.library_sorted();
 				}
+				Ok((_ticket, ScribeRequest::OpenBook(_id))) => {
+				}
+				Ok((_ticket, ScribeRequest::Next)) => {
+				}
+				Ok((_ticket, ScribeRequest::Previous)) => {
+				}
 				Err(RecvError) => {
 					log::info!("Scribe worker terminated");
 					break Ok(());
@@ -328,5 +337,17 @@ impl ScribeAssistant {
 				}
 			};
 		}
+	}
+
+	pub(crate) fn poke_book_open(&self, id: BookId) {
+		self.send(ScribeRequest::OpenBook(id));
+	}
+
+	pub(crate) fn poke_next(&self) {
+		self.send(ScribeRequest::Next);
+	}
+
+	pub(crate) fn poke_previous(&self) {
+		self.send(ScribeRequest::Previous);
 	}
 }

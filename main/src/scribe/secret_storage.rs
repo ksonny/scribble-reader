@@ -137,6 +137,10 @@ pub fn create(db_path: &Path, cache_path: &Path) -> Result<SecretStorage, Secret
 	MIGRATIONS.to_latest(&mut conn).unwrap();
 
 	let cache_path = cache_path.to_path_buf();
+	let thumbnail_path = cache_path.join("thumbnails");
+	if !thumbnail_path.try_exists()? {
+		fs::create_dir(&thumbnail_path)?;
+	}
 
 	Ok(SecretStorage { conn, cache_path })
 }
@@ -395,6 +399,7 @@ fn create_thumbnail(
 	);
 	img.write_with_encoder(encoder)?;
 	log::trace!("Write thumbnail at {}", thumbnail_path.display());
+
 	fs::write(thumbnail_path, bytes.as_slice())?;
 
 	upsert_stmt.execute(

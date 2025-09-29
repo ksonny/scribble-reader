@@ -164,47 +164,42 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppPoke) {
 		trace!("user event: {event:?}");
 		match event {
-			AppPoke::LibraryLoad | AppPoke::LibrarySorted => {
-				log::info!("Event {event:?}");
+			AppPoke::OpenLibrary => {
 				let books = self.scribe.library().books(0..ListView::SIZE);
 				self.scribe.assistant().poke_list(&books);
-				let mut books_iter = books.into_iter();
-				let cards =
-					std::array::from_fn(|_| {
-						books_iter.next().map(|b| BookCard {
-							id: b.id,
-							title: b.title,
-							author: b.author,
-							thumbnail: self.scribe.library().thumbnail(b.id).and_then(
-								|tn| match tn {
-									library::Thumbnail::Bytes { bytes } => {
-										Some(ui::Thumbnail { bytes })
-									}
-									library::Thumbnail::None => None,
-								},
-							),
-						})
-					});
-				self.view.feature = FeatureView::List(Box::new(ListView { page: 0, cards }));
+				let mut books_iter = books.into_iter().map(|b| {
+					let id = b.id;
+					(b, self.scribe.library().thumbnail(id))
+				});
+				self.view.feature = FeatureView::List(Box::new(ListView {
+					cards: std::array::from_fn(|_| books_iter.next().map(create_card)),
+					page: 0,
+				}));
 				self.request_redraw();
 			}
+			AppPoke::LibraryLoad | AppPoke::LibrarySorted => match &mut self.view.feature {
+				ui::FeatureView::Empty => {}
+				ui::FeatureView::List(list) => {
+					let books = self.scribe.library().books(0..ListView::SIZE);
+					self.scribe.assistant().poke_list(&books);
+					let mut books_iter = books.into_iter().map(|b| {
+						let id = b.id;
+						(b, self.scribe.library().thumbnail(id))
+					});
+					list.cards = std::array::from_fn(|_| books_iter.next().map(create_card));
+					list.page = 0;
+					self.request_redraw();
+				}
+			},
 			AppPoke::BookUpdated(id) => match &mut self.view.feature {
 				ui::FeatureView::Empty => {}
 				ui::FeatureView::List(list) => {
 					let card = list.cards.iter_mut().flatten().find(|c| c.id == id);
-					if let Some(card) = card {
-						if let Some(book) = self.scribe.library().book(id) {
-							card.title = book.title;
-							card.author = book.author;
-						}
-						card.thumbnail =
-							self.scribe.library().thumbnail(id).and_then(|tn| match tn {
-								library::Thumbnail::Bytes { bytes } => {
-									Some(ui::Thumbnail { bytes })
-								}
-								library::Thumbnail::None => None,
-							});
-						log::info!("Updated book {id:?}");
+					if let Some(card) = card
+						&& let Some(book) = self.scribe.library().book(id)
+					{
+						*card = create_card((book, self.scribe.library().thumbnail(id)));
+						log::trace!("Updated book {id:?}");
 						self.request_redraw();
 					}
 				}
@@ -217,22 +212,11 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					let books = self.scribe.library().books(r);
 					if !books.is_empty() {
 						self.scribe.assistant().poke_list(&books);
-						let mut books_iter = books.into_iter();
-						list.cards = std::array::from_fn(|_| {
-							books_iter.next().map(|b| BookCard {
-								id: b.id,
-								title: b.title,
-								author: b.author,
-								thumbnail: self.scribe.library().thumbnail(b.id).and_then(|tn| {
-									match tn {
-										library::Thumbnail::Bytes { bytes } => {
-											Some(ui::Thumbnail { bytes })
-										}
-										library::Thumbnail::None => None,
-									}
-								}),
-							})
+						let mut books_iter = books.into_iter().map(|b| {
+							let id = b.id;
+							(b, self.scribe.library().thumbnail(id))
 						});
+						list.cards = std::array::from_fn(|_| books_iter.next().map(create_card));
 						list.page = page;
 						self.request_redraw();
 					}
@@ -245,26 +229,21 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
 					let books = self.scribe.library().books(r);
 					self.scribe.assistant().poke_list(&books);
-					let mut books_iter = books.into_iter();
-					list.cards = std::array::from_fn(|_| {
-						books_iter.next().map(|b| BookCard {
-							id: b.id,
-							title: b.title,
-							author: b.author,
-							thumbnail: self.scribe.library().thumbnail(b.id).and_then(
-								|tn| match tn {
-									library::Thumbnail::Bytes { bytes } => {
-										Some(ui::Thumbnail { bytes })
-									}
-									library::Thumbnail::None => None,
-								},
-							),
-						})
+					let mut books_iter = books.into_iter().map(|b| {
+						let id = b.id;
+						(b, self.scribe.library().thumbnail(id))
 					});
+					list.cards = std::array::from_fn(|_| books_iter.next().map(create_card));
 					list.page = page;
 					self.request_redraw();
 				}
 			},
+			AppPoke::OpenBook(id) => {
+				self.view.invisible = true;
+				self.view.feature = FeatureView::Empty;
+				self.scribe.assistant().poke_book_open(id);
+				self.request_redraw();
+			}
 		}
 	}
 
@@ -292,6 +271,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				}
 
 				trace!("event: {event:?}");
+				let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
 
 				match event {
 					WindowEvent::Resized(physical_size) => {
@@ -301,6 +281,12 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
 						renderer.rescale(scale_factor);
 						self.request_redraw();
+					}
+					WindowEvent::Touch(touch) if !response.consumed => {
+						log::info!("touch event unconsumed: {:?}", touch);
+					}
+					WindowEvent::MouseInput { state, button, .. } if !response.consumed => {
+						log::info!("mouse event unconsumed: {:?} - {:?}", state, button);
 					}
 					WindowEvent::RedrawRequested => {
 						self.fps.tick();
@@ -314,7 +300,6 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 						}
 					}
 					_ => {
-						let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
 						if response.repaint {
 							self.request_redraw();
 						}
@@ -325,6 +310,19 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	}
 }
 
+fn create_card(entry: (library::Book, Option<library::Thumbnail>)) -> BookCard {
+	let (b, tn) = entry;
+	BookCard {
+		id: b.id,
+		title: b.title,
+		author: b.author,
+		thumbnail: tn.and_then(|tn| match tn {
+			library::Thumbnail::Bytes { bytes } => Some(ui::Thumbnail { bytes }),
+			library::Thumbnail::None => None,
+		}),
+	}
+}
+
 #[derive(Debug)]
 pub enum AppPoke {
 	LibraryLoad,
@@ -332,6 +330,8 @@ pub enum AppPoke {
 	BookUpdated(BookId),
 	NextPage,
 	PreviousPage,
+	OpenBook(BookId),
+	OpenLibrary,
 }
 
 struct AppPokeStick {
@@ -359,6 +359,14 @@ impl ui::MainPokeStick for AppPokeStick {
 
 	fn previous_page(&self) {
 		self.event_loop.send_event(AppPoke::PreviousPage).unwrap();
+	}
+
+	fn open_book(&self, id: BookId) {
+		self.event_loop.send_event(AppPoke::OpenBook(id)).unwrap();
+	}
+
+	fn open_library(&self) {
+		self.event_loop.send_event(AppPoke::OpenLibrary).unwrap();
 	}
 }
 
@@ -491,11 +499,20 @@ fn android_main(app: AndroidApp) {
 	use android_logger::Config;
 	use winit::platform::android::EventLoopBuilderExtAndroid;
 
-	android_logger::init_once(Config::default().with_max_level(log::LevelFilter::Info));
+	let ext_data_path = app.external_data_path().unwrap();
+	let s = Settings {
+		cache_path: ext_data_path.join("cache"),
+		config_path: ext_data_path.join("config"),
+		data_path: ext_data_path.join("data"),
+	};
+
+	android_logger::init_once(Config::default().with_tag("scribble-reader").with_max_level(log::LevelFilter::Info));
 	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
 		.build()
 		.unwrap();
-	log::info!("Hello from android!");
-	start(event_loop);
+	match start(event_loop, s) {
+		Ok(_) => {}
+		Err(e) => log::error!("Error: {e}"),
+	}
 }
