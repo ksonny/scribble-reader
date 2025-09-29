@@ -9,6 +9,7 @@ publish = false
 egui = "0.32.3"
 egui-wgpu = "0.32.3"
 egui-winit = "0.32.3"
+lazy_static = "1.5.0"
 log = "0.4.28"
 pollster = "0.4.0"
 thiserror = "2.0.16"
@@ -34,7 +35,7 @@ path = "./path/to/KeyStoreFile.jks"
 keystore_password = "password"
 
 [package.metadata.android]
-build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
+build_targets = ["armv7-linux-androideabi", "aarch64-linux-android", "x86_64-linux-android"]
 
 [package.metadata.android.sdk]
 min_sdk_version = 23

@@ -1,7 +1,7 @@
 #![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
 
-mod gui;
 mod renderer;
+mod ui;
 
 use log::error;
 use log::info;
@@ -17,10 +17,12 @@ use winit::event_loop::EventLoop;
 use winit::window::Window;
 
 use crate::renderer::Renderer;
+use crate::ui::MainView;
 
 #[derive(Default)]
 struct App<'window> {
 	renderer: Option<Renderer<'window>>,
+	view: MainView,
 }
 
 impl<'window> ApplicationHandler for App<'window> {
@@ -29,7 +31,7 @@ impl<'window> ApplicationHandler for App<'window> {
 		let window = event_loop
 			.create_window(Window::default_attributes())
 			.unwrap();
-		let renderer = match pollster::block_on(Renderer::initialize(window)) {
+		let renderer = match pollster::block_on(Renderer::create(window)) {
 			Ok(renderer) => renderer,
 			Err(e) => {
 				error!("Failed to resume renderer: {e}");
@@ -56,11 +58,40 @@ impl<'window> ApplicationHandler for App<'window> {
 					warn!("renderer not initialized");
 					return;
 				};
-				renderer.handle_event(
-					event_loop,
-					window_id,
-					&event
-				);
+
+				if renderer.window.id() != window_id {
+					trace!("event ignored, wrong window");
+					return;
+				}
+
+				trace!("event: {event:?}");
+
+				let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
+
+				match event {
+					WindowEvent::Resized(physical_size) => {
+						renderer.resize(physical_size);
+					}
+					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+						renderer.rescale(scale_factor);
+					}
+					WindowEvent::RedrawRequested => {
+						self.view.set_fps(renderer.fps());
+
+						match renderer.render(&mut self.view) {
+							Ok(_) => {}
+							Err(e) => {
+								error!("Failure during render: {e:?}");
+								event_loop.exit();
+							}
+						}
+					}
+					_ => {
+						if response.repaint {
+							renderer.window.request_redraw();
+						}
+					}
+				};
 			}
 		}
 	}
