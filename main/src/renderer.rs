@@ -81,6 +81,7 @@ impl GuiRenderer {
 		let max_texture_size = device.limits().max_texture_dimension_2d as usize;
 
 		let egui_ctx = egui::Context::default();
+		egui_extras::install_image_loaders(&egui_ctx);
 		let egui_state = egui_winit::State::new(
 			egui_ctx.clone(),
 			egui::ViewportId::ROOT,
