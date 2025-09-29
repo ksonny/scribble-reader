@@ -16,6 +16,7 @@ name = "Library"
 path = "/sdcard/Books/ebooks"
 "#;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(crate) struct Library {
 	pub(crate) name: String,

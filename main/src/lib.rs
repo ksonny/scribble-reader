@@ -31,6 +31,7 @@ use winit::window::Window;
 use crate::renderer::Renderer;
 use crate::scribe::BookId;
 use crate::scribe::Scribe;
+use crate::scribe::ScribeAssistant;
 use crate::scribe::library;
 use crate::ui::BookCard;
 use crate::ui::FeatureView;
@@ -177,13 +178,13 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		trace!("user event: {event:?}");
 		match event {
 			AppPoke::ScanLibrary => {
-				self.scribe.assistant().send(scribe::ScribeRequest::Scan);
+				self.view.working = self.scribe.poke_scan();
 			}
 			AppPoke::LibraryLoad | AppPoke::LibrarySorted => match &mut self.view.feature {
 				ui::FeatureView::Empty => {}
 				ui::FeatureView::List(list) => {
 					let books = self.scribe.library().books(0..ListView::SIZE);
-					self.scribe.assistant().poke_list(&books);
+					self.view.working = self.scribe.poke_list(&books);
 					let mut books_iter = books.into_iter().map(|b| {
 						let id = b.id;
 						(b, self.scribe.library().thumbnail(id))
@@ -195,7 +196,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			},
 			AppPoke::OpenLibrary => {
 				let books = self.scribe.library().books(0..ListView::SIZE);
-				self.scribe.assistant().poke_list(&books);
+				self.view.working = self.scribe.poke_list(&books);
 				let mut books_iter = books.into_iter().map(|b| {
 					let id = b.id;
 					(b, self.scribe.library().thumbnail(id))
@@ -221,13 +222,15 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				}
 			},
 			AppPoke::NextPage => match &mut self.view.feature {
-				ui::FeatureView::Empty => {}
+				ui::FeatureView::Empty => {
+					// TODO: Send to reader
+				}
 				ui::FeatureView::List(list) => {
 					let page = list.page + 1;
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
 					let books = self.scribe.library().books(r);
 					if !books.is_empty() {
-						self.scribe.assistant().poke_list(&books);
+						self.view.working = self.scribe.poke_list(&books);
 						let mut books_iter = books.into_iter().map(|b| {
 							let id = b.id;
 							(b, self.scribe.library().thumbnail(id))
@@ -239,12 +242,14 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				}
 			},
 			AppPoke::PreviousPage => match &mut self.view.feature {
-				ui::FeatureView::Empty => {}
+				ui::FeatureView::Empty => {
+					// TODO: Send to reader
+				}
 				ui::FeatureView::List(list) => {
 					let page = list.page.saturating_sub(1);
 					let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
 					let books = self.scribe.library().books(r);
-					self.scribe.assistant().poke_list(&books);
+					self.view.working = self.scribe.poke_list(&books);
 					let mut books_iter = books.into_iter().map(|b| {
 						let id = b.id;
 						(b, self.scribe.library().thumbnail(id))
@@ -254,11 +259,15 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					self.request_redraw();
 				}
 			},
-			AppPoke::OpenBook(id) => {
+			AppPoke::OpenBook(_id) => {
 				self.view.invisible = true;
 				self.view.feature = FeatureView::Empty;
-				self.scribe.assistant().poke_book_open(id);
+				// TODO: Open book
 				self.request_redraw();
+			}
+			AppPoke::Completed(ticket) => {
+				log::info!("Completed ticket {ticket:?}");
+				self.view.working = self.scribe.complete_ticket(ticket);
 			}
 		}
 	}
@@ -351,6 +360,7 @@ pub enum AppPoke {
 	OpenBook(BookId),
 	OpenLibrary,
 	ScanLibrary,
+	Completed(scribe::ScribeTicket),
 }
 
 struct AppPokeStick {
@@ -359,9 +369,7 @@ struct AppPokeStick {
 
 impl AppPokeStick {
 	fn new(event_loop: EventLoopProxy<AppPoke>) -> Self {
-		Self {
-			event_loop,
-		}
+		Self { event_loop }
 	}
 }
 
@@ -400,8 +408,12 @@ impl scribe::ScribeBell for EventLoopProxy<AppPoke> {
 		self.send_event(AppPoke::BookUpdated(id)).unwrap();
 	}
 
-	fn fail(&self, error: String) {
+	fn fail(&self, _ticket: scribe::ScribeTicket, error: String) {
 		log::error!("Error in scribe: {error}");
+	}
+
+	fn complete(&self, ticket: scribe::ScribeTicket) {
+		self.send_event(AppPoke::Completed(ticket)).unwrap();
 	}
 }
 
@@ -411,6 +423,8 @@ pub enum Error {
 	EventLoop(#[from] EventLoopError),
 	#[error(transparent)]
 	ScribeCreate(#[from] scribe::ScribeCreateError),
+	#[error(transparent)]
+	Scribe(#[from] scribe::ScribeError),
 }
 
 pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), Error> {
@@ -506,6 +520,8 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 	};
 
 	event_loop.run_app(&mut app)?;
+
+	app.scribe.quit()?;
 
 	Ok(())
 }

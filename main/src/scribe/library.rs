@@ -8,6 +8,7 @@ use chrono::Utc;
 
 use crate::scribe::library;
 
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) enum SortField {
 	#[default]
@@ -16,6 +17,7 @@ pub(crate) enum SortField {
 	Title,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) enum SortDirection {
 	#[default]
@@ -53,12 +55,6 @@ pub enum Thumbnail {
 	Bytes {
 		bytes: Arc<[u8]>,
 	},
-}
-
-#[derive(Debug)]
-pub struct ThumbnailEntry {
-	pub id: BookId,
-	pub data: Thumbnail,
 }
 
 #[derive(Debug, Default)]

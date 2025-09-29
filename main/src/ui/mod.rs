@@ -118,7 +118,8 @@ impl ListView {
 	pub const SIZE: u32 = 5;
 
 	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl PokeStick) {
-		let height = ui.available_height() - (Self::SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
+		let height =
+			ui.available_height() - (Self::SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
 		let card_height = height / 5.0;
 
 		ui.vertical(|ui| {
@@ -162,15 +163,16 @@ impl Default for FeatureView {
 #[derive(Default)]
 pub struct MainView {
 	pub invisible: bool,
+	pub working: crate::scribe::ScribeState,
+	pub menu_open: bool,
 	pub feature: FeatureView,
 }
 
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context, poke_stick: &impl PokeStick) {
 		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-			ui.add_space(20.0);
 			egui::MenuBar::new().ui(ui, |ui| {
-				ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
+				let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
 					if ui
 						.button(UiIcon::new(Icon::Library).text("Library").large().build())
 						.clicked()
@@ -195,7 +197,20 @@ impl GuiView for MainView {
 						ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
 					}
 				});
+				self.menu_open = menu.response.context_menu_opened();
+
 				ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
+
+				ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+					if matches!(self.working, crate::scribe::ScribeState::Working) {
+						ui.label(
+							UiIcon::new(Icon::RefreshCw)
+								.color(Color32::GRAY)
+								.large()
+								.build(),
+						);
+					}
+				});
 			});
 		});
 
@@ -204,6 +219,9 @@ impl GuiView for MainView {
 		}
 
 		egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
+			if self.menu_open {
+				ui.disable();
+			}
 			ui.vertical(|ui| {
 				ui.add_space(5.0);
 				ui.horizontal(|ui| {
@@ -242,7 +260,12 @@ impl GuiView for MainView {
 		match &self.feature {
 			FeatureView::Empty => {}
 			FeatureView::List(list) => {
-				egui::CentralPanel::default().show(ctx, |ui| list.draw(ui, poke_stick));
+				egui::CentralPanel::default().show(ctx, |ui| {
+					if self.menu_open {
+						ui.disable();
+					}
+					list.draw(ui, poke_stick)
+				});
 			}
 		}
 	}
