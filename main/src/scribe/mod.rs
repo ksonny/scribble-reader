@@ -16,6 +16,8 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::thread::JoinHandle;
 
+use expand_tilde::expand_tilde_owned;
+
 pub use crate::scribe::library::BookId;
 use crate::scribe::library::SortDirection;
 use crate::scribe::library::SortField;
@@ -33,6 +35,8 @@ pub enum ScribeCreateError {
 	CachePathNotDir(PathBuf),
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
+	#[error(transparent)]
+	ExpandTilde(#[from] expand_tilde::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -120,7 +124,7 @@ impl Scribe {
 			.build()?
 			.try_deserialize()?;
 
-		let lib_path = settings.data_path.join(scribe_settings.library.path);
+		let lib_path = expand_tilde_owned(scribe_settings.library.path)?;
 		if !lib_path.try_exists()? {
 			fs::create_dir_all(&lib_path)?;
 		}

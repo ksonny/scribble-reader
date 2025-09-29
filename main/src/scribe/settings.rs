@@ -5,7 +5,7 @@ use serde::Deserialize;
 pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
 [library]
 name = "Library"
-path = "ebooks"
+path = "~/Documents/ebooks"
 "#;
 
 #[derive(Debug, Deserialize)]
