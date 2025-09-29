@@ -99,7 +99,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		match cause {
 			winit::event::StartCause::Init => {
 				if let Some(renderer) = self.renderer.as_mut() {
-					renderer.window.request_redraw();
+					renderer.request_redraw();
 				}
 			}
 			winit::event::StartCause::ResumeTimeReached {
@@ -113,7 +113,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					trace!("Render full speed: {}", since_redraw_request);
 					if let Some(renderer) = self.renderer.as_mut() {
 						trace!("Render");
-						renderer.window.request_redraw();
+						renderer.request_redraw();
 					}
 					let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
 					event_loop
@@ -130,7 +130,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					&& let Some(renderer) = self.renderer.as_mut()
 				{
 					trace!("Wait cancelled from sleep");
-					renderer.window.request_redraw();
+					renderer.request_redraw();
 					let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
 					event_loop
 						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
@@ -141,24 +141,37 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	}
 
 	fn resumed(&mut self, event_loop: &egui_winit::winit::event_loop::ActiveEventLoop) {
-		trace!("resumed");
+		info!("resumed");
 		let window = event_loop
 			.create_window(Window::default_attributes())
 			.unwrap();
 		window.set_title("Scribble-reader");
-		let renderer = match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
-			Ok(renderer) => renderer,
-			Err(e) => {
-				error!("Failed to resume renderer: {e}");
-				panic!("Failed to resume renderer: {e}");
+		if let Some(renderer) = self.renderer.as_mut() {
+			match renderer.resume(window, &self.egui_ctx) {
+				Ok(_) => {},
+				Err(e) => {
+					error!("Failed to resume renderer: {e}");
+					panic!("Failed to resume renderer: {e}");
+				}
+			};
+		} else {
+			match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
+				Ok(renderer) => {
+					self.renderer = Some(renderer)
+				},
+				Err(e) => {
+					error!("Failed to create renderer: {e}");
+					panic!("Failed to create renderer: {e}");
+				}
 			}
 		};
-		self.renderer = Some(renderer);
 	}
 
 	fn suspended(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
 		info!("suspended");
-		self.renderer = None;
+		if let Some(renderer) = self.renderer.as_mut() {
+			renderer.suspend()
+		}
 	}
 
 	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppPoke) {
@@ -171,6 +184,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					let id = b.id;
 					(b, self.scribe.library().thumbnail(id))
 				});
+				self.view.invisible = false;
 				self.view.feature = FeatureView::List(Box::new(ListView {
 					cards: std::array::from_fn(|_| books_iter.next().map(create_card)),
 					page: 0,
@@ -250,7 +264,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	fn window_event(
 		&mut self,
 		event_loop: &egui_winit::winit::event_loop::ActiveEventLoop,
-		window_id: egui_winit::winit::window::WindowId,
+		_window_id: egui_winit::winit::window::WindowId,
 		event: egui_winit::winit::event::WindowEvent,
 	) {
 		match event {
@@ -261,17 +275,12 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			}
 			event => {
 				let Some(renderer) = self.renderer.as_mut() else {
-					warn!("renderer not initialized");
+					warn!("Renderer not initialized");
 					return;
 				};
 
-				if renderer.window.id() != window_id {
-					trace!("event ignored, wrong window");
-					return;
-				}
-
 				trace!("event: {event:?}");
-				let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
+				let response = renderer.handle_gui_event(&event);
 
 				match event {
 					WindowEvent::Resized(physical_size) => {
@@ -291,10 +300,17 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					WindowEvent::RedrawRequested => {
 						self.fps.tick();
 
-						match renderer.render(&mut self.view, &self.poke_stick) {
+						match renderer.prepare(&self.egui_ctx, &self.poke_stick, &mut self.view) {
 							Ok(_) => {}
 							Err(e) => {
-								error!("Failure during render: {e:?}");
+								error!("Failed prepare: {e}");
+								return;
+							}
+						}
+						match renderer.render() {
+							Ok(_) => {}
+							Err(e) => {
+								error!("Failure render: {e}");
 								event_loop.exit();
 							}
 						}
@@ -348,7 +364,7 @@ impl AppPokeStick {
 	}
 }
 
-impl ui::MainPokeStick for AppPokeStick {
+impl ui::PokeStick for AppPokeStick {
 	fn scan_library(&self) {
 		self.assistant.send(scribe::ScribeRequest::Scan);
 	}
@@ -506,7 +522,11 @@ fn android_main(app: AndroidApp) {
 		data_path: ext_data_path.join("data"),
 	};
 
-	android_logger::init_once(Config::default().with_tag("scribble-reader").with_max_level(log::LevelFilter::Info));
+	android_logger::init_once(
+		Config::default()
+			.with_tag("scribble-reader")
+			.with_max_level(log::LevelFilter::Info),
+	);
 	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
 		.build()

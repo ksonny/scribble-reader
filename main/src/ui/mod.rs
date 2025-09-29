@@ -7,7 +7,6 @@ use egui::FontId;
 use egui::ImageSource;
 use egui::Layout;
 use egui::RichText;
-use egui::Style;
 use egui::TextFormat;
 use egui::TextStyle;
 use egui::load::Bytes;
@@ -41,7 +40,7 @@ pub mod theme {
 }
 
 pub trait GuiView {
-	fn draw(&mut self, ctx: &Context, poke_stick: &impl MainPokeStick);
+	fn draw(&mut self, ctx: &Context, poke_stick: &impl PokeStick);
 }
 
 pub(crate) struct Thumbnail {
@@ -118,7 +117,7 @@ pub(crate) struct ListView {
 impl ListView {
 	pub const SIZE: u32 = 5;
 
-	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl MainPokeStick) {
+	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl PokeStick) {
 		let height = ui.available_height() - Self::SIZE as f32 * ui.spacing().item_spacing.y;
 		let card_height = height / 5.0;
 
@@ -134,7 +133,7 @@ impl ListView {
 	}
 }
 
-pub trait MainPokeStick {
+pub trait PokeStick {
 	fn scan_library(&self);
 
 	fn next_page(&self);
@@ -167,43 +166,42 @@ pub struct MainView {
 }
 
 impl GuiView for MainView {
-	fn draw(&mut self, ctx: &Context, poke_stick: &impl MainPokeStick) {
+	fn draw(&mut self, ctx: &Context, poke_stick: &impl PokeStick) {
+		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+			ui.add_space(20.0);
+			egui::MenuBar::new().ui(ui, |ui| {
+				ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
+					if ui
+						.button(UiIcon::new(Icon::Library).text("Library").large().build())
+						.clicked()
+					{
+						poke_stick.open_library();
+					}
+					if ui
+						.button(
+							UiIcon::new(Icon::RefreshCw)
+								.text("Rescan library")
+								.large()
+								.build(),
+						)
+						.clicked()
+					{
+						poke_stick.scan_library();
+					}
+					if ui
+						.button(UiIcon::new(Icon::DoorOpen).text("Quit").large().build())
+						.clicked()
+					{
+						ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+					}
+				});
+				ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
+			});
+		});
+
 		if self.invisible {
 			return;
 		}
-
-		egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-			ui.add_space(20.0);
-			egui::MenuBar::new()
-				.ui(ui, |ui| {
-					ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
-						if ui
-							.button(UiIcon::new(Icon::Library).text("Library").large().build())
-							.clicked()
-						{
-							poke_stick.open_library();
-						}
-						if ui
-							.button(
-								UiIcon::new(Icon::RefreshCw)
-									.text("Rescan library")
-									.large()
-									.build(),
-							)
-							.clicked()
-						{
-							poke_stick.scan_library();
-						}
-						if ui
-							.button(UiIcon::new(Icon::DoorOpen).text("Quit").large().build())
-							.clicked()
-						{
-							ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-						}
-					});
-					ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
-				});
-		});
 
 		egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
 			ui.vertical(|ui| {
