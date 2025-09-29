@@ -10,6 +10,7 @@ egui = "0.32.3"
 egui-wgpu = "0.32.3"
 egui-winit = "0.32.3"
 egui_extras = { version = "0.32.3", features = ["svg", "image"] }
+env_logger = "0.11.8"
 epub = "2.1.4"
 image = { version = "0.25.8", features = ["png", "jpeg", "ico"] }
 lazy_static = "1.5.0"
@@ -21,7 +22,6 @@ svg = "0.18.0"
 thiserror = "2.0.16"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-env_logger = "0.11.8"
 winit = { version = "0.30.12" }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -41,7 +41,7 @@ path = "./path/to/KeyStoreFile.jks"
 keystore_password = "password"
 
 [package.metadata.android]
-build_targets = ["armv7-linux-androideabi", "aarch64-linux-android", "x86_64-linux-android"]
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 
 [package.metadata.android.sdk]
 min_sdk_version = 23

@@ -265,10 +265,9 @@ pub fn start(event_loop: EventLoop<ScribeEvent>) -> Result<(), EventLoopError> {
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
 	use android_logger::Config;
-	use winit::event_loop::EventLoopBuilder;
 	use winit::platform::android::EventLoopBuilderExtAndroid;
 
 	android_logger::init_once(Config::default().with_max_level(log::LevelFilter::Info));
