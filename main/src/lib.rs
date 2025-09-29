@@ -28,11 +28,10 @@ struct FpsCalculator {
 }
 
 impl FpsCalculator {
-	const FRAME_MS: u64 = 16;
-	const DIVIDER_2: u64 = 5;
+	const DIVIDER_2: u64 = 3;
 
-	fn new() -> FpsCalculator {
-		FpsCalculator {
+	fn new() -> Self {
+		Self {
 			last_frame: Instant::now(),
 			total_ms: 0,
 		}
@@ -46,12 +45,10 @@ impl FpsCalculator {
 		self.last_frame = instant;
 	}
 
-	fn next_frame(&self) -> Instant {
-		self.last_frame + Duration::from_millis(Self::FRAME_MS)
-	}
-
 	fn fps(&self) -> u64 {
-		(1000_u64 << Self::DIVIDER_2).checked_div(self.total_ms).unwrap_or(0_u64)
+		(1000_u64 << Self::DIVIDER_2)
+			.checked_div(self.total_ms)
+			.unwrap_or(0)
 	}
 }
 
@@ -61,7 +58,14 @@ struct App<'window> {
 	egui_ctx: egui::Context,
 	fps: FpsCalculator,
 	request_redraw: bool,
+	request_redraw_time: Instant,
 	wait_cancelled: bool,
+	next_tick: Instant,
+}
+
+impl App<'_> {
+	const ACTIVE_TICK: u64 = 16;
+	const SLEEP_TICK: u64 = 1000;
 }
 
 impl<'window> ApplicationHandler for App<'window> {
@@ -70,26 +74,48 @@ impl<'window> ApplicationHandler for App<'window> {
 		_event_loop: &winit::event_loop::ActiveEventLoop,
 		cause: winit::event::StartCause,
 	) {
-		self.wait_cancelled = matches!(cause, winit::event::StartCause::WaitCancelled { .. });
+		self.wait_cancelled = match cause {
+			winit::event::StartCause::ResumeTimeReached { .. } => {
+				let now = Instant::now();
+				let since_last = now.duration_since(self.request_redraw_time).as_millis() as u64;
+
+				self.next_tick = if !self.request_redraw && since_last > Self::SLEEP_TICK {
+					trace!("Sleep tick");
+					self.request_redraw = true;
+					self.request_redraw_time = Instant::now();
+					now + Duration::from_millis(Self::SLEEP_TICK)
+				} else {
+					now + Duration::from_millis(Self::ACTIVE_TICK)
+				};
+				false
+			}
+			winit::event::StartCause::WaitCancelled { .. } => {
+				if self.request_redraw {
+					self.next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK)
+				}
+				true
+			}
+			_ => false,
+		}
 	}
 
 	fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+		trace!("about to wait");
 		if self.request_redraw
 			&& !self.wait_cancelled
 			&& let Some(renderer) = self.renderer.as_mut()
 		{
+			self.request_redraw = false;
 			renderer.window.request_redraw();
 		}
 
 		if !self.wait_cancelled {
-			event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-				self.fps.next_frame(),
-			));
+			event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(self.next_tick));
 		}
 	}
 
 	fn resumed(&mut self, event_loop: &egui_winit::winit::event_loop::ActiveEventLoop) {
-		trace!("Window resumed");
+		trace!("resumed");
 		let window = event_loop
 			.create_window(Window::default_attributes())
 			.unwrap();
@@ -101,6 +127,11 @@ impl<'window> ApplicationHandler for App<'window> {
 			}
 		};
 		self.renderer = Some(renderer);
+	}
+
+	fn suspended(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+		info!("suspended");
+		self.renderer = None;
 	}
 
 	fn window_event(
@@ -128,19 +159,16 @@ impl<'window> ApplicationHandler for App<'window> {
 
 				trace!("event: {event:?}");
 
-				let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
-				if response.repaint {
-					self.request_redraw = true;
-				}
-
 				match event {
 					WindowEvent::Resized(physical_size) => {
 						renderer.resize(physical_size);
 						self.request_redraw = true;
+						self.request_redraw_time = Instant::now();
 					}
 					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
 						renderer.rescale(scale_factor);
 						self.request_redraw = true;
+						self.request_redraw_time = Instant::now();
 					}
 					WindowEvent::RedrawRequested => {
 						self.fps.tick();
@@ -154,7 +182,13 @@ impl<'window> ApplicationHandler for App<'window> {
 							}
 						}
 					}
-					_ => {}
+					_ => {
+						let response = renderer.gui_renderer.handle_event(&renderer.window, &event);
+						if response.repaint {
+							self.request_redraw = true;
+							self.request_redraw_time = Instant::now();
+						}
+					}
 				};
 			}
 		}
@@ -169,12 +203,10 @@ pub fn start(event_loop: EventLoop<()>) -> Result<(), EventLoopError> {
 	egui_ctx.add_font(egui::epaint::text::FontInsert::new(
 		"lucide-icons",
 		egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES),
-		vec![
-			egui::epaint::text::InsertFontFamily {
-				family: ui::ICON_FONT_FAMILY.clone(),
-				priority: egui::epaint::text::FontPriority::Lowest,
-			}
-		],
+		vec![egui::epaint::text::InsertFontFamily {
+			family: ui::ICON_FONT_FAMILY.clone(),
+			priority: egui::epaint::text::FontPriority::Lowest,
+		}],
 	));
 	let fps = FpsCalculator::new();
 
@@ -184,7 +216,9 @@ pub fn start(event_loop: EventLoop<()>) -> Result<(), EventLoopError> {
 		egui_ctx,
 		fps,
 		request_redraw: false,
+		request_redraw_time: Instant::now(),
 		wait_cancelled: false,
+		next_tick: Instant::now(),
 	};
 
 	event_loop.run_app(&mut app)
