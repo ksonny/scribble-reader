@@ -18,10 +18,7 @@ use log::error;
 use log::info;
 use log::trace;
 use log::warn;
-use winit::dpi::PhysicalPosition;
 use winit::error::EventLoopError;
-use winit::event::Touch;
-use winit::event::TouchPhase;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoopProxy;
 #[cfg(target_os = "android")]
@@ -31,6 +28,7 @@ use winit::application::ApplicationHandler;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 
+use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
 use crate::renderer::Renderer;
 use crate::scribe::BookId;
@@ -39,6 +37,7 @@ use crate::scribe::ScribeAssistant;
 use crate::scribe::library;
 use crate::ui::BookCard;
 use crate::ui::FeatureView;
+use crate::ui::GuiView;
 use crate::ui::ListView;
 use crate::ui::MainView;
 use crate::ui::theme;
@@ -82,10 +81,10 @@ struct App<'window> {
 	view: MainView,
 	poke_stick: AppPokeStick,
 	egui_ctx: egui::Context,
+	egui_input: egui::RawInput,
 	fps: FpsCalculator,
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
-	position: PhysicalPosition<f64>,
 }
 
 impl App<'_> {
@@ -156,6 +155,10 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		window.set_title("Scribble-reader");
 
 		let size = window.inner_size();
+		self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
+			Default::default(),
+			egui::vec2(size.width as f32, size.height as f32),
+		));
 		self.gestures
 			.set_min_distance_by_screen(size.width, size.height);
 
@@ -277,7 +280,6 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				self.request_redraw();
 			}
 			AppPoke::Completed(ticket) => {
-				log::info!("Completed ticket {ticket:?}");
 				self.view.working = self.scribe.complete_ticket(ticket);
 			}
 		}
@@ -292,98 +294,107 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		match event {
 			WindowEvent::CloseRequested => {
 				info!("close requested");
-				self.renderer = None;
+				self.renderer.take();
 				event_loop.exit();
+				return;
 			}
-			WindowEvent::CursorMoved { position, .. } => {
-				self.position = position;
-				self.gestures.touch_move(0, position);
+			WindowEvent::Destroyed => {
+				info!("destroyed");
+				self.renderer.take();
+				return;
 			}
-			WindowEvent::MouseInput { state, .. } => match state {
-				winit::event::ElementState::Pressed => {
-					self.gestures.touch_start(0, self.position);
-				}
-				winit::event::ElementState::Released => {
-					if self.gestures.touch_end(0, self.position).idle() {
-						self.gestures.reset();
+			_ => {}
+		};
+
+		let gesture_ret = self.gestures.handle_window_event(&event);
+		if gesture_ret.frame_ended {
+			for event in self.gestures.events() {
+				match event.gesture {
+					Gesture::Tap => {
+						self.egui_input.events.push(egui::Event::PointerButton {
+							pos: egui::pos2(event.loc.x as f32, event.loc.y as f32),
+							button: egui::PointerButton::Primary,
+							pressed: true,
+							modifiers: egui::Modifiers::default(),
+						});
+						self.egui_input.events.push(egui::Event::PointerButton {
+							pos: egui::pos2(event.loc.x as f32, event.loc.y as f32),
+							button: egui::PointerButton::Primary,
+							pressed: false,
+							modifiers: egui::Modifiers::default(),
+						});
 					}
+					gesture => {
+						log::info!("Unhandled gesture: {gesture:?}");
+					},
 				}
-			},
-			WindowEvent::Touch(Touch {
-				id,
-				location,
-				phase,
-				..
-			}) => match phase {
-				TouchPhase::Started => {
-					log::info!("Started {event:?}");
-					self.gestures.touch_start(id, location);
-				}
-				TouchPhase::Moved => self.gestures.touch_move(id, location),
-				TouchPhase::Ended => {
-					log::info!("Ended {event:?}");
-					if self.gestures.touch_end(id, location).idle() {
-						self.gestures.reset();
-					}
-				}
-				TouchPhase::Cancelled => {
-					if self.gestures.touch_cancel(id).idle() {
-						self.gestures.reset();
-					}
-				}
-			},
-			event => {
+			}
+			self.gestures.reset();
+			self.request_redraw();
+		}
+
+		log::trace!("event: {event:?}");
+		match event {
+			WindowEvent::CursorMoved { position, .. } if !gesture_ret.consumed => {
+				self.egui_input
+					.events
+					.push(egui::Event::MouseMoved(egui::vec2(
+						position.x as f32,
+						position.y as f32,
+					)));
+				self.request_redraw();
+			}
+			WindowEvent::Resized(size) => {
 				let Some(renderer) = self.renderer.as_mut() else {
-					warn!("Renderer not initialized");
+					warn!("Renderer not initialized, abort event {event:?}");
 					return;
 				};
-
-				trace!("event: {event:?}");
-				let response = renderer.handle_gui_event(&event);
-
-				match event {
-					WindowEvent::Resized(size) => {
-						self.gestures
-							.set_min_distance_by_screen(size.width, size.height);
-						renderer.resize(size);
-						self.request_redraw();
-					}
-					WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-						renderer.rescale(scale_factor);
-						self.request_redraw();
-					}
-					WindowEvent::Touch(touch) if !response.consumed => {
-						log::info!("touch event unconsumed: {:?}", touch);
-					}
-					WindowEvent::MouseInput { state, button, .. } if !response.consumed => {
-						log::info!("mouse event unconsumed: {:?} - {:?}", state, button);
-					}
-					WindowEvent::RedrawRequested => {
-						self.fps.tick();
-
-						match renderer.prepare(&self.egui_ctx, &self.poke_stick, &mut self.view) {
-							Ok(_) => {}
-							Err(e) => {
-								error!("Failed prepare: {e}");
-								return;
-							}
-						}
-						match renderer.render() {
-							Ok(_) => {}
-							Err(e) => {
-								error!("Failure render: {e}");
-								event_loop.exit();
-							}
-						}
-					}
-					_ => {
-						if response.repaint {
-							self.request_redraw();
-						}
-					}
-				};
+				self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
+					Default::default(),
+					egui::vec2(size.width as f32, size.height as f32),
+				));
+				self.gestures
+					.set_min_distance_by_screen(size.width, size.height);
+				renderer.resize(size);
+				self.request_redraw();
 			}
-		}
+			WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+				let Some(renderer) = self.renderer.as_mut() else {
+					warn!("Renderer not initialized, abort event {event:?}");
+					return;
+				};
+				renderer.rescale(scale_factor);
+				self.request_redraw();
+			}
+			WindowEvent::RedrawRequested => {
+				let Some(renderer) = self.renderer.as_mut() else {
+					warn!("Renderer not initialized, abort event {event:?}");
+					return;
+				};
+				self.fps.tick();
+
+				let input = self.egui_input.take();
+				let output = self
+					.egui_ctx
+					.run(input, |ctx| self.view.draw(ctx, &self.poke_stick));
+
+				match renderer.prepare_with(&self.egui_ctx, output) {
+					Ok(_) => {}
+					Err(e) => {
+						log::error!("Failed prepare: {e}");
+						return;
+					}
+				}
+				match renderer.render() {
+					Ok(_) => {}
+					Err(e) => {
+						log::error!("Failure render: {e}");
+						event_loop.exit();
+					}
+				}
+			}
+			_ => {}
+		};
 	}
 }
 
@@ -512,7 +523,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 		style.visuals.widgets.active.weak_bg_fill = Color32::LIGHT_GRAY;
 		style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::BLACK);
 		style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.hovered.expansion = 0.0;
+		style.visuals.widgets.hovered.expansion = 2.0;
 		style.visuals.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
 		style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::BLACK);
 		style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::BLACK);
@@ -557,6 +568,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 		]
 		.into();
 	});
+	let egui_input = egui::RawInput::default();
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<10>::new();
 
@@ -566,10 +578,10 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), E
 		view,
 		poke_stick,
 		egui_ctx,
+		egui_input,
 		fps,
 		request_redraw: Instant::now(),
 		gestures,
-		position: PhysicalPosition::default(),
 	};
 
 	event_loop.run_app(&mut app)?;

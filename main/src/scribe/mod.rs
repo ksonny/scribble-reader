@@ -157,7 +157,7 @@ impl Scribe {
 	pub fn complete_ticket(&mut self, ticket: ScribeTicket) -> ScribeState {
 		let set = &mut self.ticket_set;
 		set.remove(&ticket);
-		log::info!("Completed ticket {ticket:?}, set has {} tickets", set.len());
+		log::trace!("Completed ticket {ticket:?}, set has {} tickets", set.len());
 		if set.is_empty() {
 			ScribeState::Idle
 		} else {
@@ -224,7 +224,7 @@ where
 
 		loop {
 			let request = order_rx.recv();
-			log::info!("Request received: {request:?}");
+			log::trace!("Request received: {request:?}");
 			match request {
 				Ok((ticket, ScribeRequest::Scan)) => {
 					log::info!("Scan library at {}", lib_path.display());

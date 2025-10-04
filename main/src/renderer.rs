@@ -5,11 +5,7 @@ use egui_wgpu::wgpu::{
 	self,
 };
 use std::sync::Arc;
-use winit::event::WindowEvent;
 use winit::window::Window;
-
-use crate::ui::GuiView;
-use crate::ui::PokeStick;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RendererError {
@@ -205,19 +201,6 @@ impl Renderer<'_> {
 		self.surface_state.take();
 	}
 
-	pub(crate) fn handle_gui_event(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
-		if let Some(surface_state) = self.surface_state.as_mut() {
-			surface_state
-				.egui_state
-				.on_window_event(&surface_state.window, event)
-		} else {
-			egui_winit::EventResponse {
-				repaint: false,
-				consumed: false,
-			}
-		}
-	}
-
 	pub(crate) fn resize(&mut self, size: PhysicalSize<u32>) {
 		if let Some(surface_state) = self.surface_state.as_mut() {
 			surface_state.screen.size_in_pixels = [size.width, size.height];
@@ -237,26 +220,20 @@ impl Renderer<'_> {
 		}
 	}
 
-	pub(crate) fn prepare(
+	pub(crate) fn prepare_with(
 		&mut self,
 		ctx: &egui::Context,
-		poke_stick: &impl PokeStick,
-		view: &mut impl GuiView,
+		output: egui::output::FullOutput,
 	) -> Result<(), RendererError> {
 		let surface_state = self
 			.surface_state
 			.as_mut()
 			.ok_or(RendererError::SurfaceNotAvailable)?;
-		let window = &surface_state.window;
-		let state = &mut surface_state.egui_state;
-
-		let raw_input = state.take_egui_input(window);
-		let output = ctx.run(raw_input, |egui_ctx| view.draw(egui_ctx, poke_stick));
-		state.handle_platform_output(window, output.platform_output);
-
+		surface_state
+			.egui_state
+			.handle_platform_output(&surface_state.window, output.platform_output);
 		self.textures.append(output.textures_delta);
-		self.paint_jobs = ctx.tessellate(output.shapes, window.scale_factor() as f32);
-
+		self.paint_jobs = ctx.tessellate(output.shapes, surface_state.screen.pixels_per_point);
 		Ok(())
 	}
 
