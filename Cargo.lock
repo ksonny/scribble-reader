@@ -1453,6 +1453,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "illustrator"
+version = "0.1.0"
+dependencies = [
+ "fixed",
+ "image",
+ "log",
+ "rbook",
+ "scribe",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "image"
 version = "0.25.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2786,17 +2798,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reader"
-version = "0.1.0"
-dependencies = [
- "fixed",
- "image",
- "log",
- "rbook",
- "thiserror 2.0.16",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,6 +2971,7 @@ dependencies = [
  "egui-winit",
  "egui_extras",
  "env_logger",
+ "illustrator",
  "image",
  "integer-sqrt",
  "lazy_static",
@@ -2978,7 +2980,6 @@ dependencies = [
  "pollster",
  "rayon",
  "rbook",
- "reader",
  "rusqlite",
  "rusqlite_migration",
  "scribe",

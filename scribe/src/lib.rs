@@ -1,6 +1,6 @@
 pub mod library;
+pub mod record_keeper;
 mod secret_storage;
-mod record_keeper;
 pub mod settings;
 
 use std::cell::Cell;
@@ -39,7 +39,7 @@ pub enum ScribeCreateError {
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
 	#[error(transparent)]
-	SecretReords(#[from] record_keeper::SecretRecordKeeperError),
+	SecretReords(#[from] record_keeper::RecordKeeperError),
 	#[error(transparent)]
 	ExpandTilde(#[from] expand_tilde::Error),
 }
@@ -51,7 +51,7 @@ pub enum ScribeError {
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
 	#[error(transparent)]
-	SecretReords(#[from] record_keeper::SecretRecordKeeperError),
+	SecretReords(#[from] record_keeper::RecordKeeperError),
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
@@ -203,7 +203,7 @@ fn spawn_scribe<Bell>(
 	bell: Bell,
 	lib_path: PathBuf,
 	worker_lib: library::Library,
-	mut records: record_keeper::SecretRecordKeeper,
+	mut records: record_keeper::RecordKeeper,
 	storage: secret_storage::SecretStorage,
 	order_rx: std::sync::mpsc::Receiver<(ScribeTicket, ScribeRequest)>,
 ) -> JoinHandle<Result<(), ScribeError>>

@@ -6,6 +6,7 @@ use rusqlite_migration::M;
 use rusqlite_migration::Migrations;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_rusqlite::from_row;
 use serde_rusqlite::from_rows;
 use serde_rusqlite::to_params_named;
 
@@ -54,7 +55,7 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
 
 #[derive(Debug, thiserror::Error)]
-pub enum SecretRecordKeeperError {
+pub enum RecordKeeperError {
 	#[error("at {1}: {0}")]
 	Rusqlite(rusqlite::Error, &'static std::panic::Location<'static>),
 	#[error("at {1}: {0}")]
@@ -66,14 +67,14 @@ pub enum SecretRecordKeeperError {
 	SerdeRusqlite(#[from] serde_rusqlite::Error),
 }
 
-impl From<rusqlite::Error> for SecretRecordKeeperError {
+impl From<rusqlite::Error> for RecordKeeperError {
 	#[track_caller]
 	fn from(err: rusqlite::Error) -> Self {
 		Self::Rusqlite(err, std::panic::Location::caller())
 	}
 }
 
-impl From<rusqlite::types::FromSqlError> for SecretRecordKeeperError {
+impl From<rusqlite::types::FromSqlError> for RecordKeeperError {
 	#[track_caller]
 	fn from(err: rusqlite::types::FromSqlError) -> Self {
 		Self::RusqliteFromSql(err, std::panic::Location::caller())
@@ -162,11 +163,11 @@ pub struct InsertThumbnail {
 	pub added_at: DateTime<Utc>,
 }
 
-pub struct SecretRecordKeeper {
+pub struct RecordKeeper {
 	conn: rusqlite::Connection,
 }
 
-pub fn create(db_path: &Path) -> Result<SecretRecordKeeper, SecretRecordKeeperError> {
+pub fn create(db_path: &Path) -> Result<RecordKeeper, RecordKeeperError> {
 	let mut conn = rusqlite::Connection::open(db_path)?;
 
 	conn.pragma_update(None, "foreign_keys", "on")?;
@@ -174,13 +175,36 @@ pub fn create(db_path: &Path) -> Result<SecretRecordKeeper, SecretRecordKeeperEr
 
 	MIGRATIONS.to_latest(&mut conn).unwrap();
 
-	Ok(SecretRecordKeeper { conn })
+	Ok(RecordKeeper { conn })
 }
 
-impl SecretRecordKeeper {
+impl RecordKeeper {
+	pub fn fetch_book(
+		&self,
+		id: library::BookId,
+	) -> Result<library::Book, RecordKeeperError> {
+		let mut stmt = self.conn.prepare(
+			"select
+				id,
+				path,
+				title,
+				author,
+				size,
+				modified_at,
+				added_at
+			from books
+			where exist = true
+				and id = ?1;
+			",
+		)?;
+		Ok(stmt.query_one([id.value()], |row| {
+			Ok(from_row::<SecretBook>(row))
+		})??.into())
+	}
+
 	pub fn fetch_books(
 		&self,
-	) -> Result<BTreeMap<library::BookId, library::Book>, SecretRecordKeeperError> {
+	) -> Result<BTreeMap<library::BookId, library::Book>, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
 				id,
@@ -202,7 +226,7 @@ impl SecretRecordKeeper {
 	pub fn record_book_inventory(
 		&mut self,
 		books_iter: impl Iterator<Item = InsertBook>,
-	) -> Result<BTreeMap<library::BookId, library::Book>, SecretRecordKeeperError> {
+	) -> Result<BTreeMap<library::BookId, library::Book>, RecordKeeperError> {
 		let tx = self.conn.transaction()?;
 		tx.execute("update books set exist = false;", [])?;
 		let mut upsert_stmt = tx.prepare(
@@ -236,7 +260,7 @@ impl SecretRecordKeeper {
 	pub fn fetch_thumbnail(
 		&self,
 		id: super::BookId,
-	) -> Result<Option<QueryThumbnail>, SecretRecordKeeperError> {
+	) -> Result<Option<QueryThumbnail>, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
 				bo.path as book_path,
@@ -257,7 +281,7 @@ impl SecretRecordKeeper {
 	pub fn record_thumbnail(
 		&mut self,
 		thumbnail: InsertThumbnail,
-	) -> Result<(), SecretRecordKeeperError> {
+	) -> Result<(), RecordKeeperError> {
 		let mut upsert_stmt = self.conn.prepare(
 			"insert into book_cache_thumbnails (book_id, path, added_at)
 				values (:book_id, :path, :added_at)

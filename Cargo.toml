@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["main", "reader", "scribe"]
+members = ["main", "illustrator", "scribe"]
 default-members = ["main"]
 
 [workspace.dependencies]

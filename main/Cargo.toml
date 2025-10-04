@@ -22,7 +22,7 @@ lucide-icons = "0.544.0"
 pollster = "0.4.0"
 rayon = "1.11.0"
 rbook = { workspace = true }
-reader = { version = "0.1.0", path = "../reader" }
+illustrator = { version = "0.1.0", path = "../illustrator" }
 rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
 scribe = { version = "0.1.0", path = "../scribe" }

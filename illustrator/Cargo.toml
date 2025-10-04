@@ -1,5 +1,5 @@
 [package]
-name = "reader"
+name = "illustrator"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,5 +8,6 @@ fixed = "1.29.0"
 image = { workspace = true }
 log = { workspace = true }
 rbook = { workspace = true }
+scribe = { version = "0.1.0", path = "../scribe" }
 thiserror = { workspace = true }
 

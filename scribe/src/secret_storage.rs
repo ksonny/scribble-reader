@@ -18,13 +18,13 @@ use std::path::PathBuf;
 use crate::library;
 use crate::record_keeper::InsertBook;
 use crate::record_keeper::InsertThumbnail;
-use crate::record_keeper::SecretRecordKeeper;
-use crate::record_keeper::SecretRecordKeeperError;
+use crate::record_keeper::RecordKeeper;
+use crate::record_keeper::RecordKeeperError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretStorageError {
 	#[error(transparent)]
-	RecordKeeper(#[from] SecretRecordKeeperError),
+	RecordKeeper(#[from] RecordKeeperError),
 	#[error("at {1}: {0}")]
 	Io(std::io::Error, &'static std::panic::Location<'static>),
 	#[error(transparent)]
@@ -69,7 +69,7 @@ impl SecretStorage {
 
 	pub fn scan(
 		&self,
-		records: &mut SecretRecordKeeper,
+		records: &mut RecordKeeper,
 		path: &Path,
 	) -> Result<BTreeMap<library::BookId, library::Book>, SecretStorageError> {
 		if !path.is_dir() {
@@ -92,7 +92,7 @@ impl SecretStorage {
 
 	pub fn load_thumbnail(
 		&self,
-		records: &mut SecretRecordKeeper,
+		records: &mut RecordKeeper,
 		id: library::BookId,
 	) -> Result<Option<Vec<u8>>, SecretStorageError> {
 		let result = records.fetch_thumbnail(id)?;
