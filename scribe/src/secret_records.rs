@@ -14,7 +14,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::scribe::library;
+use crate::library;
 
 const MIGRATIONS_SLICE: &[M<'_>] = &[
 	M::up(

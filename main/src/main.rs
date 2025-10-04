@@ -1,4 +1,4 @@
-use scribble_reader::Settings;
+use scribe::Settings;
 use scribble_reader::start;
 use winit::event_loop::EventLoop;
 

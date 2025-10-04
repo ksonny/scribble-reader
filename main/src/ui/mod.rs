@@ -12,8 +12,9 @@ use egui::TextStyle;
 use egui::load::Bytes;
 use egui::text::LayoutJob;
 use lucide_icons::Icon;
+use scribe::ScribeState;
 
-use crate::scribe::BookId;
+use scribe::library::BookId;
 
 pub mod theme {
 	use egui::FontFamily;
@@ -163,7 +164,7 @@ impl Default for FeatureView {
 #[derive(Default)]
 pub struct MainView {
 	pub invisible: bool,
-	pub working: crate::scribe::ScribeState,
+	pub working: ScribeState,
 	pub menu_open: bool,
 	pub feature: FeatureView,
 }
@@ -202,7 +203,7 @@ impl GuiView for MainView {
 				ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
 
 				ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-					if matches!(self.working, crate::scribe::ScribeState::Working) {
+					if matches!(self.working, ScribeState::Working) {
 						ui.label(
 							UiIcon::new(Icon::RefreshCw)
 								.color(Color32::GRAY)

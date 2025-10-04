@@ -2,7 +2,6 @@
 
 mod gestures;
 mod renderer;
-mod scribe;
 mod ui;
 
 use std::time::Duration;
@@ -18,6 +17,7 @@ use log::error;
 use log::info;
 use log::trace;
 use log::warn;
+use scribe::ScribeBell;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoopProxy;
@@ -32,18 +32,17 @@ use crate::gestures::Direction;
 use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
 use crate::renderer::Renderer;
-use crate::scribe::BookId;
-use crate::scribe::Scribe;
-use crate::scribe::ScribeAssistant;
-use crate::scribe::library;
 use crate::ui::BookCard;
 use crate::ui::FeatureView;
 use crate::ui::GuiView;
 use crate::ui::ListView;
 use crate::ui::MainView;
 use crate::ui::theme;
+use scribe::library::BookId;
+use scribe::Scribe;
+use scribe::ScribeAssistant;
+use scribe::library;
 
-pub use crate::scribe::Settings;
 use crate::ui::PokeStick;
 
 struct FpsCalculator {
@@ -334,7 +333,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					}
 					gesture => {
 						log::info!("Unhandled gesture: {gesture:?}");
-					},
+					}
 				}
 			}
 			self.gestures.reset();
@@ -464,17 +463,22 @@ impl ui::PokeStick for AppPokeStick {
 	}
 }
 
-impl scribe::ScribeBell for EventLoopProxy<AppPoke> {
+struct EventLoopBell(EventLoopProxy<AppPoke>);
+
+impl ScribeBell for EventLoopBell {
 	fn library_loaded(&self) {
-		self.send_event(AppPoke::LibraryLoad).unwrap();
+		let EventLoopBell(proxy) = self;
+		proxy.send_event(AppPoke::LibraryLoad).unwrap();
 	}
 
 	fn library_sorted(&self) {
-		self.send_event(AppPoke::LibrarySorted).unwrap();
+		let EventLoopBell(proxy) = self;
+		proxy.send_event(AppPoke::LibrarySorted).unwrap();
 	}
 
 	fn book_updated(&self, id: BookId) {
-		self.send_event(AppPoke::BookUpdated(id)).unwrap();
+		let EventLoopBell(proxy) = self;
+		proxy.send_event(AppPoke::BookUpdated(id)).unwrap();
 	}
 
 	fn fail(&self, _ticket: scribe::ScribeTicket, error: String) {
@@ -482,7 +486,8 @@ impl scribe::ScribeBell for EventLoopProxy<AppPoke> {
 	}
 
 	fn complete(&self, ticket: scribe::ScribeTicket) {
-		self.send_event(AppPoke::Completed(ticket)).unwrap();
+		let EventLoopBell(proxy) = self;
+		proxy.send_event(AppPoke::Completed(ticket)).unwrap();
 	}
 }
 
@@ -496,8 +501,9 @@ pub enum Error {
 	Scribe(#[from] scribe::ScribeError),
 }
 
-pub fn start(event_loop: EventLoop<AppPoke>, settings: Settings) -> Result<(), Error> {
-	let scribe = Scribe::create(event_loop.create_proxy(), settings)?;
+pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Result<(), Error> {
+	let bell = EventLoopBell(event_loop.create_proxy());
+	let scribe = Scribe::create(bell, settings)?;
 	let view = MainView::default();
 	let poke_stick = AppPokeStick::new(event_loop.create_proxy());
 

@@ -15,11 +15,11 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::scribe::library;
-use crate::scribe::secret_records::InsertBook;
-use crate::scribe::secret_records::InsertThumbnail;
-use crate::scribe::secret_records::SecretRecordKeeper;
-use crate::scribe::secret_records::SecretRecordKeeperError;
+use crate::library;
+use crate::secret_records::InsertBook;
+use crate::secret_records::InsertThumbnail;
+use crate::secret_records::SecretRecordKeeper;
+use crate::secret_records::SecretRecordKeeperError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretStorageError {

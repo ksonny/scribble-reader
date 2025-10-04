@@ -19,10 +19,10 @@ use std::thread::JoinHandle;
 #[cfg(not(target_os = "android"))]
 use expand_tilde::expand_tilde_owned;
 
-pub use crate::scribe::library::BookId;
-use crate::scribe::library::SortDirection;
-use crate::scribe::library::SortField;
-use crate::scribe::library::SortOrder;
+use crate::library::BookId;
+use crate::library::SortDirection;
+use crate::library::SortField;
+use crate::library::SortOrder;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScribeCreateError {
@@ -57,7 +57,7 @@ pub enum ScribeError {
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub struct ScribeTicket(usize);
 
-pub(crate) trait ScribeBell {
+pub trait ScribeBell {
 	fn library_loaded(&self);
 
 	fn library_sorted(&self);
@@ -70,14 +70,14 @@ pub(crate) trait ScribeBell {
 }
 
 #[derive(Debug)]
-pub(crate) enum ScribeRequest {
+pub enum ScribeRequest {
 	Scan,
 	Show(BookId),
 	#[allow(dead_code)]
 	Sort(SortOrder),
 }
 
-pub(crate) struct Scribe {
+pub struct Scribe {
 	lib: library::Library,
 	order_tx: Sender<(ScribeTicket, ScribeRequest)>,
 	handle: JoinHandle<Result<(), ScribeError>>,
@@ -93,14 +93,14 @@ pub struct Settings {
 }
 
 #[derive(Debug, Default, Copy, Clone)]
-pub(crate) enum ScribeState {
+pub enum ScribeState {
 	#[default]
 	Idle,
 	Working,
 }
 
 impl Scribe {
-	pub(crate) fn create<Bell>(bell: Bell, settings: Settings) -> Result<Self, ScribeCreateError>
+	pub fn create<Bell>(bell: Bell, settings: Settings) -> Result<Self, ScribeCreateError>
 	where
 		Bell: ScribeBell + Send + 'static,
 	{
@@ -346,7 +346,7 @@ fn sort_books(
 	sorted
 }
 
-pub(crate) trait ScribeAssistant {
+pub trait ScribeAssistant {
 	fn poke_scan(&mut self) -> ScribeState;
 	fn poke_list(&mut self, books: &[library::Book]) -> ScribeState;
 }

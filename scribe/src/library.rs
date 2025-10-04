@@ -6,11 +6,9 @@ use std::sync::RwLock;
 use chrono::DateTime;
 use chrono::Utc;
 
-use crate::scribe::library;
-
 #[allow(dead_code)]
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) enum SortField {
+pub enum SortField {
 	#[default]
 	Added,
 	Modified,
@@ -19,14 +17,14 @@ pub(crate) enum SortField {
 
 #[allow(dead_code)]
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) enum SortDirection {
+pub enum SortDirection {
 	#[default]
 	Ascending,
 	Descending,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct SortOrder(pub SortField, pub SortDirection);
+pub struct SortOrder(pub SortField, pub SortDirection);
 
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
 pub struct BookId(pub i64);
@@ -95,7 +93,7 @@ impl Library {
 		lib.books.get(&id).cloned()
 	}
 
-	pub fn books(&self, n: std::ops::Range<u32>) -> Vec<library::Book> {
+	pub fn books(&self, n: std::ops::Range<u32>) -> Vec<Book> {
 		let lib = self.read().unwrap();
 		let start = n.start as usize;
 		let end = (n.end as usize).min(lib.sorted.len());
