@@ -1,6 +1,6 @@
 pub mod library;
 mod secret_storage;
-mod secret_records;
+mod record_keeper;
 pub mod settings;
 
 use std::cell::Cell;
@@ -39,7 +39,7 @@ pub enum ScribeCreateError {
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
 	#[error(transparent)]
-	SecretReords(#[from] secret_records::SecretRecordKeeperError),
+	SecretReords(#[from] record_keeper::SecretRecordKeeperError),
 	#[error(transparent)]
 	ExpandTilde(#[from] expand_tilde::Error),
 }
@@ -51,7 +51,7 @@ pub enum ScribeError {
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
 	#[error(transparent)]
-	SecretReords(#[from] secret_records::SecretRecordKeeperError),
+	SecretReords(#[from] record_keeper::SecretRecordKeeperError),
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl Scribe {
 		let state_db_path = settings.data_path.join("state.db");
 
 		let lib = library::Library::default();
-		let records = secret_records::create(&state_db_path)?;
+		let records = record_keeper::create(&state_db_path)?;
 		let storage = secret_storage::create(&settings.cache_path)?;
 		let (order_tx, order_rx) = channel();
 		let handle = spawn_scribe(bell, lib_path, lib.clone(), records, storage, order_rx);
@@ -203,7 +203,7 @@ fn spawn_scribe<Bell>(
 	bell: Bell,
 	lib_path: PathBuf,
 	worker_lib: library::Library,
-	mut records: secret_records::SecretRecordKeeper,
+	mut records: record_keeper::SecretRecordKeeper,
 	storage: secret_storage::SecretStorage,
 	order_rx: std::sync::mpsc::Receiver<(ScribeTicket, ScribeRequest)>,
 ) -> JoinHandle<Result<(), ScribeError>>

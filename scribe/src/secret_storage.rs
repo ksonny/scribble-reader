@@ -16,10 +16,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::library;
-use crate::secret_records::InsertBook;
-use crate::secret_records::InsertThumbnail;
-use crate::secret_records::SecretRecordKeeper;
-use crate::secret_records::SecretRecordKeeperError;
+use crate::record_keeper::InsertBook;
+use crate::record_keeper::InsertThumbnail;
+use crate::record_keeper::SecretRecordKeeper;
+use crate::record_keeper::SecretRecordKeeperError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretStorageError {
