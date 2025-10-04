@@ -1,5 +1,6 @@
 pub mod library;
 mod secret_storage;
+mod secret_records;
 pub mod settings;
 
 use std::cell::Cell;
@@ -38,6 +39,8 @@ pub enum ScribeCreateError {
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
 	#[error(transparent)]
+	SecretReords(#[from] secret_records::SecretRecordKeeperError),
+	#[error(transparent)]
 	ExpandTilde(#[from] expand_tilde::Error),
 }
 
@@ -47,6 +50,8 @@ pub enum ScribeError {
 	Recv(#[from] RecvError),
 	#[error(transparent)]
 	SecretStorage(#[from] secret_storage::SecretStorageError),
+	#[error(transparent)]
+	SecretReords(#[from] secret_records::SecretRecordKeeperError),
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
@@ -137,9 +142,10 @@ impl Scribe {
 		let state_db_path = settings.data_path.join("state.db");
 
 		let lib = library::Library::default();
-		let storage = secret_storage::create(&state_db_path, &settings.cache_path)?;
+		let records = secret_records::create(&state_db_path)?;
+		let storage = secret_storage::create(&settings.cache_path)?;
 		let (order_tx, order_rx) = channel();
-		let handle = spawn_scribe(bell, lib_path, lib.clone(), storage, order_rx);
+		let handle = spawn_scribe(bell, lib_path, lib.clone(), records, storage, order_rx);
 
 		Ok(Scribe {
 			lib,
@@ -197,7 +203,8 @@ fn spawn_scribe<Bell>(
 	bell: Bell,
 	lib_path: PathBuf,
 	worker_lib: library::Library,
-	mut storage: secret_storage::SecretStorage,
+	mut records: secret_records::SecretRecordKeeper,
+	storage: secret_storage::SecretStorage,
 	order_rx: std::sync::mpsc::Receiver<(ScribeTicket, ScribeRequest)>,
 ) -> JoinHandle<Result<(), ScribeError>>
 where
@@ -207,7 +214,7 @@ where
 		let lib = worker_lib;
 		log::info!("Started scribe worker");
 
-		let books: BTreeMap<_, _> = storage.get_books().inspect_err(|e| log::error!("{e}"))?;
+		let books = records.fetch_books().inspect_err(|e| log::error!("{e}"))?;
 		let books_len = books.len();
 		let SortOrder(field, dir) = {
 			let lib = lib.read().unwrap();
@@ -228,7 +235,7 @@ where
 			match request {
 				Ok((ticket, ScribeRequest::Scan)) => {
 					log::info!("Scan library at {}", lib_path.display());
-					match storage.scan(&lib_path) {
+					match storage.scan(&mut records, &lib_path) {
 						Ok(books) => {
 							let books_len = books.len();
 							let SortOrder(field, dir) = {
@@ -254,15 +261,19 @@ where
 				Ok((ticket, ScribeRequest::Show(id))) => {
 					let has_thumbnail = lib.read().unwrap().thumbnails.contains_key(&id);
 					if !has_thumbnail {
-						match storage.load_thumbnail(id) {
+						match storage.load_thumbnail(&mut records, id) {
 							Ok(tn) => {
-								if tn.is_some() {
+								let tn = if let Some(bytes) = tn {
 									log::trace!("Got thumbnail for {:?}", id);
+									library::Thumbnail::Bytes {
+										bytes: bytes.into(),
+									}
 								} else {
 									log::trace!("No thumbnail for {:?}", id);
-								}
+									library::Thumbnail::None
+								};
 								let mut lib = lib.write().unwrap();
-								lib.thumbnails.insert(id, tn.into());
+								lib.thumbnails.insert(id, tn);
 								bell.book_updated(id);
 								bell.complete(ticket);
 							}
