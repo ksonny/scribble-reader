@@ -28,6 +28,7 @@ use winit::application::ApplicationHandler;
 use winit::event_loop::EventLoop;
 use winit::window::Window;
 
+use crate::gestures::Direction;
 use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
 use crate::renderer::Renderer;
@@ -43,6 +44,7 @@ use crate::ui::MainView;
 use crate::ui::theme;
 
 pub use crate::scribe::Settings;
+use crate::ui::PokeStick;
 
 struct FpsCalculator {
 	last_frame: Instant,
@@ -323,6 +325,12 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 							pressed: false,
 							modifiers: egui::Modifiers::default(),
 						});
+					}
+					Gesture::Swipe(Direction::Right, _) => {
+						self.poke_stick.previous_page();
+					}
+					Gesture::Swipe(Direction::Left, _) => {
+						self.poke_stick.next_page();
 					}
 					gesture => {
 						log::info!("Unhandled gesture: {gesture:?}");

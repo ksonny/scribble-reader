@@ -233,7 +233,7 @@ impl<const F: usize> GestureTracker<F> {
 	pub fn set_min_distance_by_screen(&mut self, width: u32, height: u32) {
 		self.min_distance = width
 			.min(height)
-			.checked_div(10)
+			.checked_div(12)
 			.unwrap_or(DEFAULT_MIN_DISTANCE);
 	}
 
