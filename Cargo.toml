@@ -5,7 +5,7 @@ default-members = ["main"]
 
 [workspace.dependencies]
 chrono = { version = "0.4.42", default-features = false, features = ["alloc", "clock", "now", "std", "serde"] }
-config = { version = "0.15.17", default-features = false, features = ["toml"] }
+config = { version = "0.15.18", default-features = false, features = ["toml"] }
 env_logger = "0.11.8"
 epub = "2.1.4"
 futures-lite = "2.6.1"
