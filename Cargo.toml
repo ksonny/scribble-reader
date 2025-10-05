@@ -14,7 +14,7 @@ log = "0.4.28"
 rayon = "1.11.0"
 rbook = { version = "0.6.6", default-features = false }
 serde = { version = "1.0.226", features = ["derive"] }
-thiserror = "2.0.16"
+thiserror = "2.0.17"
 
 [profile.dev-opt]
 inherits = "dev"
