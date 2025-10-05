@@ -100,7 +100,7 @@ pub enum ScribeState {
 }
 
 impl Scribe {
-	pub fn create<Bell>(bell: Bell, settings: Settings) -> Result<Self, ScribeCreateError>
+	pub fn create<Bell>(bell: Bell, settings: &Settings) -> Result<Self, ScribeCreateError>
 	where
 		Bell: ScribeBell + Send + 'static,
 	{
@@ -131,13 +131,13 @@ impl Scribe {
 			fs::create_dir_all(&settings.cache_path)?;
 		}
 		if !settings.cache_path.is_dir() {
-			return Err(ScribeCreateError::CachePathNotDir(settings.cache_path));
+			return Err(ScribeCreateError::CachePathNotDir(settings.cache_path.clone()));
 		}
 		if !settings.data_path.try_exists()? {
 			fs::create_dir_all(&settings.data_path)?;
 		}
 		if !settings.data_path.is_dir() {
-			return Err(ScribeCreateError::DataPathNotDir(settings.data_path));
+			return Err(ScribeCreateError::DataPathNotDir(settings.data_path.clone()));
 		}
 		let state_db_path = settings.data_path.join("state.db");
 
