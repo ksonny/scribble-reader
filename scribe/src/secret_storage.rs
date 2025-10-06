@@ -75,7 +75,12 @@ impl SecretStorage {
 
 		let books = fs::read_dir(path)?.filter_map(|entry| {
 			let entry = entry.ok()?;
-			scan_book(&entry)
+			let path = entry.path();
+			if path.extension().is_none_or(|e| e != "epub") {
+				return None;
+			}
+			let metadata = entry.metadata().ok()?;
+			scan_book(path, metadata)
 				.inspect_err(|e| {
 					log::error!("Failed to scan file '{}': {e}", entry.file_name().display())
 				})
@@ -186,8 +191,7 @@ fn create_thumbnail(
 	Ok(Some((thumbnail_path, bytes)))
 }
 
-fn scan_book(entry: &fs::DirEntry) -> Result<InsertBook, SecretStorageError> {
-	let path = entry.path();
+fn scan_book(path: PathBuf, metadata: fs::Metadata) -> Result<InsertBook, SecretStorageError> {
 	let epub = rbook::Epub::open(&path)?;
 	let epub_metadata = epub.metadata();
 	let title = epub_metadata.title().map(|t| t.value().to_string());
@@ -195,12 +199,8 @@ fn scan_book(entry: &fs::DirEntry) -> Result<InsertBook, SecretStorageError> {
 		.creators()
 		.next()
 		.map(|c| c.value().to_string());
-	let entry_metadata = entry.metadata()?;
-	let size = entry_metadata.size();
-	let modified_at = entry_metadata
-		.modified()
-		.or_else(|_| entry_metadata.created())?
-		.into();
+	let size = metadata.size();
+	let modified_at = metadata.modified().or_else(|_| metadata.created())?.into();
 	let added_at = Utc::now();
 	log::trace!(
 		"Found {} by {}",
