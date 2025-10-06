@@ -94,7 +94,9 @@ impl Renderer<'_> {
 		let cap = surface.get_capabilities(&adapter);
 		let format = cap
 			.formats
-			.first()
+			.iter()
+			.find(|f| matches!(*f, wgpu::TextureFormat::Rgba8Unorm))
+			.or_else(|| cap.formats.first())
 			.cloned()
 			.ok_or(RendererError::NoTextureFormat)?;
 		let alpha_mode = cap
