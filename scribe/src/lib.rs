@@ -100,7 +100,7 @@ pub enum ScribeState {
 }
 
 impl Scribe {
-	pub fn create<Bell>(bell: Bell, settings: Settings) -> Result<Self, ScribeCreateError>
+	pub fn create<Bell>(bell: Bell, settings: &Settings) -> Result<Self, ScribeCreateError>
 	where
 		Bell: ScribeBell + Send + 'static,
 	{
@@ -131,13 +131,13 @@ impl Scribe {
 			fs::create_dir_all(&settings.cache_path)?;
 		}
 		if !settings.cache_path.is_dir() {
-			return Err(ScribeCreateError::CachePathNotDir(settings.cache_path));
+			return Err(ScribeCreateError::CachePathNotDir(settings.cache_path.clone()));
 		}
 		if !settings.data_path.try_exists()? {
 			fs::create_dir_all(&settings.data_path)?;
 		}
 		if !settings.data_path.is_dir() {
-			return Err(ScribeCreateError::DataPathNotDir(settings.data_path));
+			return Err(ScribeCreateError::DataPathNotDir(settings.data_path.clone()));
 		}
 		let state_db_path = settings.data_path.join("state.db");
 
@@ -236,6 +236,13 @@ where
 				Ok((ticket, ScribeRequest::Scan)) => {
 					log::info!("Scan library at {}", lib_path.display());
 					match storage.scan(&mut records, &lib_path) {
+						Ok(_) => {}
+						Err(e) => {
+							log::error!("Failed to scan library: {e}");
+							bell.fail(ticket, format!("Failed to scan library: {e}"));
+						}
+					}
+					match records.fetch_books() {
 						Ok(books) => {
 							let books_len = books.len();
 							let SortOrder(field, dir) = {
@@ -253,8 +260,8 @@ where
 							bell.complete(ticket);
 						}
 						Err(e) => {
-							log::error!("Failed to scan library: {e}");
-							bell.fail(ticket, format!("Failed to scan library: {e}"));
+							log::error!("Failed to load library: {e}");
+							bell.fail(ticket, format!("Failed to load library: {e}"));
 						}
 					};
 				}

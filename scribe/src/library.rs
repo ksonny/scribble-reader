@@ -46,6 +46,9 @@ pub struct Book {
 	pub size: u64,
 	pub modified_at: DateTime<Utc>,
 	pub added_at: DateTime<Utc>,
+	pub opened_at: Option<DateTime<Utc>>,
+	pub words_total: Option<u64>,
+	pub words_position: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

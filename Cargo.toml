@@ -8,10 +8,9 @@ chrono = { version = "0.4.42", default-features = false, features = ["alloc", "c
 config = { version = "0.15.18", default-features = false, features = ["toml"] }
 env_logger = "0.11.8"
 epub = "2.1.4"
-futures-lite = "2.6.1"
 image = { version = "0.25.8", features = ["png", "jpeg", "ico"] }
 log = "0.4.28"
-rbook = { version = "0.6.6", default-features = false }
+rayon = "1.11.0"
 serde = { version = "1.0.226", features = ["derive"] }
 thiserror = "2.0.17"
 

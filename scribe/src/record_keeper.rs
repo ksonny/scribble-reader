@@ -92,16 +92,20 @@ pub struct QueryThumbnail {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SecretBook {
-	pub(crate) id: i64,
-	pub(crate) path: PathBuf,
-	pub(crate) title: Option<String>,
-	pub(crate) author: Option<String>,
-	pub(crate) size: u64,
+struct SecretBook {
+	id: i64,
+	path: PathBuf,
+	title: Option<String>,
+	author: Option<String>,
+	size: u64,
 	#[serde(with = "ts_seconds")]
-	pub(crate) modified_at: DateTime<Utc>,
+	modified_at: DateTime<Utc>,
 	#[serde(with = "ts_seconds")]
-	pub(crate) added_at: DateTime<Utc>,
+	added_at: DateTime<Utc>,
+	#[serde(with = "ts_seconds_option")]
+	opened_at: Option<DateTime<Utc>>,
+	words_total: Option<u64>,
+	words_position: Option<u64>,
 }
 
 impl From<SecretBook> for library::Book {
@@ -114,6 +118,9 @@ impl From<SecretBook> for library::Book {
 			size: value.size,
 			modified_at: value.modified_at,
 			added_at: value.added_at,
+			opened_at: value.opened_at,
+			words_total: value.words_total,
+			words_position: value.words_position,
 		}
 	}
 }
@@ -130,37 +137,21 @@ pub struct InsertBook {
 	pub added_at: DateTime<Utc>,
 }
 
-impl From<(i64, InsertBook)> for library::Book {
-	fn from(value: (i64, InsertBook)) -> library::Book {
-		let (
-			id,
-			InsertBook {
-				path,
-				title,
-				author,
-				size,
-				modified_at,
-				added_at,
-			},
-		) = value;
-		library::Book {
-			id: library::BookId(id),
-			path,
-			title: title.map(Arc::new),
-			author: author.map(Arc::new),
-			size,
-			modified_at,
-			added_at,
-		}
-	}
-}
-
 #[derive(Debug, Serialize)]
 struct InsertThumbnail<'a> {
 	pub book_id: i64,
 	pub path: Option<&'a Path>,
 	#[serde(with = "ts_seconds")]
 	pub added_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct InsertBookState {
+	pub book_id: i64,
+	#[serde(with = "ts_seconds")]
+	pub opened_at: DateTime<Utc>,
+	pub words_total: u64,
+	pub words_position: Option<u64>,
 }
 
 pub struct RecordKeeper {
@@ -182,15 +173,19 @@ impl RecordKeeper {
 	pub fn fetch_book(&self, id: library::BookId) -> Result<library::Book, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
-				id,
-				path,
-				title,
-				author,
-				size,
-				modified_at,
-				added_at
-			from books
-			where exist = true
+				bo.id,
+				bo.path,
+				bo.title,
+				bo.author,
+				bo.size,
+				bo.modified_at,
+				bo.added_at,
+				bs.opened_at,
+				bs.words_total,
+				bs.words_position
+			from books bo
+			left join book_reading_state bs on bs.book_id = bo.id
+			where bo.exist = true
 				and id = ?1;
 			",
 		)?;
@@ -204,15 +199,19 @@ impl RecordKeeper {
 	) -> Result<BTreeMap<library::BookId, library::Book>, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
-				id,
-				path,
-				title,
-				author,
-				size,
-				modified_at,
-				added_at
-			from books
-			where exist = true;
+				bo.id,
+				bo.path,
+				bo.title,
+				bo.author,
+				bo.size,
+				bo.modified_at,
+				bo.added_at,
+				bs.opened_at,
+				bs.words_total,
+				bs.words_position
+			from books bo
+			left join book_reading_state bs on bs.book_id = bo.id
+			where bo.exist = true
 			",
 		)?;
 		Ok(from_rows::<SecretBook>(stmt.query([])?)
@@ -223,7 +222,7 @@ impl RecordKeeper {
 	pub fn record_book_inventory(
 		&mut self,
 		books_iter: impl Iterator<Item = InsertBook>,
-	) -> Result<BTreeMap<library::BookId, library::Book>, RecordKeeperError> {
+	) -> Result<u64, RecordKeeperError> {
 		let tx = self.conn.transaction()?;
 		tx.execute("update books set exist = false;", [])?;
 		let mut upsert_stmt = tx.prepare(
@@ -235,23 +234,19 @@ impl RecordKeeper {
 					author = :author,
 					size = :size,
 					modified_at = :modified_at,
-					exist = true
-				returning id;
+					exist = true;
 			",
 		)?;
-		let mut map = BTreeMap::new();
+		let mut count = 0;
 		for book in books_iter {
 			let params = to_params_named(&book)?;
 			let params = params.to_slice();
-			let book_id = upsert_stmt.query_row(params.as_slice(), |row| row.get(0))?;
-			map.insert(
-				library::BookId(book_id),
-				Into::<library::Book>::into((book_id, book)),
-			);
+			upsert_stmt.execute(params.as_slice())?;
+			count += 1;
 		}
 		drop(upsert_stmt);
 		tx.commit()?;
-		Ok(map)
+		Ok(count)
 	}
 
 	pub fn fetch_thumbnail(
@@ -295,6 +290,32 @@ impl RecordKeeper {
 			path,
 		};
 		stmt.execute(to_params_named(thumbnail)?.to_slice().as_slice())?;
+		Ok(())
+	}
+
+	pub fn record_book_state(
+		&self,
+		id: super::BookId,
+		words_total: u64,
+		words_position: Option<u64>,
+	) -> Result<(), RecordKeeperError> {
+		let mut stmt = self.conn.prepare(
+			"insert into book_reading_state (book_id, opened_at, words_total, words_position)
+				values (:book_id, :opened_at, :words_total, :words_position)
+			on conflict (book_id)
+			do update set
+				opened_at = :opened_at,
+				words_total = :words_total,
+				words_position = coalesce(:words_position, words_position);
+			",
+		)?;
+		let state = InsertBookState {
+			book_id: id.value(),
+			opened_at: Utc::now(),
+			words_total,
+			words_position,
+		};
+		stmt.execute(to_params_named(state)?.to_slice().as_slice())?;
 		Ok(())
 	}
 }

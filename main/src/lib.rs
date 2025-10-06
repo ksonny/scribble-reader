@@ -14,6 +14,7 @@ use egui::Stroke;
 use egui::TextStyle;
 use egui::Vec2;
 use egui::ViewportId;
+use illustrator::Illustrator;
 use log::error;
 use log::info;
 use log::trace;
@@ -153,6 +154,8 @@ struct App<'window> {
 	fps: FpsCalculator,
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
+	illustrator: Option<Illustrator>,
+	settings: scribe::Settings,
 }
 
 impl App<'_> {
@@ -339,10 +342,14 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					self.request_redraw();
 				}
 			},
-			AppPoke::OpenBook(_id) => {
+			AppPoke::OpenBook(id) => {
 				self.view.invisible = true;
 				self.view.feature = FeatureView::Empty;
-				// TODO: Open book
+
+				let state_db_path = self.settings.data_path.join("state.db");
+				let records = scribe::record_keeper::create(&state_db_path).unwrap();
+				self.illustrator = Some(illustrator::spawn_illustrator(records, id));
+
 				self.request_redraw();
 			}
 			AppPoke::Completed(ticket) => {
@@ -450,6 +457,11 @@ fn create_card(entry: (library::Book, Option<library::Thumbnail>)) -> BookCard {
 		id: b.id,
 		title: b.title,
 		author: b.author,
+		modified_at: b.modified_at,
+		added_at: b.added_at,
+		opened_at: b.opened_at,
+		words_total: b.words_total,
+		words_position: b.words_position,
 		thumbnail: tn.and_then(|tn| match tn {
 			library::Thumbnail::Bytes { bytes } => Some(ui::Thumbnail { bytes }),
 			library::Thumbnail::None => None,
@@ -542,7 +554,7 @@ pub enum Error {
 
 pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Result<(), Error> {
 	let bell = EventLoopBell(event_loop.create_proxy());
-	let scribe = Scribe::create(bell, settings)?;
+	let scribe = Scribe::create(bell, &settings)?;
 	let view = MainView::default();
 	let poke_stick = AppPokeStick::new(event_loop.create_proxy());
 
@@ -630,6 +642,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 	let gestures = GestureTracker::<_>::new();
 
 	let mut app = App {
+		settings,
 		input,
 		renderer: None,
 		scribe,
@@ -639,6 +652,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 		fps,
 		request_redraw: Instant::now(),
 		gestures,
+		illustrator: None,
 	};
 
 	event_loop.run_app(&mut app)?;

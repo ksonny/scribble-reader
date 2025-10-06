@@ -6,13 +6,12 @@ edition = "2024"
 [dependencies]
 chrono = { workspace = true }
 config = { workspace = true }
+epub = { workspace = true }
 expand-tilde = "0.6.1"
 image = { workspace = true }
 log = { workspace = true }
-rbook = { workspace = true }
 rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
 serde = { workspace = true }
 serde_rusqlite = "0.40.0"
 thiserror = { workspace = true }
-

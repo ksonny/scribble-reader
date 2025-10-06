@@ -1,14 +1,9 @@
 use chrono::Utc;
+use epub::doc::EpubDoc;
 use image::ImageReader;
 use image::codecs::png;
 use image::codecs::png::PngEncoder;
-use rbook::Ebook;
-use rbook::ebook::manifest::Manifest;
-use rbook::ebook::manifest::ManifestEntry;
-use rbook::ebook::metadata::MetaEntry;
-use rbook::ebook::metadata::Metadata;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -29,7 +24,7 @@ pub enum SecretStorageError {
 	#[error(transparent)]
 	SystemTime(#[from] std::time::SystemTimeError),
 	#[error(transparent)]
-	Ebook(#[from] rbook::ebook::errors::EbookError),
+	Epub(#[from] epub::doc::DocError),
 	#[error(transparent)]
 	Image(#[from] image::ImageError),
 	#[error("Scan path is not directory")]
@@ -68,7 +63,7 @@ impl SecretStorage {
 		&self,
 		records: &mut RecordKeeper,
 		path: &Path,
-	) -> Result<BTreeMap<library::BookId, library::Book>, SecretStorageError> {
+	) -> Result<u64, SecretStorageError> {
 		if !path.is_dir() {
 			return Err(SecretStorageError::ScanPathNotDir);
 		}
@@ -86,10 +81,10 @@ impl SecretStorage {
 				})
 				.ok()
 		});
-		let books = records.record_book_inventory(books)?;
-		log::trace!("Total {} books", books.len());
+		let count = records.record_book_inventory(books)?;
+		log::trace!("Scanned {} books", count);
 
-		Ok(books)
+		Ok(count)
 	}
 
 	pub fn load_thumbnail(
@@ -141,29 +136,22 @@ fn create_thumbnail(
 	book_path: &Path,
 	cache_path: &Path,
 ) -> Result<Option<(PathBuf, Vec<u8>)>, SecretStorageError> {
-	let epub = rbook::Epub::open(book_path)?;
-	let epub_manifest = epub.manifest();
-	let cover_image = epub_manifest.cover_image().or_else(|| {
-		epub_manifest
-			.images()
-			.find(|i| i.key() == Some("cover-image"))
-	});
-	let Some(cover_image) = cover_image else {
+	let mut doc = EpubDoc::new(book_path)?;
+    let cover_image = doc.get_cover();
+	let Some((cover_image, mime)) = cover_image else {
 		log::trace!("No cover image for {:?}", id);
 		return Ok(None);
 	};
 
 	log::trace!("Found cover image for {:?}", id);
-	let resource_kind = cover_image.resource_kind();
-	if !matches!(resource_kind.as_str(), "image/png" | "image/jpeg") {
+	if !matches!(mime.as_str(), "image/png" | "image/jpeg") {
 		return Err(SecretStorageError::UnsupportedCoverMime(
-			resource_kind.to_string(),
+            mime
 		));
 	}
 
-	let cover_bytes = cover_image.read_bytes()?;
+	let cover_bytes = cover_image.as_slice();
 	let max_size = SecretStorage::THUMBNAIL_SIZE;
-	let cover_bytes = cover_bytes.as_slice();
 	let img = ImageReader::new(io::Cursor::new(cover_bytes))
 		.with_guessed_format()?
 		.decode()?;
@@ -192,13 +180,9 @@ fn create_thumbnail(
 }
 
 fn scan_book(path: PathBuf, metadata: fs::Metadata) -> Result<InsertBook, SecretStorageError> {
-	let epub = rbook::Epub::open(&path)?;
-	let epub_metadata = epub.metadata();
-	let title = epub_metadata.title().map(|t| t.value().to_string());
-	let author = epub_metadata
-		.creators()
-		.next()
-		.map(|c| c.value().to_string());
+	let doc = EpubDoc::new(&path)?;
+	let title = doc.mdata("title");
+    let author = doc.mdata("creator");
 	let size = metadata.size();
 	let modified_at = metadata.modified().or_else(|_| metadata.created())?.into();
 	let added_at = Utc::now();

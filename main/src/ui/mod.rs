@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use chrono::DateTime;
+use chrono::Utc;
 use egui::Color32;
 use egui::Context;
 use egui::FontFamily;
@@ -52,6 +54,11 @@ pub(crate) struct BookCard {
 	pub(crate) id: BookId,
 	pub(crate) title: Option<Arc<String>>,
 	pub(crate) author: Option<Arc<String>>,
+	pub(crate) modified_at: DateTime<Utc>,
+	pub(crate) added_at: DateTime<Utc>,
+	pub(crate) opened_at: Option<DateTime<Utc>>,
+	pub(crate) words_total: Option<u64>,
+	pub(crate) words_position: Option<u64>,
 	pub(crate) thumbnail: Option<Thumbnail>,
 }
 
@@ -86,12 +93,28 @@ impl egui::Widget for BookCardUi<'_> {
 				});
 				ui.separator();
 				ui.vertical(|ui| {
-					if let Some(author) = card.author.as_ref().map(|t| t.as_str()) {
-						ui.label(author);
-						ui.end_row();
-					}
+					let author = card
+						.author
+						.as_ref()
+						.map(|t| t.as_str())
+						.unwrap_or("Unknown");
+					ui.label(author);
 					let title = card.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
 					ui.label(RichText::new(title).text_style(TextStyle::Heading));
+					match (card.words_total, card.words_position) {
+						(Some(words_total), Some(words_position)) => ui.label(format!(
+							"{} - {}/{}",
+							card.modified_at.format("%Y-%m-%d %H:%M"),
+							words_position / 250,
+							words_total / 250,
+						)),
+						(Some(words_total), None) => ui.label(format!(
+							"{} - 0/{}",
+							card.modified_at.format("%Y-%m-%d %H:%M"),
+							words_total / 250
+						)),
+						_ => ui.label(format!("{}", card.modified_at.format("%Y-%m-%d %H:%M"))),
+					};
 				});
 			});
 			ui.interact(
