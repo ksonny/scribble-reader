@@ -13,6 +13,7 @@ use egui::FontId;
 use egui::Stroke;
 use egui::TextStyle;
 use egui::Vec2;
+use egui::ViewportId;
 use log::error;
 use log::info;
 use log::trace;
@@ -38,10 +39,10 @@ use crate::ui::GuiView;
 use crate::ui::ListView;
 use crate::ui::MainView;
 use crate::ui::theme;
-use scribe::library::BookId;
 use scribe::Scribe;
 use scribe::ScribeAssistant;
 use scribe::library;
+use scribe::library::BookId;
 
 use crate::ui::PokeStick;
 
@@ -156,10 +157,17 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		window.set_title("Scribble-reader");
 
 		let size = window.inner_size();
+		let scale_factor = window.scale_factor() as f32;
 		self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
 			Default::default(),
-			egui::vec2(size.width as f32, size.height as f32),
+			egui::vec2(size.width as f32, size.height as f32) / scale_factor,
 		));
+		self.egui_input.viewport_id = ViewportId::ROOT;
+		self.egui_input
+			.viewports
+			.entry(ViewportId::ROOT)
+			.or_default()
+			.native_pixels_per_point = Some(scale_factor);
 		self.gestures
 			.set_min_distance_by_screen(size.width, size.height);
 
@@ -309,17 +317,25 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 
 		let gesture_ret = self.gestures.handle_window_event(&event);
 		if gesture_ret.frame_ended {
+			let pixels_per_point = self
+				.egui_input
+				.viewports
+				.entry(ViewportId::ROOT)
+				.or_default()
+				.native_pixels_per_point
+				.unwrap_or(1.0);
 			for event in self.gestures.events() {
+				let pos = egui::pos2(event.loc.x as f32, event.loc.y as f32) / pixels_per_point;
 				match event.gesture {
 					Gesture::Tap => {
 						self.egui_input.events.push(egui::Event::PointerButton {
-							pos: egui::pos2(event.loc.x as f32, event.loc.y as f32),
+							pos,
 							button: egui::PointerButton::Primary,
 							pressed: true,
 							modifiers: egui::Modifiers::default(),
 						});
 						self.egui_input.events.push(egui::Event::PointerButton {
-							pos: egui::pos2(event.loc.x as f32, event.loc.y as f32),
+							pos,
 							button: egui::PointerButton::Primary,
 							pressed: false,
 							modifiers: egui::Modifiers::default(),
@@ -356,9 +372,16 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					warn!("Renderer not initialized, abort event {event:?}");
 					return;
 				};
+				let pixels_per_point = self
+					.egui_input
+					.viewports
+					.entry(ViewportId::ROOT)
+					.or_default()
+					.native_pixels_per_point
+					.unwrap_or(1.0);
 				self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
 					Default::default(),
-					egui::vec2(size.width as f32, size.height as f32),
+					egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
 				));
 				self.gestures
 					.set_min_distance_by_screen(size.width, size.height);
@@ -370,6 +393,11 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					warn!("Renderer not initialized, abort event {event:?}");
 					return;
 				};
+				self.egui_input
+					.viewports
+					.entry(ViewportId::ROOT)
+					.or_default()
+					.native_pixels_per_point = Some(scale_factor as f32);
 				renderer.rescale(scale_factor);
 				self.request_redraw();
 			}
@@ -618,7 +646,7 @@ fn android_main(app: AndroidApp) {
 	);
 
 	let ext_data_path = app.external_data_path().unwrap();
-	let s = Settings {
+	let s = scribe::Settings {
 		cache_path: ext_data_path.parent().unwrap().join("cache"),
 		config_path: ext_data_path.join("config"),
 		data_path: ext_data_path.join("data"),

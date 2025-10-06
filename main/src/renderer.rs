@@ -84,6 +84,7 @@ impl Renderer<'_> {
 				#[cfg(target_os = "android")]
 				required_limits: wgpu::Limits::downlevel_webgl2_defaults()
 					.using_resolution(adapter.limits()),
+				#[cfg(not(target_os = "android"))]
 				required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
 				memory_hints: wgpu::MemoryHints::MemoryUsage,
 				trace: wgpu::Trace::Off,
