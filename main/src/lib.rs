@@ -77,13 +77,79 @@ impl FpsCalculator {
 	}
 }
 
+struct AppInput {
+	start_time: Instant,
+	pixels_per_point: f32,
+	egui_input: egui::RawInput,
+}
+
+impl AppInput {
+	fn resume(&mut self, size: winit::dpi::PhysicalSize<u32>, scale_factor: f32) {
+		self.pixels_per_point = scale_factor;
+		self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
+			Default::default(),
+			egui::vec2(size.width as f32, size.height as f32) / self.pixels_per_point,
+		));
+		self.egui_input.viewport_id = ViewportId::ROOT;
+		self.egui_input
+			.viewports
+			.entry(ViewportId::ROOT)
+			.or_default()
+			.native_pixels_per_point = Some(scale_factor);
+	}
+
+	fn handle_gesture(&mut self, event: &gestures::GestureEvent) {
+		let pos = egui::pos2(event.loc.x as f32, event.loc.y as f32) / self.pixels_per_point;
+		if event.gesture == Gesture::Tap {
+			self.egui_input.events.push(egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed: true,
+				modifiers: egui::Modifiers::default(),
+			});
+			self.egui_input.events.push(egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed: false,
+				modifiers: egui::Modifiers::default(),
+			});
+		}
+	}
+
+	fn handle_move(&mut self, pos: winit::dpi::PhysicalPosition<f64>) {
+		let vec = egui::vec2(pos.x as f32, pos.y as f32) / self.pixels_per_point;
+		self.egui_input.events.push(egui::Event::MouseMoved(vec));
+	}
+
+	fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+		self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
+			Default::default(),
+			egui::vec2(size.width as f32, size.height as f32) / self.pixels_per_point,
+		));
+	}
+
+	fn rescale(&mut self, scale_factor: f32) {
+		self.pixels_per_point = scale_factor;
+		self.egui_input
+			.viewports
+			.entry(ViewportId::ROOT)
+			.or_default()
+			.native_pixels_per_point = Some(scale_factor);
+	}
+
+	fn tick(&mut self) -> egui::RawInput {
+		self.egui_input.time = Some(Instant::now().duration_since(self.start_time).as_secs_f64());
+		self.egui_input.take()
+	}
+}
+
 struct App<'window> {
+	input: AppInput,
 	renderer: Option<Renderer<'window>>,
 	scribe: Scribe,
 	view: MainView,
 	poke_stick: AppPokeStick,
 	egui_ctx: egui::Context,
-	egui_input: egui::RawInput,
 	fps: FpsCalculator,
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
@@ -158,16 +224,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 
 		let size = window.inner_size();
 		let scale_factor = window.scale_factor() as f32;
-		self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
-			Default::default(),
-			egui::vec2(size.width as f32, size.height as f32) / scale_factor,
-		));
-		self.egui_input.viewport_id = ViewportId::ROOT;
-		self.egui_input
-			.viewports
-			.entry(ViewportId::ROOT)
-			.or_default()
-			.native_pixels_per_point = Some(scale_factor);
+		self.input.resume(size, scale_factor);
 		self.gestures
 			.set_min_distance_by_screen(size.width, size.height);
 
@@ -317,38 +374,16 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 
 		let gesture_ret = self.gestures.handle_window_event(&event);
 		if gesture_ret.frame_ended {
-			let pixels_per_point = self
-				.egui_input
-				.viewports
-				.entry(ViewportId::ROOT)
-				.or_default()
-				.native_pixels_per_point
-				.unwrap_or(1.0);
 			for event in self.gestures.events() {
-				let pos = egui::pos2(event.loc.x as f32, event.loc.y as f32) / pixels_per_point;
 				match event.gesture {
-					Gesture::Tap => {
-						self.egui_input.events.push(egui::Event::PointerButton {
-							pos,
-							button: egui::PointerButton::Primary,
-							pressed: true,
-							modifiers: egui::Modifiers::default(),
-						});
-						self.egui_input.events.push(egui::Event::PointerButton {
-							pos,
-							button: egui::PointerButton::Primary,
-							pressed: false,
-							modifiers: egui::Modifiers::default(),
-						});
-					}
 					Gesture::Swipe(Direction::Right, _) => {
 						self.poke_stick.previous_page();
 					}
 					Gesture::Swipe(Direction::Left, _) => {
 						self.poke_stick.next_page();
 					}
-					gesture => {
-						log::info!("Unhandled gesture: {gesture:?}");
+					_ => {
+						self.input.handle_gesture(&event);
 					}
 				}
 			}
@@ -359,46 +394,23 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		log::trace!("event: {event:?}");
 		match event {
 			WindowEvent::CursorMoved { position, .. } if !gesture_ret.consumed => {
-				self.egui_input
-					.events
-					.push(egui::Event::MouseMoved(egui::vec2(
-						position.x as f32,
-						position.y as f32,
-					)));
+				self.input.handle_move(position);
 				self.request_redraw();
 			}
 			WindowEvent::Resized(size) => {
-				let Some(renderer) = self.renderer.as_mut() else {
-					warn!("Renderer not initialized, abort event {event:?}");
-					return;
-				};
-				let pixels_per_point = self
-					.egui_input
-					.viewports
-					.entry(ViewportId::ROOT)
-					.or_default()
-					.native_pixels_per_point
-					.unwrap_or(1.0);
-				self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
-					Default::default(),
-					egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
-				));
 				self.gestures
 					.set_min_distance_by_screen(size.width, size.height);
-				renderer.resize(size);
+				self.input.resize(size);
+				if let Some(renderer) = self.renderer.as_mut() {
+					renderer.resize(size)
+				}
 				self.request_redraw();
 			}
 			WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-				let Some(renderer) = self.renderer.as_mut() else {
-					warn!("Renderer not initialized, abort event {event:?}");
-					return;
-				};
-				self.egui_input
-					.viewports
-					.entry(ViewportId::ROOT)
-					.or_default()
-					.native_pixels_per_point = Some(scale_factor as f32);
-				renderer.rescale(scale_factor);
+				self.input.rescale(scale_factor as f32);
+				if let Some(renderer) = self.renderer.as_mut() {
+					renderer.rescale(scale_factor)
+				}
 				self.request_redraw();
 			}
 			WindowEvent::RedrawRequested => {
@@ -407,8 +419,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					return;
 				};
 				self.fps.tick();
-
-				let input = self.egui_input.take();
+				let input = self.input.tick();
 				let output = self
 					.egui_ctx
 					.run(input, |ctx| self.view.draw(ctx, &self.poke_stick));
@@ -610,17 +621,21 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 		]
 		.into();
 	});
-	let egui_input = egui::RawInput::default();
+	let input = AppInput {
+		start_time: Instant::now(),
+		egui_input: egui::RawInput::default(),
+		pixels_per_point: 1.0,
+	};
 	let fps = FpsCalculator::new();
-	let gestures = GestureTracker::<10>::new();
+	let gestures = GestureTracker::<_>::new();
 
 	let mut app = App {
+		input,
 		renderer: None,
 		scribe,
 		view,
 		poke_stick,
 		egui_ctx,
-		egui_input,
 		fps,
 		request_redraw: Instant::now(),
 		gestures,
