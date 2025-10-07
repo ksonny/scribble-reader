@@ -156,9 +156,9 @@ impl From<(i64, InsertBook)> for library::Book {
 }
 
 #[derive(Debug, Serialize)]
-pub struct InsertThumbnail {
+struct InsertThumbnail<'a> {
 	pub book_id: i64,
-	pub path: Option<PathBuf>,
+	pub path: Option<&'a Path>,
 	#[serde(with = "ts_seconds")]
 	pub added_at: DateTime<Utc>,
 }
@@ -179,10 +179,7 @@ pub fn create(db_path: &Path) -> Result<RecordKeeper, RecordKeeperError> {
 }
 
 impl RecordKeeper {
-	pub fn fetch_book(
-		&self,
-		id: library::BookId,
-	) -> Result<library::Book, RecordKeeperError> {
+	pub fn fetch_book(&self, id: library::BookId) -> Result<library::Book, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
 				id,
@@ -197,9 +194,9 @@ impl RecordKeeper {
 				and id = ?1;
 			",
 		)?;
-		Ok(stmt.query_one([id.value()], |row| {
-			Ok(from_row::<SecretBook>(row))
-		})??.into())
+		Ok(stmt
+			.query_one([id.value()], |row| Ok(from_row::<SecretBook>(row)))??
+			.into())
 	}
 
 	pub fn fetch_books(
@@ -280,18 +277,24 @@ impl RecordKeeper {
 
 	pub fn record_thumbnail(
 		&mut self,
-		thumbnail: InsertThumbnail,
+		id: super::BookId,
+		path: Option<&Path>,
 	) -> Result<(), RecordKeeperError> {
-		let mut upsert_stmt = self.conn.prepare(
+		let mut stmt = self.conn.prepare(
 			"insert into book_cache_thumbnails (book_id, path, added_at)
 				values (:book_id, :path, :added_at)
-				on conflict (book_id)
-				do update set
-					path = :path,
-					added_at = :added_at;
-				",
+			on conflict (book_id)
+			do update set
+				path = :path,
+				added_at = :added_at;
+			",
 		)?;
-		upsert_stmt.execute(to_params_named(thumbnail)?.to_slice().as_slice())?;
+		let thumbnail = InsertThumbnail {
+			book_id: id.value(),
+			added_at: Utc::now(),
+			path,
+		};
+		stmt.execute(to_params_named(thumbnail)?.to_slice().as_slice())?;
 		Ok(())
 	}
 }

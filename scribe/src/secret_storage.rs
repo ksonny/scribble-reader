@@ -17,7 +17,6 @@ use std::path::PathBuf;
 
 use crate::library;
 use crate::record_keeper::InsertBook;
-use crate::record_keeper::InsertThumbnail;
 use crate::record_keeper::RecordKeeper;
 use crate::record_keeper::RecordKeeperError;
 
@@ -55,9 +54,7 @@ pub fn create(cache_path: &Path) -> Result<SecretStorage, SecretStorageError> {
 		fs::create_dir(&thumbnail_path)?;
 	}
 
-	Ok(SecretStorage {
-		cache_path,
-	})
+	Ok(SecretStorage { cache_path })
 }
 
 pub struct SecretStorage {
@@ -101,9 +98,14 @@ impl SecretStorage {
 		};
 
 		if result.added_at.is_none_or(|t| t < result.book_modified_at) {
-			let (thumbnail, bytes) = create_thumbnail(id, &result.book_path, &self.cache_path)?;
-			records.record_thumbnail(thumbnail)?;
-			Ok(bytes)
+			if let Some((path, bytes)) = create_thumbnail(id, &result.book_path, &self.cache_path)?
+			{
+				records.record_thumbnail(id, Some(&path))?;
+				Ok(Some(bytes))
+			} else {
+				records.record_thumbnail(id, None)?;
+				Ok(None)
+			}
 		} else if let Some(path) = result.path {
 			match fs::read(&path) {
 				Ok(bytes) => Ok(Some(bytes)),
@@ -112,10 +114,15 @@ impl SecretStorage {
 						"Failed to load thumbnail at {}, try regenrate: {e}",
 						path.display()
 					);
-					let (thumbnail, bytes) =
-						create_thumbnail(id, &result.book_path, &self.cache_path)?;
-					records.record_thumbnail(thumbnail)?;
-					Ok(bytes)
+					if let Some((path, bytes)) =
+						create_thumbnail(id, &result.book_path, &self.cache_path)?
+					{
+						records.record_thumbnail(id, Some(&path))?;
+						Ok(Some(bytes))
+					} else {
+						records.record_thumbnail(id, None)?;
+						Ok(None)
+					}
 				}
 			}
 		} else {
@@ -128,7 +135,7 @@ fn create_thumbnail(
 	id: super::BookId,
 	book_path: &Path,
 	cache_path: &Path,
-) -> Result<(InsertThumbnail, Option<Vec<u8>>), SecretStorageError> {
+) -> Result<Option<(PathBuf, Vec<u8>)>, SecretStorageError> {
 	let epub = rbook::Epub::open(book_path)?;
 	let epub_manifest = epub.manifest();
 	let cover_image = epub_manifest.cover_image().or_else(|| {
@@ -138,15 +145,7 @@ fn create_thumbnail(
 	});
 	let Some(cover_image) = cover_image else {
 		log::trace!("No cover image for {:?}", id);
-
-		return Ok((
-			InsertThumbnail {
-				book_id: id.value(),
-				path: None,
-				added_at: Utc::now(),
-			},
-			None,
-		));
+		return Ok(None);
 	};
 
 	log::trace!("Found cover image for {:?}", id);
@@ -184,13 +183,7 @@ fn create_thumbnail(
 
 	fs::write(&thumbnail_path, bytes.as_slice())?;
 
-	let thumbnail = InsertThumbnail {
-		book_id: id.value(),
-		path: Some(thumbnail_path),
-		added_at: Utc::now(),
-	};
-
-	Ok((thumbnail, Some(bytes)))
+	Ok(Some((thumbnail_path, bytes)))
 }
 
 fn scan_book(entry: &fs::DirEntry) -> Result<InsertBook, SecretStorageError> {
