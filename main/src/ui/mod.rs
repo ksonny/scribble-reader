@@ -55,8 +55,6 @@ pub(crate) struct BookCard {
 	pub(crate) title: Option<Arc<String>>,
 	pub(crate) author: Option<Arc<String>>,
 	pub(crate) modified_at: DateTime<Utc>,
-	pub(crate) added_at: DateTime<Utc>,
-	pub(crate) opened_at: Option<DateTime<Utc>>,
 	pub(crate) words_total: Option<u64>,
 	pub(crate) words_position: Option<u64>,
 	pub(crate) thumbnail: Option<Thumbnail>,

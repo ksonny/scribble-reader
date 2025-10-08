@@ -156,7 +156,6 @@ struct App<'window> {
 	gestures: GestureTracker<10>,
 	illustrator: Option<Illustrator>,
 	settings: scribe::Settings,
-	font_system: cosmic_text::FontSystem,
 }
 
 impl App<'_> {
@@ -432,13 +431,8 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					.egui_ctx
 					.run(input, |ctx| self.view.draw(ctx, &self.poke_stick));
 
-				match renderer.prepare(output, &mut self.font_system, []) {
-					Ok(_) => {}
-					Err(e) => {
-						log::error!("Failed prepare: {e}");
-						return;
-					}
-				}
+				renderer.prepare_ui(output);
+
 				match renderer.render() {
 					Ok(_) => {}
 					Err(e) => {
@@ -459,8 +453,6 @@ fn create_card(entry: (library::Book, Option<library::Thumbnail>)) -> BookCard {
 		title: b.title,
 		author: b.author,
 		modified_at: b.modified_at,
-		added_at: b.added_at,
-		opened_at: b.opened_at,
 		words_total: b.words_total,
 		words_position: b.words_position,
 		thumbnail: tn.and_then(|tn| match tn {
@@ -641,7 +633,6 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 	};
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
-	let font_system = cosmic_text::FontSystem::new();
 
 	let mut app = App {
 		settings,
@@ -655,7 +646,6 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 		request_redraw: Instant::now(),
 		gestures,
 		illustrator: None,
-		font_system,
 	};
 
 	event_loop.run_app(&mut app)?;

@@ -1,5 +1,5 @@
-mod illurstrator_renderer;
 mod gui_renderer;
+mod illurstrator_renderer;
 
 use winit::dpi::PhysicalSize;
 
@@ -174,13 +174,15 @@ impl Renderer<'_> {
 		}
 	}
 
-	pub(crate) fn prepare<'a>(
+	pub(crate) fn prepare_ui(&mut self, output: egui::output::FullOutput) {
+		self.gui_renderer.prepare(&self.device, &self.queue, output);
+	}
+
+	pub(crate) fn prepare_page<'a>(
 		&mut self,
-		output: egui::output::FullOutput,
 		font_system: &mut cosmic_text::FontSystem,
 		text_areas: impl IntoIterator<Item = glyphon::TextArea<'a>>,
 	) -> Result<(), RendererError> {
-		self.gui_renderer.prepare(&self.device, &self.queue, output);
 		self.book_renderer
 			.prepare(&self.device, &self.queue, font_system, text_areas)?;
 		Ok(())
