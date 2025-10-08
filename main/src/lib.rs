@@ -525,8 +525,11 @@ impl ScribeBell for EventLoopBell {
 		proxy.send_event(AppPoke::BookUpdated(id)).unwrap();
 	}
 
-	fn fail(&self, _ticket: scribe::ScribeTicket, error: String) {
+	fn fail(&self, ticket: scribe::ScribeTicket, error: String) {
 		log::error!("Error in scribe: {error}");
+		let EventLoopBell(proxy) = self;
+		// TODO: Maybe other event?
+		proxy.send_event(AppPoke::Completed(ticket)).unwrap();
 	}
 
 	fn complete(&self, ticket: scribe::ScribeTicket) {
