@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cosmic-text = { workspace = true }
 epub = { workspace = true }
 fixed = "1.29.0"
 html5ever = "0.35.0"

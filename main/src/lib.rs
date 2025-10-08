@@ -156,6 +156,7 @@ struct App<'window> {
 	gestures: GestureTracker<10>,
 	illustrator: Option<Illustrator>,
 	settings: scribe::Settings,
+	font_system: cosmic_text::FontSystem,
 }
 
 impl App<'_> {
@@ -232,7 +233,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			.set_min_distance_by_screen(size.width, size.height);
 
 		if let Some(renderer) = self.renderer.as_mut() {
-			match renderer.resume(window, &self.egui_ctx) {
+			match renderer.resume(window) {
 				Ok(_) => {}
 				Err(e) => {
 					error!("Failed to resume renderer: {e}");
@@ -431,7 +432,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					.egui_ctx
 					.run(input, |ctx| self.view.draw(ctx, &self.poke_stick));
 
-				match renderer.prepare_with(&self.egui_ctx, output) {
+				match renderer.prepare(output, &mut self.font_system, []) {
 					Ok(_) => {}
 					Err(e) => {
 						log::error!("Failed prepare: {e}");
@@ -640,6 +641,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 	};
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
+	let font_system = cosmic_text::FontSystem::new();
 
 	let mut app = App {
 		settings,
@@ -653,6 +655,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 		request_redraw: Instant::now(),
 		gestures,
 		illustrator: None,
+		font_system,
 	};
 
 	event_loop.run_app(&mut app)?;

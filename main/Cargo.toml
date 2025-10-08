@@ -8,18 +8,20 @@ publish = false
 [dependencies]
 chrono = { workspace = true }
 config = { workspace = true }
+cosmic-text = { workspace = true }
 dotenv = "0.15.0"
 egui = "0.32.3"
 egui-wgpu = "0.32.3"
 egui-winit = "0.32.3"
 egui_extras = { version = "0.32.3", features = ["image"] }
 env_logger = { workspace = true }
+glyphon = "0.9.0"
 illustrator = { version = "0.1.0", path = "../illustrator" }
 image = { workspace = true }
 integer-sqrt = "0.1.5"
 lazy_static = "1.5.0"
 log = { workspace = true }
-lucide-icons = "0.544.0"
+lucide-icons = "0.545.0"
 pollster = "0.4.0"
 rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
@@ -27,6 +29,7 @@ scribe = { version = "0.1.0", path = "../scribe" }
 serde = { workspace = true }
 serde_rusqlite = "0.40.0"
 thiserror = { workspace = true }
+wgpu = "25.0.2"
 xdg = "3.0.0"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

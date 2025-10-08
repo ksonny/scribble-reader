@@ -1,4 +1,6 @@
-use egui::TexturesDelta;
+mod illurstrator_renderer;
+mod gui_renderer;
+
 use winit::dpi::PhysicalSize;
 
 use egui_wgpu::wgpu::{
@@ -17,6 +19,10 @@ pub(crate) enum RendererError {
 	RequestAdapter(#[from] wgpu::wgt::RequestAdapterError),
 	#[error(transparent)]
 	Surface(#[from] wgpu::SurfaceError),
+	#[error(transparent)]
+	GlyphoPrepare(#[from] glyphon::PrepareError),
+	#[error(transparent)]
+	GlyphoRender(#[from] glyphon::RenderError),
 	#[error("Failed to get surface format")]
 	NoTextureFormat,
 	#[error("Failed to get surface alpha mode")]
@@ -30,17 +36,15 @@ struct SurfaceState<'window> {
 	format: wgpu::TextureFormat,
 	alpha_mode: wgpu::CompositeAlphaMode,
 	surface: wgpu::Surface<'window>,
-	screen: egui_wgpu::ScreenDescriptor,
-	egui_state: egui_winit::State,
 }
 
 impl<'window> SurfaceState<'window> {
-	fn setup_swapchain(&self, device: &wgpu::Device, size: PhysicalSize<u32>) {
+	fn setup_swapchain(&self, device: &wgpu::Device, width: u32, height: u32) {
 		let surface_configuration = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 			format: self.format,
-			width: size.width,
-			height: size.height,
+			width,
+			height,
 			present_mode: wgpu::PresentMode::AutoVsync,
 			alpha_mode: self.alpha_mode,
 			view_formats: vec![self.format],
@@ -56,10 +60,11 @@ pub(crate) struct Renderer<'window> {
 	adapter: wgpu::Adapter,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
-	gui_renderer: egui_wgpu::Renderer,
-	paint_jobs: Vec<egui::ClippedPrimitive>,
-	textures: egui::TexturesDelta,
+	book_renderer: illurstrator_renderer::Renderer,
+	gui_renderer: gui_renderer::Renderer,
 	surface_state: Option<SurfaceState<'window>>,
+	resized: Option<PhysicalSize<u32>>,
+	rescale: Option<f64>,
 }
 
 impl Renderer<'_> {
@@ -91,130 +96,76 @@ impl Renderer<'_> {
 			})
 			.await?;
 
-		let cap = surface.get_capabilities(&adapter);
-		let format = cap
-			.formats
-			.iter()
-			.find(|f| matches!(*f, wgpu::TextureFormat::Rgba8Unorm))
-			.or_else(|| cap.formats.first())
-			.cloned()
-			.ok_or(RendererError::NoTextureFormat)?;
-		let alpha_mode = cap
-			.alpha_modes
-			.first()
-			.cloned()
-			.ok_or(RendererError::NoAlphaMode)?;
-		let gui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
-		let textures = TexturesDelta::default();
-		let paint_jobs = vec![];
-
 		let size = window.inner_size();
-		let scale_factor = window.scale_factor();
+		let (format, alpha_mode) = surface_format(&surface, &adapter)?;
 
-		let egui_state = egui_winit::State::new(
-			egui_ctx.clone(),
-			egui::ViewportId::ROOT,
-			&window,
-			Some(window.scale_factor() as f32),
-			None,
-			Some(device.limits().max_texture_dimension_2d as usize),
-		);
-		let screen = egui_wgpu::ScreenDescriptor {
-			size_in_pixels: [size.width, size.height],
-			pixels_per_point: scale_factor as f32,
-		};
+		let mut text_renderer = illurstrator_renderer::Renderer::new(&device, &queue, format);
+		text_renderer.resize(&queue, size.width, size.height);
+
+		let mut gui_renderer = gui_renderer::Renderer::new(&device, format, egui_ctx.clone());
+		gui_renderer.resume(&device, window.clone());
 
 		let surface_state = SurfaceState {
 			window,
 			surface,
 			format,
 			alpha_mode,
-			screen,
-			egui_state,
 		};
-		surface_state.setup_swapchain(&device, size);
+		surface_state.setup_swapchain(&device, size.width, size.height);
 
 		Ok(Renderer {
 			instance,
 			adapter,
 			device,
 			queue,
+			book_renderer: text_renderer,
 			gui_renderer,
-			textures,
-			paint_jobs,
+			resized: None,
+			rescale: None,
 			surface_state: Some(surface_state),
 		})
 	}
 
-	pub(crate) fn resume(
-		&mut self,
-		window: Window,
-		egui_ctx: &egui::Context,
-	) -> Result<(), RendererError> {
+	pub(crate) fn resume(&mut self, window: Window) -> Result<(), RendererError> {
 		if self.surface_state.is_some() {
 			// Already initailized
 			return Ok(());
 		}
 
 		let window = Arc::new(window);
-		let size = window.inner_size();
-		let scale_factor = window.scale_factor();
+
 		let surface = self.instance.create_surface(window.clone())?;
 
-		let cap = surface.get_capabilities(&self.adapter);
-		let format = cap
-			.formats
-			.first()
-			.cloned()
-			.ok_or(RendererError::NoTextureFormat)?;
-		let alpha_mode = cap
-			.alpha_modes
-			.first()
-			.cloned()
-			.ok_or(RendererError::NoAlphaMode)?;
+		let size = window.inner_size();
+		let (format, alpha_mode) = surface_format(&surface, &self.adapter)?;
 
-		let egui_state = egui_winit::State::new(
-			egui_ctx.clone(),
-			egui::ViewportId::ROOT,
-			&window,
-			Some(window.scale_factor() as f32),
-			None,
-			Some(self.device.limits().max_texture_dimension_2d as usize),
-		);
-		let screen = egui_wgpu::ScreenDescriptor {
-			size_in_pixels: [size.width, size.height],
-			pixels_per_point: scale_factor as f32,
-		};
+		self.book_renderer
+			.resize(&self.queue, size.width, size.height);
+		self.gui_renderer.resume(&self.device, window.clone());
 
 		let surface_state = SurfaceState {
 			window,
 			surface,
 			format,
 			alpha_mode,
-			screen,
-			egui_state,
 		};
-		surface_state.setup_swapchain(&self.device, size);
+		surface_state.setup_swapchain(&self.device, size.width, size.height);
 		self.surface_state = Some(surface_state);
 
 		Ok(())
 	}
 
 	pub(crate) fn suspend(&mut self) {
+		self.gui_renderer.suspend();
 		self.surface_state.take();
 	}
 
 	pub(crate) fn resize(&mut self, size: PhysicalSize<u32>) {
-		if let Some(surface_state) = self.surface_state.as_mut() {
-			surface_state.screen.size_in_pixels = [size.width, size.height];
-			surface_state.setup_swapchain(&self.device, size);
-		}
+		self.resized = Some(size);
 	}
 
 	pub(crate) fn rescale(&mut self, scale_factor: f64) {
-		if let Some(surface_state) = self.surface_state.as_mut() {
-			surface_state.screen.pixels_per_point = scale_factor as f32;
-		}
+		self.rescale = Some(scale_factor);
 	}
 
 	pub(crate) fn request_redraw(&self) {
@@ -223,28 +174,33 @@ impl Renderer<'_> {
 		}
 	}
 
-	pub(crate) fn prepare_with(
+	pub(crate) fn prepare<'a>(
 		&mut self,
-		ctx: &egui::Context,
 		output: egui::output::FullOutput,
+		font_system: &mut cosmic_text::FontSystem,
+		text_areas: impl IntoIterator<Item = glyphon::TextArea<'a>>,
 	) -> Result<(), RendererError> {
-		let surface_state = self
-			.surface_state
-			.as_mut()
-			.ok_or(RendererError::SurfaceNotAvailable)?;
-		surface_state
-			.egui_state
-			.handle_platform_output(&surface_state.window, output.platform_output);
-		self.textures.append(output.textures_delta);
-		self.paint_jobs = ctx.tessellate(output.shapes, surface_state.screen.pixels_per_point);
+		self.gui_renderer.prepare(&self.device, &self.queue, output);
+		self.book_renderer
+			.prepare(&self.device, &self.queue, font_system, text_areas)?;
 		Ok(())
 	}
 
 	pub(crate) fn render(&mut self) -> Result<(), RendererError> {
 		let surface_state = self
 			.surface_state
-			.as_ref()
+			.as_mut()
 			.ok_or(RendererError::SurfaceNotAvailable)?;
+		if let Some(size) = self.resized.take() {
+			self.gui_renderer.resize(size.width, size.height);
+			self.book_renderer
+				.resize(&self.queue, size.width, size.height);
+			surface_state.setup_swapchain(&self.device, size.width, size.height);
+		}
+		if let Some(scale_factor) = self.rescale.take() {
+			self.gui_renderer.rescale(scale_factor);
+		}
+
 		match surface_state.surface.get_current_texture() {
 			Ok(frame) => {
 				let view = frame
@@ -257,58 +213,36 @@ impl Renderer<'_> {
 							label: Some("Renderer encoder"),
 						});
 
-				{
-					for (id, image_delta) in &self.textures.set {
-						self.gui_renderer.update_texture(
-							&self.device,
-							&self.queue,
-							*id,
-							image_delta,
-						);
-					}
+				self.gui_renderer
+					.update_buffers(&self.device, &self.queue, &mut encoder);
 
-					self.gui_renderer.update_buffers(
-						&self.device,
-						&self.queue,
-						&mut encoder,
-						&self.paint_jobs,
-						&surface_state.screen,
-					);
+				let mut rpass = encoder
+					.begin_render_pass(&wgpu::RenderPassDescriptor {
+						label: Some("Main pass"),
+						color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+							view: &view,
+							resolve_target: None,
+							ops: wgpu::Operations {
+								load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+								store: wgpu::StoreOp::Store,
+							},
+						})],
+						depth_stencil_attachment: None,
+						timestamp_writes: None,
+						occlusion_query_set: None,
+					})
+					.forget_lifetime();
 
-					let mut rpass = encoder
-						.begin_render_pass(&wgpu::RenderPassDescriptor {
-							label: Some("Clear color"),
-							color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-								view: &view,
-								resolve_target: None,
-								ops: wgpu::Operations {
-									load: wgpu::LoadOp::Clear(wgpu::Color {
-										r: 1.0,
-										g: 1.0,
-										b: 1.0,
-										a: 1.0,
-									}),
-									store: wgpu::StoreOp::Store,
-								},
-							})],
-							depth_stencil_attachment: None,
-							timestamp_writes: None,
-							occlusion_query_set: None,
-						})
-						.forget_lifetime();
+				self.book_renderer.render(&mut rpass)?;
+				self.gui_renderer.render(&mut rpass);
 
-					self.gui_renderer
-						.render(&mut rpass, &self.paint_jobs, &surface_state.screen);
-				}
-
-				let textures = std::mem::take(&mut self.textures);
-				for id in &textures.free {
-					self.gui_renderer.free_texture(id);
-				}
-
+				drop(rpass);
 				self.queue.submit(Some(encoder.finish()));
-
 				frame.present();
+
+				self.book_renderer.cleanup();
+				self.gui_renderer.cleanup();
+
 				Ok(())
 			}
 			Err(e @ wgpu::SurfaceError::OutOfMemory) => {
@@ -321,4 +255,24 @@ impl Renderer<'_> {
 			}
 		}
 	}
+}
+
+fn surface_format(
+	surface: &wgpu::Surface<'_>,
+	adapter: &wgpu::Adapter,
+) -> Result<(wgpu::TextureFormat, wgpu::CompositeAlphaMode), RendererError> {
+	let cap = surface.get_capabilities(adapter);
+	let format = cap
+		.formats
+		.iter()
+		.find(|f| matches!(*f, wgpu::TextureFormat::Rgba8Unorm))
+		.or_else(|| cap.formats.first())
+		.cloned()
+		.ok_or(RendererError::NoTextureFormat)?;
+	let alpha_mode = cap
+		.alpha_modes
+		.first()
+		.cloned()
+		.ok_or(RendererError::NoAlphaMode)?;
+	Ok((format, alpha_mode))
 }
