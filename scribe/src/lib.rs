@@ -57,7 +57,7 @@ pub enum ScribeError {
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 pub struct ScribeTicket(usize);
 
-pub trait ScribeBell {
+pub trait Bell {
 	fn library_loaded(&self);
 
 	fn library_sorted(&self);
@@ -100,10 +100,10 @@ pub enum ScribeState {
 }
 
 impl Scribe {
-	pub fn create<Bell>(bell: Bell, settings: &Settings) -> Result<Self, ScribeCreateError>
-	where
-		Bell: ScribeBell + Send + 'static,
-	{
+	pub fn create(
+		bell: impl Bell + Send + 'static,
+		settings: &Settings,
+	) -> Result<Self, ScribeCreateError> {
 		log::info!("Create scribe with {:?}", settings);
 
 		let config_path = settings.config_path.join("config.toml");
@@ -131,13 +131,17 @@ impl Scribe {
 			fs::create_dir_all(&settings.cache_path)?;
 		}
 		if !settings.cache_path.is_dir() {
-			return Err(ScribeCreateError::CachePathNotDir(settings.cache_path.clone()));
+			return Err(ScribeCreateError::CachePathNotDir(
+				settings.cache_path.clone(),
+			));
 		}
 		if !settings.data_path.try_exists()? {
 			fs::create_dir_all(&settings.data_path)?;
 		}
 		if !settings.data_path.is_dir() {
-			return Err(ScribeCreateError::DataPathNotDir(settings.data_path.clone()));
+			return Err(ScribeCreateError::DataPathNotDir(
+				settings.data_path.clone(),
+			));
 		}
 		let state_db_path = settings.data_path.join("state.db");
 
@@ -199,17 +203,14 @@ impl Scribe {
 	}
 }
 
-fn spawn_scribe<Bell>(
-	bell: Bell,
+fn spawn_scribe(
+	bell: impl Bell + Send + 'static,
 	lib_path: PathBuf,
 	worker_lib: library::Library,
 	mut records: record_keeper::RecordKeeper,
 	storage: secret_storage::SecretStorage,
 	order_rx: std::sync::mpsc::Receiver<(ScribeTicket, ScribeRequest)>,
-) -> JoinHandle<Result<(), ScribeError>>
-where
-	Bell: ScribeBell + Send + 'static,
-{
+) -> JoinHandle<Result<(), ScribeError>> {
 	thread::spawn(move || -> Result<(), ScribeError> {
 		let lib = worker_lib;
 		log::info!("Started scribe worker");

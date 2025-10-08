@@ -6,14 +6,13 @@ edition = "2024"
 [dependencies]
 cosmic-text = { workspace = true }
 epub = { workspace = true }
-fixed = "1.29.0"
 html5ever = "0.35.0"
 image = { workspace = true }
 log = { workspace = true }
 mime = "0.3.17"
 rayon = { workspace = true }
 scribe = { version = "0.1.0", path = "../scribe" }
-taffy = "0.9.1"
+taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror = { workspace = true }
 zip = "5.1.1"
 

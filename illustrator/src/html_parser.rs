@@ -50,6 +50,7 @@ pub struct ElementWrapper<'a> {
 	pub el: &'a Element,
 }
 
+#[allow(unused)]
 impl<'a> ElementWrapper<'a> {
 	pub fn name(&'a self) -> &'a QualName {
 		&self.el.name
@@ -68,10 +69,22 @@ impl<'a> ElementWrapper<'a> {
 	}
 }
 
+#[derive(Debug, Clone)]
+pub struct TextWrapper<'a> {
+	pub id: taffy::NodeId,
+	pub t: &'a Text,
+}
+
+impl<'a> TextWrapper<'a> {
+	pub fn text(&'a self) -> &'a str {
+		&self.t.t
+	}
+}
+
 pub enum EdgeRef<'a> {
 	OpenElement(ElementWrapper<'a>),
 	CloseElement(taffy::NodeId),
-	Text(&'a Text),
+	Text(TextWrapper<'a>),
 }
 
 pub struct NodeTreeIter<'a> {
@@ -93,10 +106,11 @@ impl<'a> Iterator for NodeTreeIter<'a> {
 }
 
 pub struct NodeTree {
-	tree: taffy::TaffyTree<Node>,
-	root: taffy::NodeId,
-	error: taffy::NodeId,
-	parse_errors: Vec<Cow<'static, str>>,
+	pub(crate) tree: taffy::TaffyTree<Node>,
+	pub(crate) root: taffy::NodeId,
+	#[allow(unused)]
+	pub(crate) error: taffy::NodeId,
+	pub(crate) parse_errors: Vec<Cow<'static, str>>,
 }
 
 impl NodeTree {
@@ -134,7 +148,7 @@ impl NodeTree {
 				Some(Node::Element(el)) => {
 					Some(EdgeRef::OpenElement(ElementWrapper { id: child, el }))
 				}
-				Some(Node::Text(text)) => Some(EdgeRef::Text(text)),
+				Some(Node::Text(t)) => Some(EdgeRef::Text(TextWrapper { id: child, t })),
 				None => None,
 			})
 	}
@@ -165,7 +179,7 @@ pub struct NodeTreeBuilder {
 }
 
 impl NodeTreeBuilder {
-	pub fn create() -> Result<Self, TreeBuilderError> {
+	pub fn new() -> Result<Self, TreeBuilderError> {
 		let mut tree = TaffyTree::new();
 		let root = tree.new_leaf(Style::default())?;
 		let error = tree.new_leaf(Style::default())?;
@@ -367,6 +381,9 @@ impl NodeTreeBuilder {
 			}
 			NodeOrText::AppendText(t) => {
 				log::trace!("append({parent:?}, '{t}')");
+				if t.trim().is_empty() {
+					return Ok(());
+				}
 				let last_child = tree.children(parent).ok().and_then(|v| v.last().cloned());
 				if let Some(node_id) = last_child {
 					match tree.get_node_context_mut(node_id) {
@@ -412,17 +429,18 @@ impl NodeTreeBuilder {
 				}
 				tree.insert_child_at_index(parent, sibling_index, node)?;
 			}
-			NodeOrText::AppendText(t_append) => {
-				log::trace!("append_before_sibling({sibling:?}, '{t_append}')");
+			NodeOrText::AppendText(t) => {
+				log::trace!("append_before_sibling({sibling:?}, '{t}')");
+				if t.trim().is_empty() {
+					return Ok(());
+				}
 				if let Ok(node) = tree.child_at_index(parent, sibling_index - 1)
-					&& let Some(Node::Text(Text { t })) = tree.get_node_context_mut(node)
+					&& let Some(Node::Text(Text { t: tendril })) = tree.get_node_context_mut(node)
 				{
-					t.push_tendril(&t_append);
+					tendril.push_tendril(&t);
 				} else {
-					let node = tree.new_leaf_with_context(
-						Style::default(),
-						Node::Text(Text { t: t_append }),
-					)?;
+					let node =
+						tree.new_leaf_with_context(Style::default(), Node::Text(Text { t }))?;
 					tree.insert_child_at_index(parent, sibling_index, node)?;
 				}
 			}
@@ -458,6 +476,7 @@ mod tests {
 	use html5ever::parse_document;
 	use html5ever::tendril::TendrilSink;
 
+	use crate::html_parser::EdgeRef;
 	use crate::html_parser::Node;
 	use crate::html_parser::NodeTreeBuilder;
 
@@ -466,7 +485,7 @@ mod tests {
 		let _ = env_logger::try_init();
 		let input = "testing";
 
-		let parser = parse_document(NodeTreeBuilder::create().unwrap(), Default::default());
+		let parser = parse_document(NodeTreeBuilder::new().unwrap(), Default::default());
 		let tree = parser.one(input);
 
 		let children = tree.tree.children(tree.root).unwrap();
@@ -509,24 +528,23 @@ mod tests {
 </html>
 "#;
 
-		let parser = parse_document(NodeTreeBuilder::create().unwrap(), Default::default());
+		let parser = parse_document(NodeTreeBuilder::new().unwrap(), Default::default());
 		parser.one(input);
 	}
 
-	/*
 	#[test]
 	fn test_html_parser_basic_iter() {
 		let _ = env_logger::try_init();
 		let input = "testing";
 
-		let parser = parse_document(NodeTreeBuilder::default(), Default::default());
+		let parser = parse_document(NodeTreeBuilder::new().unwrap(), Default::default());
 		let node_tree = parser.one(input);
 
 		let mut has_html = false;
 		let mut has_head = false;
 		let mut has_body = false;
 
-		for n in node_tree.iter() {
+		for n in node_tree.nodes() {
 			match n {
 				EdgeRef::OpenElement(el) => {
 					if el.local_name() == "html" {
@@ -541,7 +559,7 @@ mod tests {
 				}
 				EdgeRef::CloseElement(_) => {}
 				EdgeRef::Text(text) => {
-					let s = text.t.to_string();
+					let s = text.text();
 					assert_eq!(s, input, "Unexpected text content");
 				}
 			}
@@ -551,6 +569,4 @@ mod tests {
 		assert!(has_head, "Missing head element");
 		assert!(has_body, "Missing body element");
 	}
-
-	*/
 }

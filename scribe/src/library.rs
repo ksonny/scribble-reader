@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -33,6 +34,19 @@ impl BookId {
 	pub fn value(&self) -> i64 {
 		let BookId(id) = self;
 		*id
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Location {
+	Word(u64),
+}
+
+impl Display for Location {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Location::Word(word) => write!(f, "[Word {word}]"),
+		}
 	}
 }
 
