@@ -20,3 +20,6 @@ inherits = "dev"
 opt-level = 1
 overflow-checks = false
 
+[profile.release]
+lto = "thin"
+

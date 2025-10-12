@@ -14,8 +14,12 @@ pub enum IllustratorError {
 	Render(#[from] IllustratorRenderError),
 	#[error("at {1}: {0}")]
 	Io(std::io::Error, &'static std::panic::Location<'static>),
+	#[error("Spineless book: {0}")]
+	SpinelessBook(crate::library::Location),
 	#[error("Missing resource {0}")]
 	MissingResource(String),
+	#[error("Impossible missing cache")]
+	ImpossibleMissingCache,
 }
 
 impl From<std::io::Error> for IllustratorError {

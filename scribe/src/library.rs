@@ -39,13 +39,23 @@ impl BookId {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Location {
-	Word(u64),
+	Spine { spine: u64, element: u64 },
+}
+
+impl Location {
+	pub fn with_word(self, word: u64) -> Self {
+		let Location::Spine { spine: index, .. } = self;
+		Location::Spine {
+			spine: index,
+			element: word,
+		}
+	}
 }
 
 impl Display for Location {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			Location::Word(word) => write!(f, "[Word {word}]"),
+			Location::Spine { spine, element } => write!(f, "[Spine {spine}:{element}]"),
 		}
 	}
 }
@@ -61,8 +71,8 @@ pub struct Book {
 	pub modified_at: DateTime<Utc>,
 	pub added_at: DateTime<Utc>,
 	pub opened_at: Option<DateTime<Utc>>,
-	pub words_total: Option<u64>,
-	pub words_position: Option<u64>,
+	pub spine: Option<u64>,
+	pub element: Option<u64>,
 }
 
 #[derive(Debug, Clone)]

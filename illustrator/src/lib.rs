@@ -33,6 +33,7 @@ use scribe::library::Location;
 use taffy::prelude::*;
 use zip::ZipArchive;
 use zip::read::ZipFile;
+use bitflags::bitflags;
 
 use crate::error::IllustratorError;
 use crate::error::IllustratorRenderError;
@@ -53,20 +54,104 @@ pub struct PageContentCache {
 impl PageContentCache {
 	pub fn page(&self, loc: Location) -> Option<&PageContent> {
 		match loc {
-			Location::Word(word) => self.pages.iter().find(|p| p.words.contains(&word)),
+			Location::Spine { spine, element } => self
+				.pages
+				.iter()
+				.find(|p| p.spine_index == spine && p.elements.contains(&element)),
 		}
 	}
 
-	pub fn extend(&mut self, pages: impl IntoIterator<Item = PageContent>) {
+	fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Result<Location, IllustratorError> {
+		let page = self
+			.page(loc)
+			.ok_or(IllustratorError::ImpossibleMissingCache)?;
+		let Location::Spine { spine, .. } = loc;
+		if page.position.contains(PagePosition::Last) {
+			let item = book_meta.spine.get(spine as usize + 1).ok_or_else(|| {
+				IllustratorError::SpinelessBook(Location::Spine {
+					spine: spine.saturating_sub(1),
+					element: u64::MAX,
+				})
+			})?;
+			Ok(Location::Spine {
+				spine: item.index,
+				element: item.elements.start,
+			})
+		} else {
+			debug_assert!(
+				self.pages
+					.iter()
+					.filter(|p| p.spine_index == spine)
+					.is_sorted_by_key(|p| p.elements.start),
+				"Cache not sorted"
+			);
+			self.pages
+				.iter()
+				.find(|p| p.spine_index == spine && p.elements.start > page.elements.start)
+				.map(|p| Location::Spine {
+					spine,
+					element: p.elements.start,
+				})
+				.ok_or(IllustratorError::ImpossibleMissingCache)
+		}
+	}
+
+	fn previous_page(
+		&self,
+		book_meta: &BookMeta,
+		loc: Location,
+	) -> Result<Location, IllustratorError> {
+		let page = self
+			.page(loc)
+			.ok_or(IllustratorError::ImpossibleMissingCache)?;
+		let Location::Spine { spine, .. } = loc;
+		if page.position.contains(PagePosition::First) {
+			let item = book_meta
+				.spine
+				.get(spine.saturating_sub(1) as usize)
+				.ok_or_else(|| {
+					IllustratorError::SpinelessBook(Location::Spine {
+						spine: spine.saturating_sub(1),
+						element: u64::MAX,
+					})
+				})?;
+			Ok(Location::Spine {
+				spine: item.index,
+				element: item.elements.end.saturating_sub(1),
+			})
+		} else {
+			debug_assert!(
+				self.pages
+					.iter()
+					.filter(|p| p.spine_index == spine)
+					.is_sorted_by_key(|p| p.elements.start),
+				"Cache not sorted"
+			);
+			self.pages
+				.iter()
+				.rfind(|p| p.spine_index == spine && p.elements.start < page.elements.start)
+				.map(|p| Location::Spine {
+					spine,
+					element: p.elements.start,
+				})
+				.ok_or(IllustratorError::ImpossibleMissingCache)
+		}
+	}
+
+	fn is_cached(&self, spine_item: &BookSpineItem) -> bool {
+		self.pages.iter().any(|p| p.spine_index == spine_item.index)
+	}
+
+	fn insert(
+		&mut self,
+		_spine_item: &BookSpineItem,
+		pages: impl IntoIterator<Item = PageContent>,
+	) {
 		self.pages.extend(pages)
 	}
 
 	pub fn clear(&mut self) {
 		self.pages.clear()
-	}
-
-	pub fn drain(&mut self, words: Range<u64>) {
-		self.pages.retain(|p| !words.contains(&p.words.start));
 	}
 }
 
@@ -126,6 +211,7 @@ impl Illustrator {
 	}
 
 	pub fn resize(&mut self, width: u32, height: u32) {
+		log::info!("Resize event");
 		let mut settings = self.settings.write().unwrap();
 		settings.page_width = width;
 		settings.page_height = height;
@@ -133,20 +219,21 @@ impl Illustrator {
 	}
 
 	pub fn rescale(&mut self, scale: f32) {
+		log::info!("Rescale event");
 		let mut settings = self.settings.write().unwrap();
 		settings.scale = scale;
 		self.settings_changed = true;
 	}
 
 	pub fn refresh_if_needed(&mut self) {
-		if self.settings_changed
-			&& let Some(req_tx) = &self.req_tx
-		{
-			match req_tx.send(Request::RefreshCache) {
-				Ok(_) => {}
-				Err(e) => {
-					log::info!("Error on illustrator channel, close: {e}");
-					self.req_tx = None;
+		if self.settings_changed {
+			if let Some(req_tx) = &self.req_tx {
+				match req_tx.send(Request::RefreshCache) {
+					Ok(_) => {}
+					Err(e) => {
+						log::info!("Error on illustrator channel, close: {e}");
+						self.req_tx = None;
+					}
 				}
 			}
 			self.settings_changed = false;
@@ -200,10 +287,12 @@ struct BookToCItem {
 	play_order: usize,
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 struct BookSpineItem {
+	index: u64,
 	idref: String,
-	words: Range<u64>,
+	elements: Range<u64>,
 }
 
 #[allow(unused)]
@@ -213,7 +302,6 @@ struct BookMeta {
 	toc: Vec<BookToCItem>,
 	toc_title: String,
 	cover_id: Option<String>,
-	total_words: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -243,36 +331,33 @@ impl BookMeta {
 			convert_toc(&mut items, toc.into_iter());
 			items
 		};
+
 		let spine = {
 			let mut builder = NodeTreeBuilder::new()?;
 			let mut items = Vec::new();
-			let mut words = 0;
-			for item in spine {
+			let mut elements = 0;
+			for (index, item) in spine.into_iter().enumerate() {
 				let res = resources
 					.get(&item.idref)
 					.ok_or_else(|| IllustratorError::MissingResource(item.idref.clone()))?;
-				let tree = builder.read_from(archive.by_path(&res.path)?)?;
-				let start = words;
-				words += tree
-					.nodes()
-					.map(|n| {
-						if let EdgeRef::Text(text) = n {
-							count_words(text.text())
-						} else {
-							0
-						}
-					})
-					.sum::<u64>();
+				let file = archive.by_path(&res.path)?;
+				let tree = builder.read_from(file)?;
+				if let Some(body_iter) = tree.body_nodes() {
+					let start = elements;
+					elements += body_iter
+						.filter(|n| matches!(n, EdgeRef::OpenElement(..)))
+						.count() as u64;
+					items.push(BookSpineItem {
+						index: index as u64,
+						idref: item.idref,
+						elements: start..elements,
+					});
+				}
 				builder = tree.into_builder()?;
-
-				items.push(BookSpineItem {
-					idref: item.idref,
-					words: start..words,
-				});
 			}
 			items
 		};
-		let total_words = spine.last().map(|s| s.words.end).unwrap_or(0);
+
 		let dur = Instant::now().duration_since(start);
 		log::info!(
 			"Opened {:?} in {}",
@@ -286,38 +371,16 @@ impl BookMeta {
 			toc_title,
 			toc,
 			cover_id,
-			total_words,
 		})
 	}
 
 	fn spine_resource(&self, loc: Location) -> Option<(&BookSpineItem, &Path)> {
-		let Location::Word(word) = loc;
+		let Location::Spine { spine, element } = loc;
 		self.spine
-			.iter()
-			.find(|s| s.words.contains(&word))
+			.get(spine as usize)
+			.filter(|s| s.elements.contains(&element))
 			.and_then(|s| self.resources.get(&s.idref).map(|r| (s, r.path.as_path())))
 	}
-
-	fn to_word(&self, loc: Location) -> u64 {
-		let Location::Word(word) = loc;
-		word
-	}
-}
-
-fn count_words(input: &str) -> u64 {
-	let mut words = 0;
-	let mut in_word = false;
-	for b in input.as_bytes() {
-		if matches!(*b, b'\t' | b'\n' | b' ') {
-			if in_word {
-				in_word = false;
-				words += 1;
-			}
-		} else if !in_word {
-			in_word = true;
-		}
-	}
-	words
 }
 
 fn convert_toc(toc_items: &mut Vec<BookToCItem>, iter: impl Iterator<Item = NavPoint>) {
@@ -349,9 +412,19 @@ pub enum DisplayItem {
 	Text(DisplayText),
 }
 
+bitflags! {
+	#[derive(Debug)]
+	pub struct PagePosition: u8 {
+		const First = 1;
+		const Last  = 1 << 1;
+	}
+}
+
 #[derive(Debug)]
 pub struct PageContent {
-	pub words: Range<u64>,
+	pub spine_index: u64,
+	pub position: PagePosition,
+	pub elements: Range<u64>,
 	pub items: Vec<DisplayItem>,
 }
 
@@ -420,7 +493,6 @@ pub fn spawn_illustrator(
 
 	log::info!("Open book {id:?}");
 	let book = records.fetch_book(id)?;
-	let word_position = book.words_position.unwrap_or(0);
 
 	let (req_tx, req_rx) = channel();
 	let font_system = illustrator.font_system.clone();
@@ -442,147 +514,157 @@ pub fn spawn_illustrator(
 			BookMeta::create(doc, &mut archive).inspect_err(|e| log::error!("Error: {e}"))?;
 
 		log::info!(
-			"Opened book with {} words, {} resources, {} spine items",
-			book_meta.total_words,
+			"Opened book with {} resources, {} spine items",
 			book_meta.resources.len(),
 			book_meta.spine.len()
 		);
 		records
-			.record_book_state(id, book_meta.total_words, None)
+			.record_book_state(id, None)
 			.inspect_err(|e| log::error!("Error: {e}"))?;
 
 		cache.write().unwrap().clear();
 
 		let mut builder = NodeTreeBuilder::new().unwrap();
-		let mut current_loc = Location::Word(word_position);
-		match assure_cached(
-			&settings,
-			&font_system,
-			&cache,
-			&book_meta,
-			&mut archive,
-			builder,
-			current_loc,
-		) {
-			Ok(b) => builder = b,
-			Err(e) => {
-				log::error!("Illustrator error: {e}");
-				builder = NodeTreeBuilder::new().unwrap();
-			}
+		let mut current_loc = Location::Spine {
+			spine: book.spine.unwrap_or(0),
+			element: book.element.unwrap_or(0),
 		};
-		bell.content_ready(id, current_loc);
+		if let Some((item, path)) = book_meta.spine_resource(current_loc) {
+			builder = assure_cached(
+				&settings,
+				&font_system,
+				&cache,
+				&mut archive,
+				builder,
+				item,
+				path,
+			)
+			.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+			bell.content_ready(id, current_loc);
+		} else {
+			log::error!("Invalid book location, reset to first page");
+			current_loc = Location::Spine {
+				spine: 0,
+				element: 0,
+			};
+			let (item, path) = book_meta
+				.spine_resource(current_loc)
+				.ok_or(IllustratorError::SpinelessBook(current_loc))
+				.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+			builder = assure_cached(
+				&settings,
+				&font_system,
+				&cache,
+				&mut archive,
+				builder,
+				item,
+				path,
+			)
+			.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+			records
+				.record_book_state(id, Some(current_loc))
+				.inspect_err(|e| log::error!("Error: {e}"))?;
+			bell.content_ready(id, current_loc);
+		}
 
 		for req in req_rx.iter() {
 			match req {
 				Request::NextPage => {
 					log::info!("NextPage {current_loc}");
-					let loc = next_page_loc(&cache, &book_meta, current_loc);
-					if let Some(loc) = loc {
-						current_loc = loc;
-						match assure_cached(
+					let loc = cache
+						.read()
+						.unwrap()
+						.next_page(&book_meta, current_loc)
+						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					log::info!("Goto next page at {loc}");
+					if let Some((item, path)) = book_meta.spine_resource(loc) {
+						builder = assure_cached(
 							&settings,
 							&font_system,
 							&cache,
-							&book_meta,
 							&mut archive,
 							builder,
-							current_loc,
-						) {
-							Ok(b) => builder = b,
-							Err(e) => {
-								log::error!("Illustrator error: {e}");
-								builder = NodeTreeBuilder::new().unwrap();
-								continue;
-							}
-						};
+							item,
+							path,
+						)
+						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+						current_loc = loc;
 						log::info!("Record loc {current_loc}");
 						records
-							.record_book_state(
-								id,
-								book_meta.total_words,
-								Some(book_meta.to_word(current_loc)),
-							)
+							.record_book_state(id, Some(current_loc))
 							.inspect_err(|e| log::error!("Error: {e}"))?;
 						bell.content_ready(id, current_loc);
 					} else {
-						log::info!("At end {current_loc}");
+						log::info!("At end of book: {loc}")
 					}
 				}
 				Request::PreviousPage => {
 					log::info!("PreviousPage {current_loc}");
-					current_loc = previous_page_loc(&cache, &book_meta, current_loc);
-					match assure_cached(
+					let loc = cache
+						.read()
+						.unwrap()
+						.previous_page(&book_meta, current_loc)
+						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					let (item, path) = book_meta
+						.spine_resource(loc)
+						.ok_or(IllustratorError::SpinelessBook(loc))
+						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					builder = assure_cached(
 						&settings,
 						&font_system,
 						&cache,
-						&book_meta,
 						&mut archive,
 						builder,
-						current_loc,
-					) {
-						Ok(b) => builder = b,
-						Err(e) => {
-							log::error!("Illustrator error: {e}");
-							builder = NodeTreeBuilder::new().unwrap();
-							continue;
-						}
-					};
+						item,
+						path,
+					)
+					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					current_loc = loc;
 					log::info!("Record loc {current_loc}");
 					records
-						.record_book_state(
-							id,
-							book_meta.total_words,
-							Some(book_meta.to_word(current_loc)),
-						)
+						.record_book_state(id, Some(current_loc))
 						.inspect_err(|e| log::error!("Error: {e}"))?;
 					bell.content_ready(id, current_loc);
 				}
 				Request::Goto(loc) => {
 					log::info!("Goto {loc}");
-					current_loc = loc;
-					match assure_cached(
+					let (item, path) = book_meta
+						.spine_resource(loc)
+						.ok_or(IllustratorError::SpinelessBook(loc))
+						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					builder = assure_cached(
 						&settings,
 						&font_system,
 						&cache,
-						&book_meta,
 						&mut archive,
 						builder,
-						current_loc,
-					) {
-						Ok(b) => builder = b,
-						Err(e) => {
-							log::error!("Illustrator error: {e}");
-							builder = NodeTreeBuilder::new().unwrap();
-							continue;
-						}
-					};
+						item,
+						path,
+					)
+					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					current_loc = loc;
 					records
-						.record_book_state(
-							id,
-							book_meta.total_words,
-							Some(book_meta.to_word(current_loc)),
-						)
+						.record_book_state(id, Some(current_loc))
 						.inspect_err(|e| log::error!("Error: {e}"))?;
 					bell.content_ready(id, current_loc);
 				}
 				Request::RefreshCache => {
 					log::info!("Refresh cache");
 					cache.write().unwrap().clear();
-					match assure_cached(
+					let (item, path) = book_meta
+						.spine_resource(current_loc)
+						.ok_or(IllustratorError::SpinelessBook(current_loc))
+						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+					builder = assure_cached(
 						&settings,
 						&font_system,
 						&cache,
-						&book_meta,
 						&mut archive,
 						builder,
-						current_loc,
-					) {
-						Ok(b) => builder = b,
-						Err(e) => {
-							log::error!("Illustrator error: {e}");
-							builder = NodeTreeBuilder::new().unwrap();
-						}
-					};
+						item,
+						path,
+					)
+					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
 					bell.content_ready(id, current_loc);
 				}
 			}
@@ -595,65 +677,19 @@ pub fn spawn_illustrator(
 	Ok(IllustratorHandle { req_tx, handle })
 }
 
-fn next_page_loc(
-	cache: &RwLock<PageContentCache>,
-	book_meta: &BookMeta,
-	loc: Location,
-) -> Option<Location> {
-	let word = book_meta.to_word(loc);
-	let next_start = cache.read().unwrap().page(loc).map(|p| p.words.end);
-	if let Some(end) = next_start {
-		Some(Location::Word(end))
-	} else {
-		book_meta
-			.spine
-			.iter()
-			.find(|s| s.words.start > word)
-			.map(|s| Location::Word(s.words.start))
-	}
-}
-
-fn previous_page_loc(
-	cache: &RwLock<PageContentCache>,
-	book_meta: &BookMeta,
-	loc: Location,
-) -> Location {
-	let word = book_meta.to_word(loc);
-	let prev_start = {
-		let cache = cache.read().unwrap();
-		if let Some(start) = cache.page(loc).map(|p| p.words.start) {
-			cache
-				.page(Location::Word(start.saturating_sub(1)))
-				.map(|p| p.words.start)
-		} else {
-			None
-		}
-	};
-	if let Some(prev_start) = prev_start {
-		Location::Word(prev_start)
-	} else {
-		book_meta
-			.spine
-			.iter()
-			.rfind(|s| s.words.end < word)
-			.map(|s| Location::Word(s.words.start.saturating_sub(1)))
-			.unwrap_or(Location::Word(0))
-	}
-}
-
 fn assure_cached<R: io::Seek + io::Read>(
 	settings: &RwLock<RenderSettings>,
 	font_system: &Mutex<FontSystem>,
 	cache: &RwLock<PageContentCache>,
-	book_meta: &BookMeta,
 	archive: &mut ZipArchive<R>,
 	builder: NodeTreeBuilder,
-	loc: Location,
+	item: &BookSpineItem,
+	path: &Path,
 ) -> Result<NodeTreeBuilder, IllustratorError> {
-	if cache.read().unwrap().page(loc).is_some() {
-		log::trace!("Already cached {loc}");
+	if cache.read().unwrap().is_cached(item) {
+		log::trace!("Already cached {item:?}");
 		Ok(builder)
-	} else if let Some((item, path)) = book_meta.spine_resource(loc) {
+	} else {
 		log::info!("Refresh cache for {}", path.display());
 		let start = Instant::now();
 		let file = archive.by_path(path)?;
@@ -661,12 +697,11 @@ fn assure_cached<R: io::Seek + io::Read>(
 			&settings.read().unwrap(),
 			&mut font_system.lock().unwrap(),
 			file,
+			item,
 			builder,
-			item.words.start,
 		)?;
 		let mut cache = cache.write().unwrap();
-		cache.drain(item.words.clone());
-		cache.extend(pages);
+		cache.insert(item, pages);
 		drop(cache);
 		let dur = Instant::now().duration_since(start);
 		log::info!(
@@ -675,9 +710,6 @@ fn assure_cached<R: io::Seek + io::Read>(
 			dur.as_secs_f64()
 		);
 		Ok(b)
-	} else {
-		log::error!("No spine item associated with location {loc}");
-		Ok(builder)
 	}
 }
 
@@ -751,8 +783,8 @@ fn render_resource<R: io::Seek + io::Read>(
 	settings: &RenderSettings,
 	font_system: &mut FontSystem,
 	file: ZipFile<R>,
+	item: &BookSpineItem,
 	builder: NodeTreeBuilder,
-	word_offset: u64,
 ) -> Result<(Vec<PageContent>, NodeTreeBuilder), IllustratorRenderError> {
 	let mut node_tree = builder.read_from(file)?;
 	let body = node_tree
@@ -797,7 +829,7 @@ fn render_resource<R: io::Seek + io::Read>(
 		measurer.buffers
 	};
 
-	print_tree(&node_tree, &buffers)?;
+	// print_tree(&node_tree, &buffers)?;
 
 	let page_height = settings.page_height_padded();
 	let padding_top = settings.padding_top_em * settings.em();
@@ -807,12 +839,15 @@ fn render_resource<R: io::Seek + io::Read>(
 	let mut offset = taffy::Point::<f32>::zero();
 	let mut pages = Vec::new();
 	let mut page = PageContent {
-		words: word_offset..word_offset,
+		spine_index: item.index,
+		position: PagePosition::First,
+		elements: item.elements.start..item.elements.start,
 		items: Vec::new(),
 	};
 	for edge in NodeTreeIter::new(&node_tree.tree, body) {
 		match edge {
 			EdgeRef::OpenElement(el) => {
+				page.elements.end += 1;
 				let l = node_tree.tree.layout(el.id)?;
 				offset = taffy::Point {
 					x: offset.x + l.location.x,
@@ -831,11 +866,13 @@ fn render_resource<R: io::Seek + io::Read>(
 				let l = node_tree.tree.layout(text.id)?;
 				let content_end = offset.y + l.location.y + l.size.height;
 				if content_end - page_end > page_height {
-					log::info!("Break page at {page_end}, {:?}", page.words);
-					let words_end = page.words.end;
+					log::info!("Break page at {page_end} {:?}", page.elements);
+					let elements_end = page.elements.end;
 					pages.push(page);
 					page = PageContent {
-						words: words_end..words_end,
+						spine_index: item.index,
+						position: PagePosition::empty(),
+						elements: elements_end..elements_end,
 						items: Vec::new(),
 					};
 					page_end = offset.y + l.location.y;
@@ -843,7 +880,6 @@ fn render_resource<R: io::Seek + io::Read>(
 				let b = buffers
 					.remove(&text.id)
 					.ok_or(IllustratorRenderError::NoTextBuffer(text.id))?;
-				page.words.end += count_words(text.text());
 				page.items.push(DisplayItem::Text(DisplayText {
 					pos: taffy::Point {
 						x: padding_left + offset.x + l.location.x,
@@ -856,9 +892,19 @@ fn render_resource<R: io::Seek + io::Read>(
 		}
 	}
 	if !page.items.is_empty() {
+		log::info!("Last page {:?}", page.elements);
+		page.position.set(PagePosition::Last, true);
 		pages.push(page);
+	} else if let Some(last) = pages.last_mut() {
+		last.position.set(PagePosition::Last, true);
 	}
-	log::info!("Generated {} pages", pages.len());
+	log::trace!("Generated {} pages", pages.len());
+	debug_assert!(
+		pages
+			.last()
+			.is_none_or(|p| p.elements.end == item.elements.end),
+		"Element count missmatch"
+	);
 
 	Ok((pages, node_tree.into_builder()?))
 }

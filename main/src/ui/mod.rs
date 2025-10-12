@@ -227,8 +227,6 @@ pub(crate) struct BookCard {
 	pub(crate) title: Option<Arc<String>>,
 	pub(crate) author: Option<Arc<String>>,
 	pub(crate) modified_at: DateTime<Utc>,
-	pub(crate) words_total: Option<u64>,
-	pub(crate) words_position: Option<u64>,
 	pub(crate) thumbnail: Option<Thumbnail>,
 }
 
@@ -240,8 +238,6 @@ impl BookCard {
 			title: b.title,
 			author: b.author,
 			modified_at: b.modified_at,
-			words_total: b.words_total,
-			words_position: b.words_position,
 			thumbnail: tn.and_then(|tn| match tn {
 				library::Thumbnail::Bytes { bytes } => Some(Thumbnail { bytes }),
 				library::Thumbnail::None => None,
@@ -289,20 +285,7 @@ impl egui::Widget for BookCardUi<'_> {
 					ui.label(author);
 					let title = card.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
 					ui.label(RichText::new(title).text_style(TextStyle::Heading));
-					match (card.words_total, card.words_position) {
-						(Some(words_total), Some(words_position)) => ui.label(format!(
-							"{} - {}/{}",
-							card.modified_at.format("%Y-%m-%d %H:%M"),
-							words_position / 250,
-							words_total / 250,
-						)),
-						(Some(words_total), None) => ui.label(format!(
-							"{} - 0/{}",
-							card.modified_at.format("%Y-%m-%d %H:%M"),
-							words_total / 250
-						)),
-						_ => ui.label(format!("{}", card.modified_at.format("%Y-%m-%d %H:%M"))),
-					};
+					ui.label(format!("{}", card.modified_at.format("%Y-%m-%d %H:%M")));
 				});
 			});
 			ui.interact(

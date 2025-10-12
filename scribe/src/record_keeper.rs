@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::library;
+use crate::library::Location;
 
 const MIGRATIONS_SLICE: &[M<'_>] = &[
 	M::up(
@@ -43,9 +44,9 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 	M::up(
 		"create table book_reading_state (
 			book_id integer primary key,
-			opened_at integer,
-			words_position integer,
-			words_total integer not null,
+			opened_at integer not null,
+			spine integer,
+			element integer,
 			foreign key (book_id) references books(id)
 				on update cascade
 				on delete cascade
@@ -104,8 +105,8 @@ struct SecretBook {
 	added_at: DateTime<Utc>,
 	#[serde(with = "ts_seconds_option")]
 	opened_at: Option<DateTime<Utc>>,
-	words_total: Option<u64>,
-	words_position: Option<u64>,
+	spine: Option<u64>,
+	element: Option<u64>,
 }
 
 impl From<SecretBook> for library::Book {
@@ -119,8 +120,8 @@ impl From<SecretBook> for library::Book {
 			modified_at: value.modified_at,
 			added_at: value.added_at,
 			opened_at: value.opened_at,
-			words_total: value.words_total,
-			words_position: value.words_position,
+			spine: value.spine,
+			element: value.element,
 		}
 	}
 }
@@ -150,8 +151,8 @@ struct InsertBookState {
 	pub book_id: i64,
 	#[serde(with = "ts_seconds")]
 	pub opened_at: DateTime<Utc>,
-	pub words_total: u64,
-	pub words_position: Option<u64>,
+	pub spine: Option<u64>,
+	pub element: Option<u64>,
 }
 
 pub struct RecordKeeper {
@@ -181,8 +182,8 @@ impl RecordKeeper {
 				bo.modified_at,
 				bo.added_at,
 				bs.opened_at,
-				bs.words_total,
-				bs.words_position
+				bs.spine,
+				bs.element
 			from books bo
 			left join book_reading_state bs on bs.book_id = bo.id
 			where bo.exist = true
@@ -207,8 +208,8 @@ impl RecordKeeper {
 				bo.modified_at,
 				bo.added_at,
 				bs.opened_at,
-				bs.words_total,
-				bs.words_position
+				bs.spine,
+				bs.element
 			from books bo
 			left join book_reading_state bs on bs.book_id = bo.id
 			where bo.exist = true
@@ -296,24 +297,30 @@ impl RecordKeeper {
 	pub fn record_book_state(
 		&self,
 		id: super::BookId,
-		words_total: u64,
-		words_position: Option<u64>,
+		loc: Option<Location>,
 	) -> Result<(), RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
-			"insert into book_reading_state (book_id, opened_at, words_total, words_position)
-				values (:book_id, :opened_at, :words_total, :words_position)
+			"insert into book_reading_state (book_id, opened_at, spine, element)
+				values (:book_id, :opened_at, :spine, :element)
 			on conflict (book_id)
 			do update set
 				opened_at = :opened_at,
-				words_total = :words_total,
-				words_position = coalesce(:words_position, words_position);
+				spine = coalesce(:spine, spine),
+				element = coalesce(:element, element);
 			",
 		)?;
+		let (spine, element) = match loc {
+			Some(Location::Spine {
+				spine,
+				element,
+			}) => (Some(spine), Some(element)),
+			None => (None, None),
+		};
 		let state = InsertBookState {
 			book_id: id.value(),
 			opened_at: Utc::now(),
-			words_total,
-			words_position,
+			spine,
+			element,
 		};
 		stmt.execute(to_params_named(state)?.to_slice().as_slice())?;
 		Ok(())

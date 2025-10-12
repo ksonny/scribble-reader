@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -155,6 +156,7 @@ impl<'a> Iterator for NodeTreeIter<'a> {
 pub struct NodeTree {
 	pub(crate) tree: taffy::TaffyTree<Node>,
 	pub(crate) root: taffy::NodeId,
+	pub(crate) body: Option<taffy::NodeId>,
 	#[allow(unused)]
 	pub(crate) error: taffy::NodeId,
 	pub(crate) parse_errors: Vec<Cow<'static, str>>,
@@ -163,6 +165,10 @@ pub struct NodeTree {
 impl NodeTree {
 	pub fn nodes<'a>(&'a self) -> NodeTreeIter<'a> {
 		NodeTreeIter::new(&self.tree, self.root)
+	}
+
+	pub fn body_nodes<'a>(&'a self) -> Option<NodeTreeIter<'a>> {
+		self.body.map(|body| NodeTreeIter::new(&self.tree, body))
 	}
 
 	pub fn into_builder(self) -> Result<NodeTreeBuilder, TreeBuilderError> {
@@ -179,6 +185,7 @@ impl NodeTree {
 		Ok(NodeTreeBuilder {
 			tree: tree.into(),
 			root,
+			body: Cell::new(None),
 			error,
 			parse_errors: parse_errors.into(),
 		})
@@ -190,12 +197,14 @@ impl From<NodeTreeBuilder> for NodeTree {
 		let NodeTreeBuilder {
 			tree,
 			root,
+			body,
 			error,
 			parse_errors,
 		} = value;
 		Self {
 			tree: tree.into_inner(),
 			root,
+			body: body.into_inner(),
 			error,
 			parse_errors: parse_errors.into_inner(),
 		}
@@ -205,6 +214,7 @@ impl From<NodeTreeBuilder> for NodeTree {
 pub struct NodeTreeBuilder {
 	tree: RefCell<taffy::TaffyTree<Node>>,
 	root: taffy::NodeId,
+	body: Cell<Option<taffy::NodeId>>,
 	error: taffy::NodeId,
 	parse_errors: RefCell<Vec<Cow<'static, str>>>,
 }
@@ -219,6 +229,7 @@ impl NodeTreeBuilder {
 		Ok(Self {
 			tree: tree.into(),
 			root,
+			body: Cell::new(None),
 			error,
 			parse_errors,
 		})
@@ -265,6 +276,7 @@ impl TreeSink for NodeTreeBuilder {
 		_flags: html5ever::interface::ElementFlags,
 	) -> Self::Handle {
 		log::trace!("create_element({name:?}, {attrs:?})");
+		let is_body = name.local == local_name!("body");
 		let attrs = attrs
 			.into_iter()
 			.map(|a| ((a.name.ns, a.name.local), a.value.to_string()))
@@ -274,7 +286,12 @@ impl TreeSink for NodeTreeBuilder {
 			.borrow_mut()
 			.new_leaf_with_context(Style::default(), Node::Element(Element { name, attrs }))
 		{
-			Ok(node) => node,
+			Ok(node) => {
+				if is_body {
+					self.body.set(Some(node));
+				}
+				node
+			}
 			Err(e) => {
 				log::error!("error in create_element: {e}");
 				self.error
