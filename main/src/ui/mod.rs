@@ -495,6 +495,8 @@ impl MainView {
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context, poke_stick: &impl Bell) {
 		self.rects.clear();
+		self.menu_open = false;
+
 		let top_panel = egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
 			egui::MenuBar::new().ui(ui, |ui| {
 				let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
@@ -523,7 +525,7 @@ impl GuiView for MainView {
 					}
 				});
 				if menu.response.context_menu_opened() {
-					self.rects.push(menu.response.interact_rect);
+					self.rects.push(ctx.screen_rect());
 					self.menu_open = true;
 				}
 

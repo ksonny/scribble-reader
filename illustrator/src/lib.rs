@@ -18,9 +18,7 @@ use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
-use std::thread;
 use std::thread::JoinHandle;
-use std::time::Duration;
 use std::time::Instant;
 
 use cosmic_text::Attrs;
@@ -472,8 +470,7 @@ pub fn spawn_illustrator(
 		};
 		bell.content_ready(id, current_loc);
 
-		let mut req_iter = req_rx.iter();
-		while let Some(req) = req_iter.next() {
+		for req in req_rx.iter() {
 			match req {
 				Request::NextPage => {
 					log::info!("NextPage {current_loc}");

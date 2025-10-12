@@ -1,5 +1,5 @@
-use scribe::Settings;
 use scribble_reader::start;
+use scribe::Settings;
 use winit::event_loop::EventLoop;
 
 fn main() {

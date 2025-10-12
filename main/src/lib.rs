@@ -121,7 +121,6 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 
 					self.illustrator.refresh_if_needed();
 				}
-
 			}
 			winit::event::StartCause::WaitCancelled {
 				requested_resume, ..
@@ -218,6 +217,14 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 						log::error!("Error spawning illustrator: {e}");
 					}
 				};
+				if let Some(renderer) = &mut self.renderer {
+					match renderer.prepare_page(&mut self.illustrator.font_system().unwrap(), []) {
+						Ok(_) => {}
+						Err(e) => {
+							log::error!("Prepare failed: {e}");
+						}
+					};
+				}
 			}
 			AppPoke::BookContentReady(book_id, loc) => {
 				log::trace!("Book content ready {book_id:?} {loc}",);

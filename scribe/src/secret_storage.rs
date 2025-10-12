@@ -59,11 +59,7 @@ pub struct SecretStorage {
 impl SecretStorage {
 	const THUMBNAIL_SIZE: f32 = 320.0;
 
-	pub fn scan(
-		&self,
-		records: &mut RecordKeeper,
-		path: &Path,
-	) -> Result<u64, SecretStorageError> {
+	pub fn scan(&self, records: &mut RecordKeeper, path: &Path) -> Result<u64, SecretStorageError> {
 		if !path.is_dir() {
 			return Err(SecretStorageError::ScanPathNotDir);
 		}
@@ -137,7 +133,7 @@ fn create_thumbnail(
 	cache_path: &Path,
 ) -> Result<Option<(PathBuf, Vec<u8>)>, SecretStorageError> {
 	let mut doc = EpubDoc::new(book_path)?;
-    let cover_image = doc.get_cover();
+	let cover_image = doc.get_cover();
 	let Some((cover_image, mime)) = cover_image else {
 		log::trace!("No cover image for {:?}", id);
 		return Ok(None);
@@ -145,9 +141,7 @@ fn create_thumbnail(
 
 	log::trace!("Found cover image for {:?}", id);
 	if !matches!(mime.as_str(), "image/png" | "image/jpeg") {
-		return Err(SecretStorageError::UnsupportedCoverMime(
-            mime
-		));
+		return Err(SecretStorageError::UnsupportedCoverMime(mime));
 	}
 
 	let cover_bytes = cover_image.as_slice();
@@ -182,7 +176,7 @@ fn create_thumbnail(
 fn scan_book(path: PathBuf, metadata: fs::Metadata) -> Result<InsertBook, SecretStorageError> {
 	let doc = EpubDoc::new(&path)?;
 	let title = doc.mdata("title");
-    let author = doc.mdata("creator");
+	let author = doc.mdata("creator");
 	let size = metadata.size();
 	let modified_at = metadata.modified().or_else(|_| metadata.created())?.into();
 	let added_at = Utc::now();

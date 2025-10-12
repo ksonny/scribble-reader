@@ -40,7 +40,7 @@ pub enum IllustratorRenderError {
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorRequestError {
 	#[error("Illustrator not running")]
-    NotRunning,
+	NotRunning,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -48,4 +48,3 @@ pub enum IllustratorSpawnError {
 	#[error(transparent)]
 	RecordKeeper(#[from] scribe::record_keeper::RecordKeeperError),
 }
-

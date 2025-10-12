@@ -68,9 +68,7 @@ pub struct Book {
 #[derive(Debug, Clone)]
 pub enum Thumbnail {
 	None,
-	Bytes {
-		bytes: Arc<[u8]>,
-	},
+	Bytes { bytes: Arc<[u8]> },
 }
 
 #[derive(Debug, Default)]
