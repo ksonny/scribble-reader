@@ -473,10 +473,12 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 			page_height: 800,
 			page_width: 600,
 			scale: 1.0,
-			padding_top_em: 2,
-			padding_left_em: 2,
-			padding_right_em: 2,
-			padding_bottom_em: 2,
+
+			padding_top_em: 2.,
+			padding_left_em: 2.,
+			padding_right_em: 2.,
+			padding_bottom_em: 2.,
+
 			body_text: RenderTextSettings {
 				font_size: 18.0,
 				line_height: 24.0,

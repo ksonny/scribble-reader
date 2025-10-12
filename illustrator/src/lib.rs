@@ -372,10 +372,10 @@ pub struct RenderSettings {
 	pub page_height: u32,
 	pub scale: f32,
 
-	pub padding_top_em: u32,
-	pub padding_left_em: u32,
-	pub padding_right_em: u32,
-	pub padding_bottom_em: u32,
+	pub padding_top_em: f32,
+	pub padding_left_em: f32,
+	pub padding_right_em: f32,
+	pub padding_bottom_em: f32,
 
 	pub body_text: RenderTextSettings,
 	pub h1_text: RenderTextSettings,
@@ -395,23 +395,18 @@ impl RenderSettings {
 	}
 
 	fn page_height_padded(&self) -> f32 {
-		self.page_height as f32 - self.padding_top() - self.padding_bottom()
+		self.page_height as f32
+			- self.padding_top_em * self.em()
+			- self.padding_bottom_em * self.em()
 	}
 	fn page_width_padded(&self) -> f32 {
-		self.page_width as f32 - self.padding_left() - self.padding_right()
+		self.page_width as f32
+			- self.padding_left_em * self.em()
+			- self.padding_right_em * self.em()
 	}
 
-	fn padding_top(&self) -> f32 {
-		self.padding_top_em as f32 * self.body_text.font_size * self.scale
-	}
-	fn padding_left(&self) -> f32 {
-		self.padding_left_em as f32 * self.body_text.font_size * self.scale
-	}
-	fn padding_right(&self) -> f32 {
-		self.padding_right_em as f32 * self.body_text.font_size * self.scale
-	}
-	fn padding_bottom(&self) -> f32 {
-		self.padding_bottom_em as f32 * self.body_text.font_size * self.scale
+	fn em(&self) -> f32 {
+		self.body_text.font_size * self.scale
 	}
 }
 
@@ -805,8 +800,8 @@ fn render_resource<R: io::Seek + io::Read>(
 	print_tree(&node_tree, &buffers)?;
 
 	let page_height = settings.page_height_padded();
-	let padding_top = settings.padding_top();
-	let padding_left = settings.padding_left();
+	let padding_top = settings.padding_top_em * settings.em();
+	let padding_left = settings.padding_left_em * settings.em();
 
 	let mut page_end = 0.;
 	let mut offset = taffy::Point::<f32>::zero();
