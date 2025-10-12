@@ -188,11 +188,6 @@ impl UiInput {
 		}
 	}
 
-	pub fn handle_move(&mut self, pos: winit::dpi::PhysicalPosition<f64>) {
-		let pos = self.translate_pos((&pos).into());
-		self.egui_input.events.push(egui::Event::PointerMoved(pos));
-	}
-
 	pub fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
 		self.egui_input.screen_rect = Some(egui::Rect::from_min_size(
 			Default::default(),
@@ -388,13 +383,7 @@ pub struct MainView {
 
 impl MainView {
 	pub fn is_inside_ui_element(&self, pos: egui::Pos2) -> bool {
-		if self.rects.iter().any(|r| r.contains(pos)) {
-			log::info!("Inside ui: {pos}");
-			true
-		} else {
-			log::info!("Outside ui: {pos}");
-			false
-		}
+		self.rects.iter().any(|r| r.contains(pos))
 	}
 
 	pub(crate) fn open_library(&mut self) {
@@ -490,12 +479,20 @@ impl MainView {
 			}
 		}
 	}
+
+	pub(crate) fn toggle_ui(&mut self) {
+		self.invisible = !self.invisible;
+	}
 }
 
 impl GuiView for MainView {
 	fn draw(&mut self, ctx: &Context, poke_stick: &impl Bell) {
 		self.rects.clear();
 		self.menu_open = false;
+
+		if self.invisible {
+			return;
+		}
 
 		let top_panel = egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
 			egui::MenuBar::new().ui(ui, |ui| {
@@ -544,10 +541,6 @@ impl GuiView for MainView {
 			});
 		});
 		self.rects.push(top_panel.response.interact_rect);
-
-		if self.invisible {
-			return;
-		}
 
 		let bottom_panel = egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
 			if self.menu_open {

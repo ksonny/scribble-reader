@@ -1,5 +1,6 @@
 #![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
 
+mod active_areas;
 mod gestures;
 mod renderer;
 mod ui;
@@ -21,6 +22,8 @@ use winit::event_loop::EventLoopProxy;
 use winit::platform::android::activity::AndroidApp;
 use winit::window::Window;
 
+use crate::active_areas::ActiveAreaAction;
+use crate::active_areas::ActiveAreas;
 use crate::gestures::Direction;
 use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
@@ -75,6 +78,7 @@ struct App<'window> {
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
 	illustrator: Illustrator,
+	areas: ActiveAreas,
 }
 
 impl App<'_> {
@@ -153,6 +157,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			.set_min_distance_by_screen(size.width, size.height);
 		self.illustrator.resize(size.width, size.height);
 		self.illustrator.rescale(scale_factor);
+		self.areas = ActiveAreas::new(size.width, size.height);
 
 		if let Some(renderer) = self.renderer.as_mut() {
 			match renderer.resume(window) {
@@ -284,8 +289,8 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			_ => {}
 		};
 
-		let gesture_ret = self.gestures.handle_window_event(&event);
-		if gesture_ret.frame_ended {
+		let result = self.gestures.handle_window_event(&event);
+		if result.frame_ended {
 			for event in self.gestures.events() {
 				match event.gesture {
 					Gesture::Swipe(Direction::Right, _) => {
@@ -298,6 +303,14 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 						let pos = self.input.translate_pos(event.loc);
 						if self.view.is_inside_ui_element(pos) {
 							self.input.handle_gesture(&event);
+						} else if let Some(action) = self.areas.action(event.loc) {
+							match action {
+								ActiveAreaAction::ToggleUi => self.view.toggle_ui(),
+								ActiveAreaAction::NextPage => self.view.next_page(&mut self.scribe),
+								ActiveAreaAction::PreviousPage => {
+									self.view.previous_page(&mut self.scribe)
+								}
+							}
 						}
 					}
 					_ => {}
@@ -309,26 +322,23 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 
 		log::trace!("event: {event:?}");
 		match event {
-			WindowEvent::CursorMoved { position, .. } if !gesture_ret.consumed => {
-				self.input.handle_move(position);
-				self.request_redraw();
-			}
 			WindowEvent::Resized(size) => {
-				self.illustrator.resize(size.width, size.height);
-				self.gestures
-					.set_min_distance_by_screen(size.width, size.height);
-				self.input.resize(size);
 				if let Some(renderer) = self.renderer.as_mut() {
 					renderer.resize(size)
 				}
+				self.gestures
+					.set_min_distance_by_screen(size.width, size.height);
+				self.input.resize(size);
+				self.illustrator.resize(size.width, size.height);
+				self.areas = ActiveAreas::new(size.width, size.height);
 				self.request_redraw();
 			}
 			WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-				self.illustrator.rescale(scale_factor as f32);
-				self.input.rescale(scale_factor as f32);
 				if let Some(renderer) = self.renderer.as_mut() {
 					renderer.rescale(scale_factor)
 				}
+				self.input.rescale(scale_factor as f32);
+				self.illustrator.rescale(scale_factor as f32);
 				self.request_redraw();
 			}
 			WindowEvent::RedrawRequested => {
@@ -460,7 +470,6 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 	let illustrator = Illustrator::new(
 		settings.data_path.join("state.db"),
 		RenderSettings {
-			version: 0,
 			page_height: 800,
 			page_width: 600,
 			scale: 1.0,
@@ -475,6 +484,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 			},
 		},
 	);
+	let areas = ActiveAreas::default();
 
 	let mut app = App {
 		input,
@@ -487,6 +497,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 		request_redraw: Instant::now(),
 		gestures,
 		illustrator,
+		areas,
 	};
 
 	event_loop.run_app(&mut app)?;

@@ -359,8 +359,6 @@ pub struct RenderTextSettings {
 }
 
 pub struct RenderSettings {
-	pub version: u32,
-
 	pub page_width: u32,
 	pub page_height: u32,
 	pub scale: f32,
