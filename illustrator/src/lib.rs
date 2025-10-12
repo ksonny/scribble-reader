@@ -27,6 +27,7 @@ use cosmic_text::FontSystem;
 use cosmic_text::Shaping;
 use epub::doc::EpubDoc;
 use epub::doc::NavPoint;
+use html5ever::local_name;
 use scribe::library;
 use scribe::library::Location;
 use taffy::prelude::*;
@@ -40,7 +41,9 @@ use crate::error::IllustratorSpawnError;
 use crate::html_parser::EdgeRef;
 use crate::html_parser::Element;
 use crate::html_parser::NodeTreeBuilder;
+use crate::html_parser::NodeTreeIter;
 use crate::html_parser::Text;
+use crate::html_parser::TextStyle;
 
 #[derive(Debug, Default)]
 pub struct PageContentCache {
@@ -358,6 +361,12 @@ pub struct RenderTextSettings {
 	pub attrs: cosmic_text::Attrs<'static>,
 }
 
+impl RenderTextSettings {
+	fn metrics(&self, scale: f32) -> cosmic_text::Metrics {
+		cosmic_text::Metrics::new(self.font_size * scale, self.line_height * scale)
+	}
+}
+
 pub struct RenderSettings {
 	pub page_width: u32,
 	pub page_height: u32,
@@ -369,24 +378,25 @@ pub struct RenderSettings {
 	pub padding_bottom_em: u32,
 
 	pub body_text: RenderTextSettings,
+	pub h1_text: RenderTextSettings,
+	pub h2_text: RenderTextSettings,
 }
 
 #[allow(unused)]
 impl RenderSettings {
 	fn body_text(&self) -> (cosmic_text::Metrics, &Attrs<'static>) {
-		(
-			cosmic_text::Metrics::new(
-				self.body_text.font_size * self.scale,
-				self.body_text.line_height * self.scale,
-			),
-			&self.body_text.attrs,
-		)
+		(self.body_text.metrics(self.scale), &self.body_text.attrs)
+	}
+	fn h1_text(&self) -> (cosmic_text::Metrics, &Attrs<'static>) {
+		(self.h1_text.metrics(self.scale), &self.h1_text.attrs)
+	}
+	fn h2_text(&self) -> (cosmic_text::Metrics, &Attrs<'static>) {
+		(self.h2_text.metrics(self.scale), &self.h2_text.attrs)
 	}
 
 	fn page_height_padded(&self) -> f32 {
 		self.page_height as f32 - self.padding_top() - self.padding_bottom()
 	}
-
 	fn page_width_padded(&self) -> f32 {
 		self.page_width as f32 - self.padding_left() - self.padding_right()
 	}
@@ -394,7 +404,6 @@ impl RenderSettings {
 	fn padding_top(&self) -> f32 {
 		self.padding_top_em as f32 * self.body_text.font_size * self.scale
 	}
-
 	fn padding_left(&self) -> f32 {
 		self.padding_left_em as f32 * self.body_text.font_size * self.scale
 	}
@@ -700,14 +709,18 @@ impl<'a> MeasureContext<'a> {
 		_style: &taffy::Style,
 		text: &mut Text,
 	) -> Size<f32> {
-		let Text { t } = text;
+		let Text { style, t } = text;
 		let width_constraint = known_dimensions.width.or(match available_space.width {
 			AvailableSpace::MinContent => Some(0.0),
 			AvailableSpace::MaxContent => None,
 			AvailableSpace::Definite(width) => Some(width),
 		});
 
-		let (metrics, attrs) = self.settings.body_text();
+		let (metrics, attrs) = match style {
+			TextStyle::Body => self.settings.body_text(),
+			TextStyle::H1 => self.settings.h1_text(),
+			TextStyle::H2 => self.settings.h1_text(),
+		};
 		let buffer = self.buffers.entry(node_id).or_insert_with(|| {
 			let mut buffer = Buffer::new(self.font_system, metrics);
 			buffer.set_wrap(self.font_system, cosmic_text::Wrap::WordOrGlyph);
@@ -747,12 +760,20 @@ fn render_resource<R: io::Seek + io::Read>(
 	word_offset: u64,
 ) -> Result<(Vec<PageContent>, NodeTreeBuilder), IllustratorRenderError> {
 	let mut node_tree = builder.read_from(file)?;
+	let body = node_tree
+		.nodes()
+		.find_map(|n| match n {
+			EdgeRef::OpenElement(el) if matches!(el.local_name(), &local_name!("body")) => {
+				Some(el.id)
+			}
+			_ => None,
+		})
+		.ok_or(IllustratorRenderError::MissingBodyElement)?;
 	let mut buffers = {
-		let root = node_tree.root;
 		let tree = &mut node_tree.tree;
 		let mut measurer = MeasureContext::new(font_system, settings);
 		tree.set_style(
-			root,
+			body,
 			Style {
 				size: taffy::Size {
 					width: length(settings.page_width_padded()),
@@ -762,7 +783,7 @@ fn render_resource<R: io::Seek + io::Read>(
 			},
 		)?;
 		tree.compute_layout_with_measure(
-			root,
+			body,
 			Size::MAX_CONTENT,
 			|known_dimensions, available_space, node_id, node_context, style| match node_context {
 				Some(html_parser::Node::Text(text)) => {
@@ -781,7 +802,7 @@ fn render_resource<R: io::Seek + io::Read>(
 		measurer.buffers
 	};
 
-	// print_tree(&node_tree, &buffers)?;
+	print_tree(&node_tree, &buffers)?;
 
 	let page_height = settings.page_height_padded();
 	let padding_top = settings.padding_top();
@@ -794,7 +815,7 @@ fn render_resource<R: io::Seek + io::Read>(
 		words: word_offset..word_offset,
 		items: Vec::new(),
 	};
-	for edge in node_tree.nodes() {
+	for edge in NodeTreeIter::new(&node_tree.tree, body) {
 		match edge {
 			EdgeRef::OpenElement(el) => {
 				let l = node_tree.tree.layout(el.id)?;

@@ -10,6 +10,7 @@ use html5ever::Namespace;
 use html5ever::QualName;
 use html5ever::interface::NodeOrText;
 use html5ever::interface::TreeSink;
+use html5ever::local_name;
 use html5ever::tendril::StrTendril;
 use html5ever::tendril::TendrilSink;
 use html5ever::tendril::stream::Utf8LossyDecoder;
@@ -33,8 +34,17 @@ pub struct Element {
 	pub attrs: BTreeMap<(Namespace, LocalName), String>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TextStyle {
+	#[default]
+	Body,
+	H1,
+	H2,
+}
+
 #[derive(Debug)]
 pub struct Text {
+	pub style: TextStyle,
 	pub t: StrTendril,
 }
 
@@ -42,6 +52,19 @@ pub struct Text {
 pub(crate) enum Node {
 	Element(Element),
 	Text(Text),
+}
+
+impl Node {
+	fn get_style(&self) -> TextStyle {
+		match self {
+			Node::Element(Element { name, .. }) => match name.local {
+				local_name!("h1") => TextStyle::H1,
+				local_name!("h2") => TextStyle::H2,
+				_ => TextStyle::default(),
+			},
+			Node::Text(Text { style: s, .. }) => *s,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -88,8 +111,32 @@ pub enum EdgeRef<'a> {
 }
 
 pub struct NodeTreeIter<'a> {
-	nt: &'a NodeTree,
+	tree: &'a taffy::TaffyTree<Node>,
 	stack: Vec<EdgeRef<'a>>,
+}
+
+impl<'a> NodeTreeIter<'a> {
+	pub fn new(tree: &'a taffy::TaffyTree<Node>, id: taffy::NodeId) -> Self {
+		let stack = Self::child_edges_rev(tree, id).collect();
+		Self { tree, stack }
+	}
+
+	fn child_edges_rev(
+		tree: &'a taffy::TaffyTree<Node>,
+		id: taffy::NodeId,
+	) -> impl Iterator<Item = EdgeRef<'a>> {
+		tree.children(id)
+			.unwrap_or_default()
+			.into_iter()
+			.rev()
+			.filter_map(|child| match tree.get_node_context(child) {
+				Some(Node::Element(el)) => {
+					Some(EdgeRef::OpenElement(ElementWrapper { id: child, el }))
+				}
+				Some(Node::Text(t)) => Some(EdgeRef::Text(TextWrapper { id: child, t })),
+				None => None,
+			})
+	}
 }
 
 impl<'a> Iterator for NodeTreeIter<'a> {
@@ -99,7 +146,7 @@ impl<'a> Iterator for NodeTreeIter<'a> {
 		let node = self.stack.pop()?;
 		if let EdgeRef::OpenElement(ref el) = node {
 			self.stack.push(EdgeRef::CloseElement(el.id));
-			self.stack.extend(self.nt.child_nodes_rev(el.id));
+			self.stack.extend(Self::child_edges_rev(self.tree, el.id));
 		}
 		Some(node)
 	}
@@ -115,8 +162,7 @@ pub struct NodeTree {
 
 impl NodeTree {
 	pub fn nodes<'a>(&'a self) -> NodeTreeIter<'a> {
-		let stack = self.child_nodes_rev(self.root).collect();
-		NodeTreeIter { nt: self, stack }
+		NodeTreeIter::new(&self.tree, self.root)
 	}
 
 	pub fn into_builder(self) -> Result<NodeTreeBuilder, TreeBuilderError> {
@@ -136,21 +182,6 @@ impl NodeTree {
 			error,
 			parse_errors: parse_errors.into(),
 		})
-	}
-
-	fn child_nodes_rev<'a>(&'a self, node: taffy::NodeId) -> impl Iterator<Item = EdgeRef<'a>> {
-		self.tree
-			.children(node)
-			.unwrap_or_default()
-			.into_iter()
-			.rev()
-			.filter_map(|child| match self.tree.get_node_context(child) {
-				Some(Node::Element(el)) => {
-					Some(EdgeRef::OpenElement(ElementWrapper { id: child, el }))
-				}
-				Some(Node::Text(t)) => Some(EdgeRef::Text(TextWrapper { id: child, t })),
-				None => None,
-			})
 	}
 }
 
@@ -388,17 +419,27 @@ impl NodeTreeBuilder {
 				if let Some(node_id) = last_child {
 					match tree.get_node_context_mut(node_id) {
 						Some(Node::Element(_)) | None => {
-							let node = tree
-								.new_leaf_with_context(Style::default(), Node::Text(Text { t }))?;
+							let style = tree
+								.get_node_context(parent)
+								.map(|el| el.get_style())
+								.unwrap_or_default();
+							let node = tree.new_leaf_with_context(
+								Style::default(),
+								Node::Text(Text { style, t }),
+							)?;
 							tree.add_child(parent, node)?;
 						}
-						Some(Node::Text(Text { t: text })) => {
+						Some(Node::Text(Text { t: text, .. })) => {
 							text.push_tendril(&t);
 						}
 					}
 				} else {
-					let node =
-						tree.new_leaf_with_context(Style::default(), Node::Text(Text { t }))?;
+					let style = tree
+						.get_node_context(parent)
+						.map(|el| el.get_style())
+						.unwrap_or_default();
+					let node = tree
+						.new_leaf_with_context(Style::default(), Node::Text(Text { style, t }))?;
 					tree.add_child(parent, node)?;
 				}
 			}
@@ -435,12 +476,17 @@ impl NodeTreeBuilder {
 					return Ok(());
 				}
 				if let Ok(node) = tree.child_at_index(parent, sibling_index - 1)
-					&& let Some(Node::Text(Text { t: tendril })) = tree.get_node_context_mut(node)
+					&& let Some(Node::Text(Text { t: tendril, .. })) =
+						tree.get_node_context_mut(node)
 				{
 					tendril.push_tendril(&t);
 				} else {
-					let node =
-						tree.new_leaf_with_context(Style::default(), Node::Text(Text { t }))?;
+					let style = tree
+						.get_node_context(parent)
+						.map(|el| el.get_style())
+						.unwrap_or_default();
+					let node = tree
+						.new_leaf_with_context(Style::default(), Node::Text(Text { style, t }))?;
 					tree.insert_child_at_index(parent, sibling_index, node)?;
 				}
 			}

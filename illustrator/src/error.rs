@@ -35,6 +35,8 @@ pub enum IllustratorRenderError {
 	Taffy(#[from] taffy::TaffyError),
 	#[error("No text buffer for node {0:?}")]
 	NoTextBuffer(taffy::NodeId),
+	#[error("Missing body element")]
+	MissingBodyElement,
 }
 
 #[derive(Debug, thiserror::Error)]

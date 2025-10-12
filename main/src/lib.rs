@@ -482,6 +482,16 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 				line_height: 24.0,
 				attrs: glyphon::Attrs::new(),
 			},
+			h1_text: RenderTextSettings {
+				font_size: 30.0,
+				line_height: 40.0,
+				attrs: glyphon::Attrs::new(),
+			},
+			h2_text: RenderTextSettings {
+				font_size: 30.0,
+				line_height: 40.0,
+				attrs: glyphon::Attrs::new(),
+			},
 		},
 	);
 	let areas = ActiveAreas::default();
