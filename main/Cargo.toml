@@ -10,7 +10,7 @@ chrono = { workspace = true }
 config = { workspace = true }
 cosmic-text = { workspace = true }
 dotenv = "0.15.0"
-egui = "0.32.3"
+egui = "0.33.0"
 egui-wgpu = "0.32.3"
 egui-winit = "0.32.3"
 egui_extras = { version = "0.32.3", features = ["image"] }
