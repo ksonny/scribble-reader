@@ -13,7 +13,7 @@ dotenv = "0.15.0"
 egui = "0.32.3"
 egui-wgpu = "0.32.3"
 egui-winit = "0.32.3"
-egui_extras = { version = "0.32.3", features = ["image"] }
+egui_extras = { version = "0.33.0", features = ["image"] }
 env_logger = { workspace = true }
 glyphon = "0.9.0"
 illustrator = { version = "0.1.0", path = "../illustrator" }
