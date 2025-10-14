@@ -310,10 +310,7 @@ impl RecordKeeper {
 			",
 		)?;
 		let (spine, element) = match loc {
-			Some(Location::Spine {
-				spine,
-				element,
-			}) => (Some(spine), Some(element)),
+			Some(Location::Spine { spine, element }) => (Some(spine), Some(element)),
 			None => (None, None),
 		};
 		let state = InsertBookState {

@@ -21,6 +21,7 @@ use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use bitflags::bitflags;
 use cosmic_text::Attrs;
 use cosmic_text::Buffer;
 use cosmic_text::FontSystem;
@@ -33,7 +34,6 @@ use scribe::library::Location;
 use taffy::prelude::*;
 use zip::ZipArchive;
 use zip::read::ZipFile;
-use bitflags::bitflags;
 
 use crate::error::IllustratorError;
 use crate::error::IllustratorRenderError;
@@ -47,23 +47,50 @@ use crate::html_parser::Text;
 use crate::html_parser::TextStyle;
 
 #[derive(Debug, Default)]
-pub struct PageContentCache {
+struct PageCacheEntry {
+	spine: u64,
 	pages: Vec<PageContent>,
+}
+
+const CACHE_CHAPTERS: usize = 5;
+
+#[derive(Debug)]
+pub struct PageContentCache {
+	index: usize,
+	entries: [Option<PageCacheEntry>; CACHE_CHAPTERS],
+}
+
+impl Default for PageContentCache {
+	fn default() -> Self {
+		Self {
+			index: 0,
+			entries: [const { None }; CACHE_CHAPTERS],
+		}
+	}
 }
 
 impl PageContentCache {
 	pub fn page(&self, loc: Location) -> Option<&PageContent> {
-		match loc {
-			Location::Spine { spine, element } => self
-				.pages
-				.iter()
-				.find(|p| p.spine_index == spine && p.elements.contains(&element)),
-		}
+		let Location::Spine { spine, element } = loc;
+		self.entries
+			.iter()
+			.flatten()
+			.find(|e| e.spine == spine)
+			.and_then(|entry| entry.pages.iter().find(|p| p.elements.contains(&element)))
 	}
 
 	fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Result<Location, IllustratorError> {
-		let page = self
-			.page(loc)
+		let Location::Spine { spine, element } = loc;
+		let entry = self
+			.entries
+			.iter()
+			.flatten()
+			.find(|e| e.spine == spine)
+			.ok_or(IllustratorError::ImpossibleMissingCache)?;
+		let page = entry
+			.pages
+			.iter()
+			.find(|p| p.elements.contains(&element))
 			.ok_or(IllustratorError::ImpossibleMissingCache)?;
 		let Location::Spine { spine, .. } = loc;
 		if page.position.contains(PagePosition::Last) {
@@ -78,16 +105,10 @@ impl PageContentCache {
 				element: item.elements.start,
 			})
 		} else {
-			debug_assert!(
-				self.pages
-					.iter()
-					.filter(|p| p.spine_index == spine)
-					.is_sorted_by_key(|p| p.elements.start),
-				"Cache not sorted"
-			);
-			self.pages
+			entry
+				.pages
 				.iter()
-				.find(|p| p.spine_index == spine && p.elements.start > page.elements.start)
+				.find(|p| p.elements.start > page.elements.start)
 				.map(|p| Location::Spine {
 					spine,
 					element: p.elements.start,
@@ -101,10 +122,18 @@ impl PageContentCache {
 		book_meta: &BookMeta,
 		loc: Location,
 	) -> Result<Location, IllustratorError> {
-		let page = self
-			.page(loc)
+		let Location::Spine { spine, element } = loc;
+		let entry = self
+			.entries
+			.iter()
+			.flatten()
+			.find(|e| e.spine == spine)
 			.ok_or(IllustratorError::ImpossibleMissingCache)?;
-		let Location::Spine { spine, .. } = loc;
+		let page = entry
+			.pages
+			.iter()
+			.find(|p| p.elements.contains(&element))
+			.ok_or(IllustratorError::ImpossibleMissingCache)?;
 		if page.position.contains(PagePosition::First) {
 			let item = book_meta
 				.spine
@@ -121,15 +150,13 @@ impl PageContentCache {
 			})
 		} else {
 			debug_assert!(
-				self.pages
-					.iter()
-					.filter(|p| p.spine_index == spine)
-					.is_sorted_by_key(|p| p.elements.start),
+				entry.pages.iter().is_sorted_by_key(|p| p.elements.start),
 				"Cache not sorted"
 			);
-			self.pages
+			entry
+				.pages
 				.iter()
-				.rfind(|p| p.spine_index == spine && p.elements.start < page.elements.start)
+				.rfind(|p| p.elements.start < page.elements.start)
 				.map(|p| Location::Spine {
 					spine,
 					element: p.elements.start,
@@ -139,19 +166,27 @@ impl PageContentCache {
 	}
 
 	fn is_cached(&self, spine_item: &BookSpineItem) -> bool {
-		self.pages.iter().any(|p| p.spine_index == spine_item.index)
+		self.entries
+			.iter()
+			.flatten()
+			.any(|e| e.spine == spine_item.index)
 	}
 
-	fn insert(
-		&mut self,
-		_spine_item: &BookSpineItem,
-		pages: impl IntoIterator<Item = PageContent>,
-	) {
-		self.pages.extend(pages)
+	fn insert(&mut self, spine_item: &BookSpineItem, pages: Vec<PageContent>) {
+		debug_assert!(
+			pages.iter().is_sorted_by_key(|p| p.elements.start),
+			"Pages not sorted"
+		);
+
+		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
+			spine: spine_item.index,
+			pages,
+		});
+		self.index += 1;
 	}
 
 	pub fn clear(&mut self) {
-		self.pages.clear()
+		self.entries = [const { None }; CACHE_CHAPTERS];
 	}
 }
 
@@ -422,7 +457,6 @@ bitflags! {
 
 #[derive(Debug)]
 pub struct PageContent {
-	pub spine_index: u64,
 	pub position: PagePosition,
 	pub elements: Range<u64>,
 	pub items: Vec<DisplayItem>,
@@ -839,7 +873,6 @@ fn render_resource<R: io::Seek + io::Read>(
 	let mut offset = taffy::Point::<f32>::zero();
 	let mut pages = Vec::new();
 	let mut page = PageContent {
-		spine_index: item.index,
 		position: PagePosition::First,
 		elements: item.elements.start..item.elements.start,
 		items: Vec::new(),
@@ -870,7 +903,6 @@ fn render_resource<R: io::Seek + io::Read>(
 					let elements_end = page.elements.end;
 					pages.push(page);
 					page = PageContent {
-						spine_index: item.index,
 						position: PagePosition::empty(),
 						elements: elements_end..elements_end,
 						items: Vec::new(),
