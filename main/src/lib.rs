@@ -28,6 +28,7 @@ use crate::gestures::Direction;
 use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
 use crate::renderer::Renderer;
+use crate::renderer::RendererError;
 use crate::ui::GuiView as _;
 use crate::ui::MainView;
 use crate::ui::UiInput;
@@ -354,6 +355,9 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				renderer.prepare_ui(output);
 				match renderer.render() {
 					Ok(_) => {}
+					Err(e @ RendererError::SurfaceNotAvailable) => {
+						log::warn!("Failure render: {e}");
+					}
 					Err(e) => {
 						log::error!("Failure render: {e}");
 						event_loop.exit();
