@@ -225,11 +225,27 @@ pub struct Illustrator {
 	settings_changed: bool,
 }
 
+#[cfg(target_os = "android")]
+fn create_font_system() -> FontSystem {
+	let mut font_system = FontSystem::new();
+	font_system.db_mut().load_fonts_dir("/system/fonts");
+	font_system.db_mut().set_sans_serif_family("Roboto");
+	font_system.db_mut().set_serif_family("Noto Serif");
+	font_system.db_mut().set_monospace_family("Droid Sans Mono"); // Cutive Mono looks more printer-like
+	font_system.db_mut().set_cursive_family("Dancing Script");
+	font_system.db_mut().set_fantasy_family("Dancing Script");
+	font_system
+}
+
 impl Illustrator {
 	pub fn new(state_path: PathBuf, settings: RenderSettings) -> Self {
+		#[cfg(target_os = "android")]
+		let font_system = create_font_system();
+		#[cfg(not(target_os = "android"))]
+		let font_system = FontSystem::new();
 		Self {
 			state_db_path: state_path,
-			font_system: Arc::new(Mutex::new(FontSystem::new())),
+			font_system: Arc::new(Mutex::new(font_system)),
 			settings: Arc::new(RwLock::new(settings)),
 			cache: Arc::new(RwLock::new(PageContentCache::default())),
 			req_tx: None,
