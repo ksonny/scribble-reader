@@ -917,6 +917,7 @@ fn render_resource<R: io::Seek + io::Read>(
 				if content_end - page_end > page_height {
 					log::info!("Break page at {page_end} {:?}", page.elements);
 					let elements_end = page.elements.end;
+					debug_assert!(!page.elements.is_empty(), "Must have elements");
 					pages.push(page);
 					page = PageContent {
 						position: PagePosition::empty(),
@@ -939,7 +940,7 @@ fn render_resource<R: io::Seek + io::Read>(
 			}
 		}
 	}
-	if !page.items.is_empty() {
+	if !page.items.is_empty() || pages.is_empty() {
 		log::info!("Last page {:?}", page.elements);
 		page.position.set(PagePosition::Last, true);
 		pages.push(page);
@@ -947,6 +948,7 @@ fn render_resource<R: io::Seek + io::Read>(
 		last.position.set(PagePosition::Last, true);
 	}
 	log::trace!("Generated {} pages", pages.len());
+	debug_assert!(!pages.is_empty(), "Must have at least one page per chapter");
 	debug_assert!(
 		pages
 			.last()
