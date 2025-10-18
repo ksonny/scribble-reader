@@ -15,18 +15,11 @@ use html5ever::local_name;
 use html5ever::tendril::StrTendril;
 use html5ever::tendril::TendrilSink;
 use html5ever::tendril::stream::Utf8LossyDecoder;
-use taffy::Style;
-use taffy::TaffyError;
-use taffy::TaffyTree;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TreeBuilderError {
 	#[error(transparent)]
 	Io(#[from] io::Error),
-	#[error(transparent)]
-	Taffy(#[from] TaffyError),
-	#[error("Sibling has no parent")]
-	SiblingHasNoParent,
 }
 
 #[derive(Debug)]
@@ -35,42 +28,20 @@ pub struct Element {
 	pub attrs: BTreeMap<(Namespace, LocalName), String>,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum TextStyle {
-	#[default]
-	Body,
-	H1,
-	H2,
-}
-
 #[derive(Debug)]
 pub struct Text {
-	pub style: TextStyle,
 	pub t: StrTendril,
 }
 
 #[derive(Debug)]
-pub(crate) enum Node {
+pub(crate) enum Leaf {
 	Element(Element),
 	Text(Text),
 }
 
-impl Node {
-	fn get_style(&self) -> TextStyle {
-		match self {
-			Node::Element(Element { name, .. }) => match name.local {
-				local_name!("h1") => TextStyle::H1,
-				local_name!("h2") => TextStyle::H2,
-				_ => TextStyle::default(),
-			},
-			Node::Text(Text { style: s, .. }) => *s,
-		}
-	}
-}
-
 #[derive(Debug, Clone)]
 pub struct ElementWrapper<'a> {
-	pub id: taffy::NodeId,
+	pub id: NodeId,
 	pub el: &'a Element,
 }
 
@@ -95,46 +66,176 @@ impl<'a> ElementWrapper<'a> {
 
 #[derive(Debug, Clone)]
 pub struct TextWrapper<'a> {
-	pub id: taffy::NodeId,
+	#[allow(dead_code)]
+	pub id: NodeId,
 	pub t: &'a Text,
-}
-
-impl<'a> TextWrapper<'a> {
-	pub fn text(&'a self) -> &'a str {
-		&self.t.t
-	}
 }
 
 pub enum EdgeRef<'a> {
 	OpenElement(ElementWrapper<'a>),
-	CloseElement(taffy::NodeId),
+	CloseElement(NodeId, LocalName),
 	Text(TextWrapper<'a>),
 }
 
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NodeId(u32);
+
+impl NodeId {
+	pub(crate) fn value(&self) -> u32 {
+		let NodeId(v) = self;
+		*v
+	}
+}
+
+#[derive(Debug)]
+pub(crate) struct Tree<T> {
+	node_id_counter: u32,
+	child_map: BTreeMap<NodeId, Vec<NodeId>>,
+	parent_map: BTreeMap<NodeId, NodeId>,
+	contexts: BTreeMap<NodeId, T>,
+}
+
+impl<T> Tree<T> {
+	pub(crate) fn new() -> Self {
+		Self {
+			node_id_counter: 0,
+			child_map: BTreeMap::new(),
+			parent_map: BTreeMap::new(),
+			contexts: BTreeMap::new(),
+		}
+	}
+
+	#[allow(dead_code)]
+	pub(crate) fn node_count(&self) -> u32 {
+		self.node_id_counter
+	}
+
+	pub(crate) fn parent(&self, id: NodeId) -> Option<NodeId> {
+		self.parent_map.get(&id).cloned()
+	}
+
+	pub(crate) fn children(&self, id: NodeId) -> Option<&[NodeId]> {
+		self.child_map.get(&id).map(|v| v.as_slice())
+	}
+
+	pub(crate) fn get_context(&self, id: NodeId) -> Option<&T> {
+		self.contexts.get(&id)
+	}
+
+	pub(crate) fn get_context_mut(&mut self, id: NodeId) -> Option<&mut T> {
+		self.contexts.get_mut(&id)
+	}
+
+	pub(crate) fn remove_parent(&mut self, id: NodeId) {
+		let existing = self.parent_map.get(&id).cloned();
+		if let Some(parent_id) = existing {
+			self.child_map.entry(parent_id).and_modify(|v| {
+				if let Some(i) = v.iter().position(|c| *c == id) {
+					v.remove(i);
+				}
+			});
+		}
+	}
+
+	pub(crate) fn add_node(&mut self) -> NodeId {
+		let id = NodeId(self.node_id_counter);
+		self.node_id_counter += 1;
+		id
+	}
+
+	pub(crate) fn add_node_with_context(&mut self, context: T) -> NodeId {
+		let id = NodeId(self.node_id_counter);
+		self.node_id_counter += 1;
+		self.contexts.insert(id, context);
+		id
+	}
+
+	pub(crate) fn add_child(&mut self, parent_id: NodeId, child_id: NodeId) {
+		debug_assert_ne!(parent_id, child_id, "Tried to append node to self");
+		self.remove_parent(child_id);
+		self.parent_map.insert(child_id, parent_id);
+		self.child_map.entry(parent_id).or_default().push(child_id);
+	}
+
+	pub(crate) fn add_child_before_sibling(&mut self, sibling_id: NodeId, child_id: NodeId) {
+		let parent_id = self
+			.parent_map
+			.get(&sibling_id)
+			.cloned()
+			.expect("Expected sibling to have parent");
+		self.remove_parent(child_id);
+		self.parent_map.insert(child_id, parent_id);
+
+		let children = self.child_map.entry(parent_id).or_default();
+		if let Some(i) = children.iter().position(|c| *c == sibling_id) {
+			children.insert(i, child_id);
+		} else {
+			children.push(child_id);
+		}
+	}
+
+	pub(crate) fn clear(&mut self) {
+		self.node_id_counter = 0;
+		self.parent_map.clear();
+		self.child_map.clear();
+		self.contexts.clear();
+	}
+}
+
+pub struct NodeTreeBuilder {
+	root: NodeId,
+	error: NodeId,
+	body: Cell<Option<NodeId>>,
+	tree: RefCell<Tree<Leaf>>,
+	parse_errors: RefCell<Vec<Cow<'static, str>>>,
+}
+
+impl NodeTreeBuilder {
+	pub fn new() -> Self {
+		let parse_errors = Vec::new().into();
+		let mut tree = Tree::new();
+		let root = tree.add_node();
+		let body = Cell::new(None);
+		let error = tree.add_node();
+		let tree = RefCell::new(tree);
+
+		Self {
+			root,
+			error,
+			body,
+			tree,
+			parse_errors,
+		}
+	}
+
+	pub fn read_from<R: io::Read>(self, mut reader: R) -> Result<NodeTreeResult, TreeBuilderError> {
+		let parser = html5ever::parse_document(self, Default::default());
+		let tree = Utf8LossyDecoder::new(parser).read_from(&mut reader)?;
+		Ok(tree)
+	}
+}
+
 pub struct NodeTreeIter<'a> {
-	tree: &'a taffy::TaffyTree<Node>,
+	tree: &'a Tree<Leaf>,
 	stack: Vec<EdgeRef<'a>>,
 }
 
 impl<'a> NodeTreeIter<'a> {
-	pub fn new(tree: &'a taffy::TaffyTree<Node>, id: taffy::NodeId) -> Self {
+	pub fn new(tree: &'a Tree<Leaf>, id: NodeId) -> Self {
 		let stack = Self::child_edges_rev(tree, id).collect();
 		Self { tree, stack }
 	}
 
-	fn child_edges_rev(
-		tree: &'a taffy::TaffyTree<Node>,
-		id: taffy::NodeId,
-	) -> impl Iterator<Item = EdgeRef<'a>> {
+	fn child_edges_rev(tree: &'a Tree<Leaf>, id: NodeId) -> impl Iterator<Item = EdgeRef<'a>> {
 		tree.children(id)
 			.unwrap_or_default()
-			.into_iter()
+			.iter()
 			.rev()
-			.filter_map(|child| match tree.get_node_context(child) {
-				Some(Node::Element(el)) => {
-					Some(EdgeRef::OpenElement(ElementWrapper { id: child, el }))
+			.filter_map(|child| match tree.get_context(*child) {
+				Some(Leaf::Element(el)) => {
+					Some(EdgeRef::OpenElement(ElementWrapper { id: *child, el }))
 				}
-				Some(Node::Text(t)) => Some(EdgeRef::Text(TextWrapper { id: child, t })),
+				Some(Leaf::Text(t)) => Some(EdgeRef::Text(TextWrapper { id: *child, t })),
 				None => None,
 			})
 	}
@@ -146,53 +247,56 @@ impl<'a> Iterator for NodeTreeIter<'a> {
 	fn next(&mut self) -> Option<Self::Item> {
 		let node = self.stack.pop()?;
 		if let EdgeRef::OpenElement(ref el) = node {
-			self.stack.push(EdgeRef::CloseElement(el.id));
+			self.stack
+				.push(EdgeRef::CloseElement(el.id, el.local_name().clone()));
 			self.stack.extend(Self::child_edges_rev(self.tree, el.id));
 		}
 		Some(node)
 	}
 }
 
-pub struct NodeTree {
-	pub(crate) tree: taffy::TaffyTree<Node>,
-	pub(crate) root: taffy::NodeId,
-	pub(crate) body: Option<taffy::NodeId>,
-	#[allow(unused)]
-	pub(crate) error: taffy::NodeId,
+pub struct NodeTreeResult {
+	#[allow(dead_code)]
+	pub(crate) root: NodeId,
+	#[allow(dead_code)]
+	pub(crate) error: NodeId,
+	pub(crate) body: Option<NodeId>,
+	pub(crate) tree: Tree<Leaf>,
 	pub(crate) parse_errors: Vec<Cow<'static, str>>,
 }
 
-impl NodeTree {
-	pub fn nodes<'a>(&'a self) -> NodeTreeIter<'a> {
-		NodeTreeIter::new(&self.tree, self.root)
+impl NodeTreeResult {
+	pub fn body_iter<'a>(&'a self) -> Option<NodeTreeIter<'a>> {
+		self.body.map(|id| NodeTreeIter::new(&self.tree, id))
 	}
 
-	pub fn body_nodes<'a>(&'a self) -> Option<NodeTreeIter<'a>> {
-		self.body.map(|body| NodeTreeIter::new(&self.tree, body))
-	}
-
-	pub fn into_builder(self) -> Result<NodeTreeBuilder, TreeBuilderError> {
-		let NodeTree {
+	pub(crate) fn into_builder(self) -> NodeTreeBuilder {
+		let NodeTreeResult {
 			mut tree,
 			mut parse_errors,
 			..
 		} = self;
+
 		tree.clear();
-		let root = tree.new_leaf(Style::default())?;
-		let error = tree.new_leaf(Style::default())?;
 		parse_errors.clear();
 
-		Ok(NodeTreeBuilder {
-			tree: tree.into(),
+		let root = tree.add_node();
+		let error = tree.add_node();
+		let body = None.into();
+		let tree = tree.into();
+		let parse_errors = parse_errors.into();
+
+		NodeTreeBuilder {
 			root,
-			body: Cell::new(None),
 			error,
-			parse_errors: parse_errors.into(),
-		})
+			body,
+			tree,
+			parse_errors,
+		}
 	}
 }
 
-impl From<NodeTreeBuilder> for NodeTree {
+impl From<NodeTreeBuilder> for NodeTreeResult {
 	fn from(value: NodeTreeBuilder) -> Self {
 		let NodeTreeBuilder {
 			tree,
@@ -202,49 +306,18 @@ impl From<NodeTreeBuilder> for NodeTree {
 			parse_errors,
 		} = value;
 		Self {
-			tree: tree.into_inner(),
 			root,
-			body: body.into_inner(),
 			error,
+			body: body.into_inner(),
+			tree: tree.into_inner(),
 			parse_errors: parse_errors.into_inner(),
 		}
 	}
 }
 
-pub struct NodeTreeBuilder {
-	tree: RefCell<taffy::TaffyTree<Node>>,
-	root: taffy::NodeId,
-	body: Cell<Option<taffy::NodeId>>,
-	error: taffy::NodeId,
-	parse_errors: RefCell<Vec<Cow<'static, str>>>,
-}
-
-impl NodeTreeBuilder {
-	pub fn new() -> Result<Self, TreeBuilderError> {
-		let mut tree = TaffyTree::new();
-		let root = tree.new_leaf(Style::default())?;
-		let error = tree.new_leaf(Style::default())?;
-		let parse_errors = Vec::new().into();
-
-		Ok(Self {
-			tree: tree.into(),
-			root,
-			body: Cell::new(None),
-			error,
-			parse_errors,
-		})
-	}
-
-	pub fn read_from<R: io::Read>(self, mut reader: R) -> Result<NodeTree, TreeBuilderError> {
-		let parser = html5ever::parse_document(self, Default::default());
-		let tree = Utf8LossyDecoder::new(parser).read_from(&mut reader)?;
-		Ok(tree)
-	}
-}
-
 impl TreeSink for NodeTreeBuilder {
-	type Handle = taffy::NodeId;
-	type Output = NodeTree;
+	type Handle = NodeId;
+	type Output = NodeTreeResult;
 	type ElemName<'a> = Ref<'a, QualName>;
 
 	fn finish(self) -> Self::Output {
@@ -262,8 +335,8 @@ impl TreeSink for NodeTreeBuilder {
 
 	fn elem_name<'a>(&'a self, target: &'a Self::Handle) -> Self::ElemName<'a> {
 		Ref::map(self.tree.borrow(), |nodes| {
-			match &nodes.get_node_context(*target) {
-				Some(Node::Element(element)) => &element.name,
+			match &nodes.get_context(*target) {
+				Some(Leaf::Element(element)) => &element.name,
 				_ => panic!("Not element node: {target:?}"),
 			}
 		})
@@ -276,41 +349,23 @@ impl TreeSink for NodeTreeBuilder {
 		_flags: html5ever::interface::ElementFlags,
 	) -> Self::Handle {
 		log::trace!("create_element({name:?}, {attrs:?})");
-		let is_body = name.local == local_name!("body");
+		let is_body =  matches!(&name.local, &local_name!("body"));
 		let attrs = attrs
 			.into_iter()
 			.map(|a| ((a.name.ns, a.name.local), a.value.to_string()))
 			.collect();
-		match self
-			.tree
+		let node_id = self.tree
 			.borrow_mut()
-			.new_leaf_with_context(Style::default(), Node::Element(Element { name, attrs }))
-		{
-			Ok(node) => {
-				if is_body {
-					self.body.set(Some(node));
-				}
-				node
-			}
-			Err(e) => {
-				log::error!("error in create_element: {e}");
-				self.error
-			}
+			.add_node_with_context(Leaf::Element(Element { name, attrs }));
+		if is_body {
+			self.body.set(Some(node_id));
 		}
+		node_id
 	}
 
 	fn create_comment(&self, text: html5ever::tendril::StrTendril) -> Self::Handle {
 		log::trace!("create_comment('{text}')");
-		match self.tree.borrow_mut().new_leaf(Style {
-			display: taffy::Display::None,
-			..Default::default()
-		}) {
-			Ok(node) => node,
-			Err(e) => {
-				log::error!("error in create_comment({text}): {e}");
-				self.error
-			}
-		}
+		self.tree.borrow_mut().add_node()
 	}
 
 	fn create_pi(
@@ -319,16 +374,7 @@ impl TreeSink for NodeTreeBuilder {
 		data: html5ever::tendril::StrTendril,
 	) -> Self::Handle {
 		log::trace!("create_pi({target}, {data})");
-		match self.tree.borrow_mut().new_leaf(Style {
-			display: taffy::Display::None,
-			..Default::default()
-		}) {
-			Ok(node) => node,
-			Err(e) => {
-				log::error!("error in create_pi({target}, {data}): {e}");
-				self.error
-			}
-		}
+		self.tree.borrow_mut().add_node()
 	}
 
 	fn append_doctype_to_document(
@@ -341,17 +387,66 @@ impl TreeSink for NodeTreeBuilder {
 	}
 
 	fn append(&self, parent: &Self::Handle, child: NodeOrText<Self::Handle>) {
-		match self.append_safe(parent, child) {
-			Ok(_) => {}
-			Err(e) => log::error!("error in append({parent:?}, NodeOrText): {e}"),
+		let parent = *parent;
+		let mut tree = self.tree.borrow_mut();
+		match child {
+			NodeOrText::AppendNode(node_id) => {
+				log::trace!("append({parent:?}, {node_id:?})");
+				tree.add_child(parent, node_id);
+			}
+			NodeOrText::AppendText(t) => {
+				log::trace!("append({parent:?}, '{t}')");
+				if t.trim().is_empty() {
+					log::trace!("Skip empty text");
+					return;
+				}
+				let last_child = tree.children(parent).and_then(|v| v.last().cloned());
+				if let Some(node_id) = last_child {
+					match tree.get_context_mut(node_id) {
+						Some(Leaf::Element(_)) | None => {
+							let node = tree.add_node_with_context(Leaf::Text(Text { t }));
+							tree.add_child(parent, node);
+						}
+						Some(Leaf::Text(Text { t: text, .. })) => {
+							text.push_tendril(&t);
+						}
+					}
+				} else {
+					let node = tree.add_node_with_context(Leaf::Text(Text { t }));
+					tree.add_child(parent, node);
+				}
+			}
 		}
 	}
 
 	fn append_before_sibling(&self, sibling: &Self::Handle, new_node: NodeOrText<Self::Handle>) {
-		match self.append_before_sibling_safe(sibling, new_node) {
-			Ok(_) => {}
-			Err(e) => log::error!("error in append_before_sibling({sibling:?}, NodeOrText): {e}"),
-		}
+		let mut tree = self.tree.borrow_mut();
+		match new_node {
+			NodeOrText::AppendNode(node) => {
+				log::trace!("append_before_sibling({sibling:?}, {node:?})");
+				tree.add_child_before_sibling(*sibling, node)
+			}
+			NodeOrText::AppendText(t) => {
+				log::trace!("append_before_sibling({sibling:?}, '{t}')");
+				if t.trim().is_empty() {
+					log::trace!("Skip empty text");
+					return;
+				}
+				let older_sibling = tree
+					.parent(*sibling)
+					.and_then(|parent| tree.children(parent))
+					.and_then(|children| children.iter().take_while(|c| *c != sibling).last())
+					.cloned();
+				if let Some(Leaf::Text(Text { t: tendril, .. })) =
+					older_sibling.and_then(|id| tree.get_context_mut(id))
+				{
+					tendril.push_tendril(&t);
+				} else {
+					let node = tree.add_node_with_context(Leaf::Text(Text { t }));
+					tree.add_child_before_sibling(*sibling, node);
+				}
+			}
+		};
 	}
 
 	fn append_based_on_parent_node(
@@ -370,9 +465,9 @@ impl TreeSink for NodeTreeBuilder {
 
 	fn get_template_contents(&self, target: &Self::Handle) -> Self::Handle {
 		match self.tree.borrow().children(*target) {
-			Ok(children) => children.first().cloned().unwrap_or(self.error),
-			Err(e) => {
-				log::error!("error in get_template_content({target:?}): {e}");
+			Some(children) => children.first().cloned().unwrap_or(self.error),
+			None => {
+				log::error!("error in get_template_content({target:?}): No children");
 				self.error
 			}
 		}
@@ -387,7 +482,7 @@ impl TreeSink for NodeTreeBuilder {
 	fn add_attrs_if_missing(&self, target: &Self::Handle, add_attrs: Vec<html5ever::Attribute>) {
 		log::trace!("add_attrs_if_missing({target:?}, {add_attrs:?})");
 		let mut tree = self.tree.borrow_mut();
-		let Some(Node::Element(Element { attrs, .. })) = tree.get_node_context_mut(*target) else {
+		let Some(Leaf::Element(Element { attrs, .. })) = tree.get_context_mut(*target) else {
 			panic!("Promise violated, no element exists");
 		};
 		for attr in add_attrs {
@@ -399,138 +494,20 @@ impl TreeSink for NodeTreeBuilder {
 
 	fn remove_from_parent(&self, target: &Self::Handle) {
 		log::trace!("remove_from_parent({target:?})");
-		match self.remove_from_parent_safe(target) {
-			Ok(_) => {}
-			Err(e) => log::error!("error in remove_from_parent({target:?}): {e}"),
-		}
+		let mut tree = self.tree.borrow_mut();
+		tree.remove_parent(*target);
 	}
 
 	fn reparent_children(&self, node: &Self::Handle, new_parent: &Self::Handle) {
 		log::trace!("reparent_children({node:?}, {new_parent:?})");
-		match self.reparent_children_safe(node, new_parent) {
-			Ok(_) => {}
-			Err(e) => log::error!("error in reparent_children({node:?}, {new_parent:?}): {e}"),
-		}
-	}
-}
-
-impl NodeTreeBuilder {
-	fn append_safe(
-		&self,
-		parent: &taffy::NodeId,
-		child: NodeOrText<taffy::NodeId>,
-	) -> Result<(), TreeBuilderError> {
-		let parent = *parent;
 		let mut tree = self.tree.borrow_mut();
-		match child {
-			NodeOrText::AppendNode(node_id) => {
-				log::trace!("append({parent:?}, {node_id:?})");
-				tree.add_child(parent, node_id)?;
-			}
-			NodeOrText::AppendText(t) => {
-				log::trace!("append({parent:?}, '{t}')");
-				if t.trim().is_empty() {
-					return Ok(());
-				}
-				let last_child = tree.children(parent).ok().and_then(|v| v.last().cloned());
-				if let Some(node_id) = last_child {
-					match tree.get_node_context_mut(node_id) {
-						Some(Node::Element(_)) | None => {
-							let style = tree
-								.get_node_context(parent)
-								.map(|el| el.get_style())
-								.unwrap_or_default();
-							let node = tree.new_leaf_with_context(
-								Style::default(),
-								Node::Text(Text { style, t }),
-							)?;
-							tree.add_child(parent, node)?;
-						}
-						Some(Node::Text(Text { t: text, .. })) => {
-							text.push_tendril(&t);
-						}
-					}
-				} else {
-					let style = tree
-						.get_node_context(parent)
-						.map(|el| el.get_style())
-						.unwrap_or_default();
-					let node = tree
-						.new_leaf_with_context(Style::default(), Node::Text(Text { style, t }))?;
-					tree.add_child(parent, node)?;
-				}
-			}
-		}
-		Ok(())
-	}
-
-	fn append_before_sibling_safe(
-		&self,
-		sibling: &taffy::NodeId,
-		new_node: NodeOrText<taffy::NodeId>,
-	) -> Result<(), TreeBuilderError> {
-		let mut tree = self.tree.borrow_mut();
-		let parent = tree
-			.parent(*sibling)
-			.ok_or(TreeBuilderError::SiblingHasNoParent)?;
-		let sibling_index = tree
-			.children(parent)?
-			.iter()
-			.position(|id| id == sibling)
-			.unwrap_or(0);
-
-		match new_node {
-			NodeOrText::AppendNode(node) => {
-				log::trace!("append_before_sibling({sibling:?}, {node:?})");
-				if let Some(old_parent) = tree.parent(node) {
-					tree.remove_child(old_parent, node)?;
-				}
-				tree.insert_child_at_index(parent, sibling_index, node)?;
-			}
-			NodeOrText::AppendText(t) => {
-				log::trace!("append_before_sibling({sibling:?}, '{t}')");
-				if t.trim().is_empty() {
-					return Ok(());
-				}
-				if let Ok(node) = tree.child_at_index(parent, sibling_index - 1)
-					&& let Some(Node::Text(Text { t: tendril, .. })) =
-						tree.get_node_context_mut(node)
-				{
-					tendril.push_tendril(&t);
-				} else {
-					let style = tree
-						.get_node_context(parent)
-						.map(|el| el.get_style())
-						.unwrap_or_default();
-					let node = tree
-						.new_leaf_with_context(Style::default(), Node::Text(Text { style, t }))?;
-					tree.insert_child_at_index(parent, sibling_index, node)?;
-				}
-			}
-		};
-		Ok(())
-	}
-
-	fn reparent_children_safe(
-		&self,
-		node: &taffy::NodeId,
-		new_parent: &taffy::NodeId,
-	) -> Result<(), TreeBuilderError> {
-		let mut tree = self.tree.borrow_mut();
-		let children = tree.children(*node)?;
+		let children = tree
+			.children(*node)
+			.map(|children| children.to_vec())
+			.unwrap_or_default();
 		for child in children {
-			tree.remove_child(*node, child)?;
-			tree.add_child(*new_parent, child)?;
+			tree.add_child(*new_parent, child);
 		}
-		Ok(())
-	}
-
-	fn remove_from_parent_safe(&self, target: &taffy::NodeId) -> Result<(), TreeBuilderError> {
-		let mut tree = self.tree.borrow_mut();
-		if let Some(parent) = tree.parent(*target) {
-			tree.remove_child(parent, *target)?;
-		}
-		Ok(())
 	}
 }
 
@@ -540,35 +517,36 @@ mod tests {
 	use html5ever::tendril::TendrilSink;
 
 	use crate::html_parser::EdgeRef;
-	use crate::html_parser::Node;
+	use crate::html_parser::Leaf;
 	use crate::html_parser::NodeTreeBuilder;
+	use crate::html_parser::NodeTreeIter;
 
 	#[test]
 	fn test_html_parser_text() {
 		let _ = env_logger::try_init();
 		let input = "testing";
 
-		let parser = parse_document(NodeTreeBuilder::new().unwrap(), Default::default());
+		let parser = parse_document(NodeTreeBuilder::new(), Default::default());
 		let tree = parser.one(input);
 
 		let children = tree.tree.children(tree.root).unwrap();
 		let html_id = children
-			.into_iter()
-			.find(|n| matches!(tree.tree.get_node_context(*n), Some(Node::Element(element)) if &element.name.local == "html"))
+			.iter()
+			.find(|n| matches!(tree.tree.get_context(**n), Some(Leaf::Element(element)) if &element.name.local == "html"))
 			.expect("Missing html element");
 
-		let children = tree.tree.children(html_id).unwrap();
+		let children = tree.tree.children(*html_id).unwrap();
 		children
 			.iter()
-			.find(|&n| matches!(tree.tree.get_node_context(*n), Some(Node::Element(element)) if &element.name.local == "head"))
+			.find(|&n| matches!(tree.tree.get_context(*n), Some(Leaf::Element(element)) if &element.name.local == "head"))
 			.expect("Missing head element");
 		children
 			.iter()
-			.find(|&n| matches!(tree.tree.get_node_context(*n), Some(Node::Element(element)) if &element.name.local == "body"))
+			.find(|&n| matches!(tree.tree.get_context(*n), Some(Leaf::Element(element)) if &element.name.local == "body"))
 			.expect("Missing body element");
 
 		assert_eq!(
-			tree.tree.total_node_count(),
+			tree.tree.node_count(),
 			6,
 			"Unpected amount of nodes in tree"
 		);
@@ -591,7 +569,7 @@ mod tests {
 </html>
 "#;
 
-		let parser = parse_document(NodeTreeBuilder::new().unwrap(), Default::default());
+		let parser = parse_document(NodeTreeBuilder::new(), Default::default());
 		parser.one(input);
 	}
 
@@ -600,14 +578,15 @@ mod tests {
 		let _ = env_logger::try_init();
 		let input = "testing";
 
-		let parser = parse_document(NodeTreeBuilder::new().unwrap(), Default::default());
+		let parser = parse_document(NodeTreeBuilder::new(), Default::default());
 		let node_tree = parser.one(input);
 
 		let mut has_html = false;
 		let mut has_head = false;
 		let mut has_body = false;
 
-		for n in node_tree.nodes() {
+		let node_iter = NodeTreeIter::new(&node_tree.tree, node_tree.root);
+		for n in node_iter {
 			match n {
 				EdgeRef::OpenElement(el) => {
 					if el.local_name() == "html" {
@@ -620,9 +599,9 @@ mod tests {
 						has_body = true;
 					}
 				}
-				EdgeRef::CloseElement(_) => {}
-				EdgeRef::Text(text) => {
-					let s = text.text();
+				EdgeRef::CloseElement(_, _) => {}
+				EdgeRef::Text(crate::html_parser::TextWrapper { t, .. }) => {
+					let s: &str = &t.t;
 					assert_eq!(s, input, "Unexpected text content");
 				}
 			}

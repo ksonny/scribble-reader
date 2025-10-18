@@ -415,14 +415,11 @@ impl MainView {
 
 	pub(crate) fn next_page(&mut self, scribe: &mut scribe::Scribe) {
 		match &mut self.feature {
-			FeatureView::Illustrator(handle) => match handle.next_page() {
-				Ok(_) => {
-					log::info!("Next page requested")
+			FeatureView::Illustrator(handle) => {
+				if let Err(e) = handle.next_page() {
+					log::error!("Illustrator error: {e}");
 				}
-				Err(e) => {
-					log::error!("Illustrator error: {e}")
-				}
-			},
+			}
 			FeatureView::List(list) => {
 				let page = list.page + 1;
 				let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
@@ -442,12 +439,11 @@ impl MainView {
 
 	pub(crate) fn previous_page(&mut self, scribe: &mut scribe::Scribe) {
 		match &mut self.feature {
-			FeatureView::Illustrator(handle) => match handle.previous_page() {
-				Ok(_) => {}
-				Err(e) => {
-					log::error!("Illustrator error: {e}")
+			FeatureView::Illustrator(handle) => {
+				if let Err(e) = handle.previous_page() {
+					log::error!("Illustrator error: {e}");
 				}
-			},
+			}
 			FeatureView::List(list) => {
 				let page = list.page.saturating_sub(1);
 				let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);

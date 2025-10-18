@@ -14,12 +14,8 @@ pub enum IllustratorError {
 	Render(#[from] IllustratorRenderError),
 	#[error("at {1}: {0}")]
 	Io(std::io::Error, &'static std::panic::Location<'static>),
-	#[error("Spineless book: {0}")]
-	SpinelessBook(crate::library::Location),
 	#[error("Missing resource {0}")]
 	MissingResource(String),
-	#[error("Impossible missing cache")]
-	ImpossibleMissingCache,
 }
 
 impl From<std::io::Error> for IllustratorError {
@@ -37,10 +33,10 @@ pub enum IllustratorRenderError {
 	Zip(#[from] zip::result::ZipError),
 	#[error(transparent)]
 	Taffy(#[from] taffy::TaffyError),
-	#[error("No text buffer for node {0:?}")]
-	NoTextBuffer(taffy::NodeId),
-	#[error("Missing body element")]
-	MissingBodyElement,
+	#[error("Unexpected extra close")]
+	UnexpectedExtraClose,
+	#[error("Missing body")]
+	MissingBody,
 }
 
 #[derive(Debug, thiserror::Error)]

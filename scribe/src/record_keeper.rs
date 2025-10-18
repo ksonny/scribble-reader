@@ -105,8 +105,8 @@ struct SecretBook {
 	added_at: DateTime<Utc>,
 	#[serde(with = "ts_seconds_option")]
 	opened_at: Option<DateTime<Utc>>,
-	spine: Option<u64>,
-	element: Option<u64>,
+	spine: Option<u32>,
+	element: Option<u32>,
 }
 
 impl From<SecretBook> for library::Book {
@@ -151,8 +151,8 @@ struct InsertBookState {
 	pub book_id: i64,
 	#[serde(with = "ts_seconds")]
 	pub opened_at: DateTime<Utc>,
-	pub spine: Option<u64>,
-	pub element: Option<u64>,
+	pub spine: Option<u32>,
+	pub element: Option<u32>,
 }
 
 pub struct RecordKeeper {
@@ -309,15 +309,11 @@ impl RecordKeeper {
 				element = coalesce(:element, element);
 			",
 		)?;
-		let (spine, element) = match loc {
-			Some(Location::Spine { spine, element }) => (Some(spine), Some(element)),
-			None => (None, None),
-		};
 		let state = InsertBookState {
 			book_id: id.value(),
 			opened_at: Utc::now(),
-			spine,
-			element,
+			spine: loc.map(|l| l.spine),
+			element: loc.map(|l| l.element),
 		};
 		stmt.execute(to_params_named(state)?.to_slice().as_slice())?;
 		Ok(())

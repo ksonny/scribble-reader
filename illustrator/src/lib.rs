@@ -1,3 +1,4 @@
+#![feature(new_range_api)]
 #![feature(mapped_lock_guards)]
 mod error;
 mod html_parser;
@@ -7,9 +8,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::io::Cursor;
-use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
+use std::range::Range;
 use std::sync::Arc;
 use std::sync::LockResult;
 use std::sync::Mutex;
@@ -17,6 +18,7 @@ use std::sync::MutexGuard;
 use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
 use std::sync::mpsc::Sender;
+use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -28,6 +30,7 @@ use cosmic_text::FontSystem;
 use cosmic_text::Shaping;
 use epub::doc::EpubDoc;
 use epub::doc::NavPoint;
+use html5ever::LocalName;
 use html5ever::local_name;
 use scribe::library;
 use scribe::library::Location;
@@ -40,15 +43,14 @@ use crate::error::IllustratorRenderError;
 use crate::error::IllustratorRequestError;
 use crate::error::IllustratorSpawnError;
 use crate::html_parser::EdgeRef;
-use crate::html_parser::Element;
 use crate::html_parser::NodeTreeBuilder;
-use crate::html_parser::NodeTreeIter;
 use crate::html_parser::Text;
-use crate::html_parser::TextStyle;
+use crate::html_parser::TextWrapper;
 
 #[derive(Debug, Default)]
 struct PageCacheEntry {
-	spine: u64,
+	spine: u32,
+	elements: Range<u32>,
 	pages: Vec<PageContent>,
 }
 
@@ -70,99 +72,85 @@ impl Default for PageContentCache {
 }
 
 impl PageContentCache {
+	fn entry(&self, loc: Location) -> Option<(&PageCacheEntry, &PageContent)> {
+		let entry = self
+			.entries
+			.iter()
+			.flatten()
+			.find(|e| e.spine == loc.spine)?;
+
+		if loc.element == entry.elements.start {
+			Some((entry, entry.pages.first()?))
+		} else if loc.element == entry.elements.end {
+			Some((entry, entry.pages.last()?))
+		} else {
+			let page = entry
+				.pages
+				.iter()
+				.find(|p| p.elements.contains(&loc.element))?;
+			Some((entry, page))
+		}
+	}
+
 	pub fn page(&self, loc: Location) -> Option<&PageContent> {
-		let Location::Spine { spine, element } = loc;
-		self.entries
-			.iter()
-			.flatten()
-			.find(|e| e.spine == spine)
-			.and_then(|entry| entry.pages.iter().find(|p| p.elements.contains(&element)))
+		self.entry(loc).map(|(_, page)| page)
 	}
 
-	fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Result<Location, IllustratorError> {
-		let Location::Spine { spine, element } = loc;
-		let entry = self
-			.entries
-			.iter()
-			.flatten()
-			.find(|e| e.spine == spine)
-			.ok_or(IllustratorError::ImpossibleMissingCache)?;
-		let page = entry
-			.pages
-			.iter()
-			.find(|p| p.elements.contains(&element))
-			.ok_or(IllustratorError::ImpossibleMissingCache)?;
-		let Location::Spine { spine, .. } = loc;
-		if page.position.contains(PagePosition::Last) {
-			let item = book_meta.spine.get(spine as usize + 1).ok_or_else(|| {
-				IllustratorError::SpinelessBook(Location::Spine {
-					spine: spine.saturating_sub(1),
-					element: u64::MAX,
-				})
-			})?;
-			Ok(Location::Spine {
-				spine: item.index,
-				element: item.elements.start,
+	fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
+		self.entry(loc)
+			.map(|(entry, page)| {
+				if page.position.contains(PagePosition::Last) {
+					book_meta
+						.spine
+						.get(entry.spine as usize + 1)
+						.map(|item| Location {
+							spine: item.index,
+							element: item.elements.start,
+						})
+						// End of book
+						.unwrap_or(loc)
+				} else {
+					entry
+						.pages
+						.iter()
+						.find(|p| p.elements.start > page.elements.start)
+						.or(entry.pages.last())
+						.map(|p| Location {
+							spine: entry.spine,
+							element: p.elements.start,
+						})
+						.expect("Programmer error, not last page but nothing after")
+				}
 			})
-		} else {
-			entry
-				.pages
-				.iter()
-				.find(|p| p.elements.start > page.elements.start)
-				.map(|p| Location::Spine {
-					spine,
-					element: p.elements.start,
-				})
-				.ok_or(IllustratorError::ImpossibleMissingCache)
-		}
+			.unwrap_or(loc)
 	}
 
-	fn previous_page(
-		&self,
-		book_meta: &BookMeta,
-		loc: Location,
-	) -> Result<Location, IllustratorError> {
-		let Location::Spine { spine, element } = loc;
-		let entry = self
-			.entries
-			.iter()
-			.flatten()
-			.find(|e| e.spine == spine)
-			.ok_or(IllustratorError::ImpossibleMissingCache)?;
-		let page = entry
-			.pages
-			.iter()
-			.find(|p| p.elements.contains(&element))
-			.ok_or(IllustratorError::ImpossibleMissingCache)?;
-		if page.position.contains(PagePosition::First) {
-			let item = book_meta
-				.spine
-				.get(spine.saturating_sub(1) as usize)
-				.ok_or_else(|| {
-					IllustratorError::SpinelessBook(Location::Spine {
-						spine: spine.saturating_sub(1),
-						element: u64::MAX,
-					})
-				})?;
-			Ok(Location::Spine {
-				spine: item.index,
-				element: item.elements.end.saturating_sub(1),
+	fn previous_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
+		self.entry(loc)
+			.map(|(entry, page)| {
+				if page.position.contains(PagePosition::First) {
+					book_meta
+						.spine
+						.get(entry.spine.saturating_sub(1) as usize)
+						.map(|item| Location {
+							spine: item.index,
+							element: item.elements.end,
+						})
+						// Start of book
+						.unwrap_or(loc)
+				} else {
+					entry
+						.pages
+						.iter()
+						.rfind(|p| p.elements.start < page.elements.start)
+						.map(|p| Location {
+							spine: entry.spine,
+							element: p.elements.start,
+						})
+						.expect("Programmer error, not first page but nothing before")
+				}
 			})
-		} else {
-			debug_assert!(
-				entry.pages.iter().is_sorted_by_key(|p| p.elements.start),
-				"Cache not sorted"
-			);
-			entry
-				.pages
-				.iter()
-				.rfind(|p| p.elements.start < page.elements.start)
-				.map(|p| Location::Spine {
-					spine,
-					element: p.elements.start,
-				})
-				.ok_or(IllustratorError::ImpossibleMissingCache)
-		}
+			.unwrap_or(loc)
 	}
 
 	fn is_cached(&self, spine_item: &BookSpineItem) -> bool {
@@ -180,6 +168,7 @@ impl PageContentCache {
 
 		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
 			spine: spine_item.index,
+			elements: spine_item.elements,
 			pages,
 		});
 		self.index += 1;
@@ -341,9 +330,9 @@ struct BookToCItem {
 #[allow(unused)]
 #[derive(Debug)]
 struct BookSpineItem {
-	index: u64,
+	index: u32,
 	idref: String,
-	elements: Range<u64>,
+	elements: Range<u32>,
 }
 
 #[allow(unused)]
@@ -355,8 +344,13 @@ struct BookMeta {
 	cover_id: Option<String>,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum FromEpubError {}
+impl BookMeta {
+	fn spine_resource(&self, loc: Location) -> Option<(&BookSpineItem, &Path)> {
+		self.spine
+			.get(loc.spine as usize)
+			.and_then(|s| self.resources.get(&s.idref).map(|r| (s, r.path.as_path())))
+	}
+}
 
 impl BookMeta {
 	fn create<R: io::Seek + io::Read>(
@@ -382,33 +376,25 @@ impl BookMeta {
 			convert_toc(&mut items, toc.into_iter());
 			items
 		};
-
 		let spine = {
-			let mut builder = NodeTreeBuilder::new()?;
+			let mut builder = NodeTreeBuilder::new();
 			let mut items = Vec::new();
-			let mut elements = 0;
 			for (index, item) in spine.into_iter().enumerate() {
 				let res = resources
 					.get(&item.idref)
 					.ok_or_else(|| IllustratorError::MissingResource(item.idref.clone()))?;
 				let file = archive.by_path(&res.path)?;
 				let tree = builder.read_from(file)?;
-				if let Some(body_iter) = tree.body_nodes() {
-					let start = elements;
-					elements += body_iter
-						.filter(|n| matches!(n, EdgeRef::OpenElement(..)))
-						.count() as u64;
-					items.push(BookSpineItem {
-						index: index as u64,
-						idref: item.idref,
-						elements: start..elements,
-					});
-				}
-				builder = tree.into_builder()?;
+				let node_count = tree.tree.node_count();
+				items.push(BookSpineItem {
+					index: index as u32,
+					idref: item.idref,
+					elements: Range::from(0..node_count),
+				});
+				builder = tree.into_builder();
 			}
 			items
 		};
-
 		let dur = Instant::now().duration_since(start);
 		log::info!(
 			"Opened {:?} in {}",
@@ -423,14 +409,6 @@ impl BookMeta {
 			toc,
 			cover_id,
 		})
-	}
-
-	fn spine_resource(&self, loc: Location) -> Option<(&BookSpineItem, &Path)> {
-		let Location::Spine { spine, element } = loc;
-		self.spine
-			.get(spine as usize)
-			.filter(|s| s.elements.contains(&element))
-			.and_then(|s| self.resources.get(&s.idref).map(|r| (s, r.path.as_path())))
 	}
 }
 
@@ -474,7 +452,8 @@ bitflags! {
 #[derive(Debug)]
 pub struct PageContent {
 	pub position: PagePosition,
-	pub elements: Range<u64>,
+	pub index: u32,
+	pub elements: Range<u32>,
 	pub items: Vec<DisplayItem>,
 }
 
@@ -499,6 +478,7 @@ pub struct RenderSettings {
 	pub padding_left_em: f32,
 	pub padding_right_em: f32,
 	pub padding_bottom_em: f32,
+	pub padding_paragraph_em: f32,
 
 	pub body_text: RenderTextSettings,
 	pub h1_text: RenderTextSettings,
@@ -507,14 +487,17 @@ pub struct RenderSettings {
 
 #[allow(unused)]
 impl RenderSettings {
-	fn body_text(&self) -> (cosmic_text::Metrics, &Attrs<'static>) {
-		(self.body_text.metrics(self.scale), &self.body_text.attrs)
+	fn body_text(&self) -> (cosmic_text::Metrics, Attrs<'static>) {
+		(
+			self.body_text.metrics(self.scale),
+			self.body_text.attrs.clone(),
+		)
 	}
-	fn h1_text(&self) -> (cosmic_text::Metrics, &Attrs<'static>) {
-		(self.h1_text.metrics(self.scale), &self.h1_text.attrs)
+	fn h1_text(&self) -> (cosmic_text::Metrics, Attrs<'static>) {
+		(self.h1_text.metrics(self.scale), self.h1_text.attrs.clone())
 	}
-	fn h2_text(&self) -> (cosmic_text::Metrics, &Attrs<'static>) {
-		(self.h2_text.metrics(self.scale), &self.h2_text.attrs)
+	fn h2_text(&self) -> (cosmic_text::Metrics, Attrs<'static>) {
+		(self.h2_text.metrics(self.scale), self.h2_text.attrs.clone())
 	}
 
 	fn page_height_padded(&self) -> f32 {
@@ -526,6 +509,10 @@ impl RenderSettings {
 		self.page_width as f32
 			- self.padding_left_em * self.em()
 			- self.padding_right_em * self.em()
+	}
+
+	fn paragraph_padding(&self) -> f32 {
+		self.padding_paragraph_em * self.em()
 	}
 
 	fn em(&self) -> f32 {
@@ -560,162 +547,75 @@ pub fn spawn_illustrator(
 			.inspect_err(|e| log::error!("Error: {e}"))?;
 		let mut archive =
 			ZipArchive::new(Cursor::new(bytes)).inspect_err(|e| log::error!("Error: {e}"))?;
-		let book_meta =
-			BookMeta::create(doc, &mut archive).inspect_err(|e| log::error!("Error: {e}"))?;
+		let book_meta = BookMeta::create(doc, &mut archive)?;
 
 		log::info!(
 			"Opened book with {} resources, {} spine items",
 			book_meta.resources.len(),
 			book_meta.spine.len()
 		);
-		records
-			.record_book_state(id, None)
-			.inspect_err(|e| log::error!("Error: {e}"))?;
 
 		cache.write().unwrap().clear();
 
-		let mut builder = NodeTreeBuilder::new().unwrap();
-		let mut current_loc = Location::Spine {
-			spine: book.spine.unwrap_or(0),
-			element: book.element.unwrap_or(0),
-		};
-		if let Some((item, path)) = book_meta.spine_resource(current_loc) {
-			builder = assure_cached(
-				&settings,
-				&font_system,
-				&cache,
-				&mut archive,
-				builder,
-				item,
-				path,
-			)
-			.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-			bell.content_ready(id, current_loc);
+		let book_loc = book.location();
+		let mut current_loc = if book_meta.spine_resource(book_loc).is_some() {
+			book_loc
 		} else {
-			log::error!("Invalid book location, reset to first page");
-			current_loc = Location::Spine {
+			log::error!("Invalid book location {book_loc:?}, reset to first page");
+			Location {
 				spine: 0,
 				element: 0,
-			};
-			let (item, path) = book_meta
-				.spine_resource(current_loc)
-				.ok_or(IllustratorError::SpinelessBook(current_loc))
-				.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-			builder = assure_cached(
-				&settings,
-				&font_system,
-				&cache,
-				&mut archive,
-				builder,
-				item,
-				path,
-			)
-			.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-			records
-				.record_book_state(id, Some(current_loc))
-				.inspect_err(|e| log::error!("Error: {e}"))?;
-			bell.content_ready(id, current_loc);
-		}
+			}
+		};
 
-		for req in req_rx.iter() {
-			match req {
-				Request::NextPage => {
-					log::info!("NextPage {current_loc}");
-					let loc = cache
-						.read()
-						.unwrap()
-						.next_page(&book_meta, current_loc)
-						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-					log::info!("Goto next page at {loc}");
-					if let Some((item, path)) = book_meta.spine_resource(loc) {
-						builder = assure_cached(
-							&settings,
-							&font_system,
-							&cache,
-							&mut archive,
-							builder,
-							item,
-							path,
-						)
-						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-						current_loc = loc;
-						log::info!("Record loc {current_loc}");
-						records
-							.record_book_state(id, Some(current_loc))
-							.inspect_err(|e| log::error!("Error: {e}"))?;
-						bell.content_ready(id, current_loc);
-					} else {
-						log::info!("At end of book: {loc}")
-					}
-				}
-				Request::PreviousPage => {
-					log::info!("PreviousPage {current_loc}");
-					let loc = cache
-						.read()
-						.unwrap()
-						.previous_page(&book_meta, current_loc)
-						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+		let mut builder = NodeTreeBuilder::new();
+		let mut taffy_tree = taffy::TaffyTree::new();
+		loop {
+			let req = match req_rx.try_recv() {
+				Ok(req) => req,
+				Err(TryRecvError::Empty) => {
 					let (item, path) = book_meta
-						.spine_resource(loc)
-						.ok_or(IllustratorError::SpinelessBook(loc))
-						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
+						.spine_resource(current_loc)
+						.expect("On location without spine");
 					builder = assure_cached(
 						&settings,
 						&font_system,
 						&cache,
 						&mut archive,
 						builder,
+						&mut taffy_tree,
 						item,
 						path,
 					)
 					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-					current_loc = loc;
 					log::info!("Record loc {current_loc}");
 					records
 						.record_book_state(id, Some(current_loc))
 						.inspect_err(|e| log::error!("Error: {e}"))?;
 					bell.content_ready(id, current_loc);
+
+					match req_rx.recv() {
+						Ok(req) => req,
+						Err(_) => break,
+					}
+				}
+				Err(TryRecvError::Disconnected) => {
+					break;
+				}
+			};
+			log::info!("{:?}", req);
+			match req {
+				Request::NextPage => {
+					current_loc = cache.read().unwrap().next_page(&book_meta, current_loc);
+				}
+				Request::PreviousPage => {
+					current_loc = cache.read().unwrap().previous_page(&book_meta, current_loc);
 				}
 				Request::Goto(loc) => {
-					log::info!("Goto {loc}");
-					let (item, path) = book_meta
-						.spine_resource(loc)
-						.ok_or(IllustratorError::SpinelessBook(loc))
-						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-					builder = assure_cached(
-						&settings,
-						&font_system,
-						&cache,
-						&mut archive,
-						builder,
-						item,
-						path,
-					)
-					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
 					current_loc = loc;
-					records
-						.record_book_state(id, Some(current_loc))
-						.inspect_err(|e| log::error!("Error: {e}"))?;
-					bell.content_ready(id, current_loc);
 				}
 				Request::RefreshCache => {
-					log::info!("Refresh cache");
 					cache.write().unwrap().clear();
-					let (item, path) = book_meta
-						.spine_resource(current_loc)
-						.ok_or(IllustratorError::SpinelessBook(current_loc))
-						.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-					builder = assure_cached(
-						&settings,
-						&font_system,
-						&cache,
-						&mut archive,
-						builder,
-						item,
-						path,
-					)
-					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-					bell.content_ready(id, current_loc);
 				}
 			}
 		}
@@ -727,12 +627,14 @@ pub fn spawn_illustrator(
 	Ok(IllustratorHandle { req_tx, handle })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assure_cached<R: io::Seek + io::Read>(
 	settings: &RwLock<RenderSettings>,
 	font_system: &Mutex<FontSystem>,
 	cache: &RwLock<PageContentCache>,
 	archive: &mut ZipArchive<R>,
 	builder: NodeTreeBuilder,
+	taffy_tree: &mut taffy::TaffyTree<html_parser::NodeId>,
 	item: &BookSpineItem,
 	path: &Path,
 ) -> Result<NodeTreeBuilder, IllustratorError> {
@@ -749,6 +651,7 @@ fn assure_cached<R: io::Seek + io::Read>(
 			file,
 			item,
 			builder,
+			taffy_tree,
 		)?;
 		let mut cache = cache.write().unwrap();
 		cache.insert(item, pages);
@@ -763,69 +666,46 @@ fn assure_cached<R: io::Seek + io::Read>(
 	}
 }
 
-struct MeasureContext<'a> {
-	font_system: &'a mut FontSystem,
-	settings: &'a RenderSettings,
-	buffers: HashMap<NodeId, Buffer>,
+pub enum Edge {
+	Open(NodeId),
+	Close(NodeId),
 }
 
-impl<'a> MeasureContext<'a> {
-	fn new(font_system: &'a mut FontSystem, settings: &'a RenderSettings) -> Self {
-		Self {
-			font_system,
-			settings,
-			buffers: HashMap::new(),
+pub struct TaffyTreeIter<'a, C = ()> {
+	tree: &'a TaffyTree<C>,
+	stack: Vec<Edge>,
+}
+
+impl<'a, C> TaffyTreeIter<'a, C> {
+	pub fn new(tree: &'a TaffyTree<C>, id: NodeId) -> Self {
+		let stack = tree
+			.children(id)
+			.unwrap_or_default()
+			.into_iter()
+			.rev()
+			.map(Edge::Open)
+			.collect();
+		Self { tree, stack }
+	}
+}
+
+impl<'a, C> Iterator for TaffyTreeIter<'a, C> {
+	type Item = Edge;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		let node = self.stack.pop()?;
+		if let Edge::Open(id) = node {
+			self.stack.push(Edge::Close(id));
+			let children = self
+				.tree
+				.children(id)
+				.unwrap_or_default()
+				.into_iter()
+				.rev()
+				.map(Edge::Open);
+			self.stack.extend(children);
 		}
-	}
-
-	fn measure_text(
-		&mut self,
-		known_dimensions: Size<Option<f32>>,
-		available_space: Size<taffy::AvailableSpace>,
-		node_id: taffy::NodeId,
-		_style: &taffy::Style,
-		text: &mut Text,
-	) -> Size<f32> {
-		let Text { style, t } = text;
-		let width_constraint = known_dimensions.width.or(match available_space.width {
-			AvailableSpace::MinContent => Some(0.0),
-			AvailableSpace::MaxContent => None,
-			AvailableSpace::Definite(width) => Some(width),
-		});
-
-		let (metrics, attrs) = match style {
-			TextStyle::Body => self.settings.body_text(),
-			TextStyle::H1 => self.settings.h1_text(),
-			TextStyle::H2 => self.settings.h1_text(),
-		};
-		let buffer = self.buffers.entry(node_id).or_insert_with(|| {
-			let mut buffer = Buffer::new(self.font_system, metrics);
-			buffer.set_wrap(self.font_system, cosmic_text::Wrap::WordOrGlyph);
-			buffer.set_size(self.font_system, width_constraint, None);
-			buffer.set_text(self.font_system, t, attrs, Shaping::Advanced);
-			buffer.shape_until_scroll(self.font_system, false);
-			buffer
-		});
-
-		let (width, total_lines) = buffer
-			.layout_runs()
-			.fold((0.0, 0usize), |(width, total_lines), run| {
-				(run.line_w.max(width), total_lines + 1)
-			});
-		let height = total_lines as f32 * metrics.line_height;
-
-		Size { width, height }
-	}
-
-	fn measure_element(
-		&mut self,
-		_known_dimensions: Size<Option<f32>>,
-		_available_space: Size<taffy::AvailableSpace>,
-		_node_id: taffy::NodeId,
-		_style: &taffy::Style,
-		_element: &mut Element,
-	) -> Size<f32> {
-		Size::ZERO
+		Some(node)
 	}
 }
 
@@ -833,53 +713,85 @@ fn render_resource<R: io::Seek + io::Read>(
 	settings: &RenderSettings,
 	font_system: &mut FontSystem,
 	file: ZipFile<R>,
-	item: &BookSpineItem,
+	_item: &BookSpineItem,
 	builder: NodeTreeBuilder,
+	tree: &mut taffy::TaffyTree<html_parser::NodeId>,
 ) -> Result<(Vec<PageContent>, NodeTreeBuilder), IllustratorRenderError> {
-	let mut node_tree = builder.read_from(file)?;
-	let body = node_tree
-		.nodes()
-		.find_map(|n| match n {
-			EdgeRef::OpenElement(el) if matches!(el.local_name(), &local_name!("body")) => {
-				Some(el.id)
-			}
-			_ => None,
-		})
-		.ok_or(IllustratorRenderError::MissingBodyElement)?;
-	let mut buffers = {
-		let tree = &mut node_tree.tree;
-		let mut measurer = MeasureContext::new(font_system, settings);
-		tree.set_style(
-			body,
-			Style {
-				size: taffy::Size {
-					width: length(settings.page_width_padded()),
-					height: auto(),
-				},
-				..Default::default()
-			},
-		)?;
-		tree.compute_layout_with_measure(
-			body,
-			Size::MAX_CONTENT,
-			|known_dimensions, available_space, node_id, node_context, style| match node_context {
-				Some(html_parser::Node::Text(text)) => {
-					measurer.measure_text(known_dimensions, available_space, node_id, style, text)
-				}
-				Some(html_parser::Node::Element(element)) => measurer.measure_element(
-					known_dimensions,
-					available_space,
-					node_id,
-					style,
-					element,
-				),
-				None => Size::ZERO,
-			},
-		)?;
-		measurer.buffers
-	};
+	let node_tree = builder.read_from(file)?;
 
-	// print_tree(&node_tree, &buffers)?;
+	let body: NodeId = tree.new_leaf(Style {
+		size: taffy::Size {
+			width: length(settings.page_width_padded()),
+			height: auto(),
+		},
+		..Default::default()
+	})?;
+	let mut buffers = HashMap::new();
+	let mut current = body;
+	let mut text_styles = Vec::new();
+	let mut texts = Vec::new();
+	for edge in node_tree
+		.body_iter()
+		.ok_or(IllustratorRenderError::MissingBody)?
+	{
+		match edge {
+			EdgeRef::OpenElement(el) => {
+				if has_text_style(el.local_name()) {
+					text_styles.push(text_style(settings, text_styles.last(), el.local_name()));
+				}
+				if !is_non_block(el.local_name()) {
+					if !texts.is_empty() {
+						buffers.entry(current).or_insert_with(|| {
+							create_text(settings, text_styles.last(), font_system, texts.drain(..))
+						});
+					}
+					let node = tree
+						.new_leaf_with_context(element_style(settings, el.local_name()), el.id)?;
+					tree.add_child(current, node)?;
+					current = node;
+				}
+			}
+			EdgeRef::CloseElement(_id, name) => {
+				if has_text_style(&name) {
+					text_styles.pop();
+				}
+				if !is_non_block(&name) {
+					if !texts.is_empty() {
+						buffers.entry(current).or_insert_with(|| {
+							create_text(settings, text_styles.last(), font_system, texts.drain(..))
+						});
+					}
+					current = tree
+						.parent(current)
+						.ok_or(IllustratorRenderError::UnexpectedExtraClose)?;
+				}
+			}
+			EdgeRef::Text(TextWrapper { t: Text { t }, .. }) => {
+				let attr = text_styles
+					.last()
+					.map(|(_, attrs)| attrs)
+					.cloned()
+					.unwrap_or(settings.body_text().1);
+				texts.push((t, attr))
+			}
+		}
+	}
+
+	debug_assert!(texts.is_empty());
+	debug_assert!(text_styles.is_empty());
+	drop(texts);
+	drop(text_styles);
+
+	tree.compute_layout_with_measure(
+		body,
+		Size::MAX_CONTENT,
+		|known_dimensions, available_space, node_id, _node_context, _style| match buffers
+			.get_mut(&node_id)
+		{
+			Some(buffer) => measure_text(font_system, buffer, known_dimensions, available_space),
+			None => Size::ZERO,
+		},
+	)?;
 
 	let page_height = settings.page_height_padded();
 	let padding_top = settings.padding_top_em * settings.em();
@@ -890,58 +802,55 @@ fn render_resource<R: io::Seek + io::Read>(
 	let mut pages = Vec::new();
 	let mut page = PageContent {
 		position: PagePosition::First,
-		elements: item.elements.start..item.elements.start,
+		index: 0,
+		elements: Range::from(0..0),
 		items: Vec::new(),
 	};
-	for edge in NodeTreeIter::new(&node_tree.tree, body) {
+	for edge in TaffyTreeIter::new(tree, body) {
 		match edge {
-			EdgeRef::OpenElement(el) => {
-				page.elements.end += 1;
-				let l = node_tree.tree.layout(el.id)?;
+			Edge::Open(id) => {
+				if let Some(id) = tree.get_node_context(id) {
+					page.elements.end = id.value();
+				}
+				let l = tree.layout(id)?;
 				offset = taffy::Point {
 					x: offset.x + l.location.x,
 					y: offset.y + l.location.y,
 				};
+				if let Some(buffer) = buffers.remove(&id) {
+					let content_end = offset.y + l.size.height;
+					if content_end - page_end > page_height {
+						let index = page.index + 1;
+						let elements_end = page.elements.end;
+						pages.push(page);
+						page = PageContent {
+							position: PagePosition::empty(),
+							index,
+							elements: Range::from(elements_end..elements_end),
+							items: Vec::new(),
+						};
+						page_end = offset.y;
+					}
+					page.items.push(DisplayItem::Text(DisplayText {
+						pos: taffy::Point {
+							x: padding_left + offset.x,
+							y: padding_top + offset.y - page_end,
+						},
+						size: l.size,
+						buffer,
+					}));
+				}
 			}
-			EdgeRef::CloseElement(id) => {
-				let l = node_tree.tree.layout(id)?;
+			Edge::Close(id) => {
+				let l = tree.layout(id)?;
 				offset = taffy::Point {
 					x: offset.x - l.location.x,
 					y: offset.y - l.location.y,
 				};
 			}
-			EdgeRef::Text(text) => {
-				// TODO: Break large content into pieces
-				let l = node_tree.tree.layout(text.id)?;
-				let content_end = offset.y + l.location.y + l.size.height;
-				if content_end - page_end > page_height {
-					log::info!("Break page at {page_end} {:?}", page.elements);
-					let elements_end = page.elements.end;
-					debug_assert!(!page.elements.is_empty(), "Must have elements");
-					pages.push(page);
-					page = PageContent {
-						position: PagePosition::empty(),
-						elements: elements_end..elements_end,
-						items: Vec::new(),
-					};
-					page_end = offset.y + l.location.y;
-				}
-				let b = buffers
-					.remove(&text.id)
-					.ok_or(IllustratorRenderError::NoTextBuffer(text.id))?;
-				page.items.push(DisplayItem::Text(DisplayText {
-					pos: taffy::Point {
-						x: padding_left + offset.x + l.location.x,
-						y: padding_top + offset.y + l.location.y - page_end,
-					},
-					size: l.size,
-					buffer: b,
-				}))
-			}
 		}
 	}
 	if !page.items.is_empty() || pages.is_empty() {
-		log::info!("Last page {:?}", page.elements);
 		page.position.set(PagePosition::Last, true);
 		pages.push(page);
 	} else if let Some(last) = pages.last_mut() {
@@ -949,59 +858,97 @@ fn render_resource<R: io::Seek + io::Read>(
 	}
 	log::trace!("Generated {} pages", pages.len());
 	debug_assert!(!pages.is_empty(), "Must have at least one page per chapter");
-	debug_assert!(
-		pages
-			.last()
-			.is_none_or(|p| p.elements.end == item.elements.end),
-		"Element count missmatch"
-	);
 
-	Ok((pages, node_tree.into_builder()?))
+	Ok((pages, node_tree.into_builder()))
 }
 
-#[allow(dead_code)]
-fn print_tree(
-	node_tree: &html_parser::NodeTree,
-	buffers: &HashMap<NodeId, Buffer>,
-) -> Result<(), IllustratorRenderError> {
-	let mut indent = Vec::new();
-	for edge in node_tree.nodes() {
-		match edge {
-			EdgeRef::OpenElement(el) => {
-				let layout = node_tree.tree.layout(el.id)?;
-				println!(
-					"{:i$}<{} left={} top={}>",
-					"",
-					el.name().local,
-					layout.location.x,
-					layout.location.y,
-					i = indent.len()
-				);
-				indent.push(el.name().local.clone());
-			}
-			EdgeRef::CloseElement(_) => {
-				if let Some(name) = indent.pop() {
-					println!("{:i$}</{name}>", "", i = indent.len());
-				}
-			}
-			EdgeRef::Text(text) => {
-				if let Some(buffer) = buffers.get(&text.id) {
-					for run in buffer.layout_runs() {
-						let start = run.glyphs.first().map(|g| g.start).unwrap_or(0);
-						let end = run.glyphs.last().map(|g| g.end).unwrap_or(start);
-						let t = &run
-							.text
-							.chars()
-							.skip(start)
-							.take(end - start)
-							.collect::<String>();
-						println!("{:i$} {}", "", t.trim(), i = indent.len());
-					}
-				} else {
-					println!("{:i$} {}", "", text.text(), i = indent.len());
-				}
-			}
-		}
+fn measure_text(
+	font_system: &mut FontSystem,
+	buffer: &mut Buffer,
+	known_dimensions: Size<Option<f32>>,
+	available_space: Size<taffy::AvailableSpace>,
+) -> Size<f32> {
+	let width_constraint = known_dimensions.width.or(match available_space.width {
+		AvailableSpace::MinContent => Some(0.0),
+		AvailableSpace::MaxContent => None,
+		AvailableSpace::Definite(width) => Some(width),
+	});
+
+	buffer.set_wrap(font_system, cosmic_text::Wrap::WordOrGlyph);
+	buffer.set_size(font_system, width_constraint, None);
+	buffer.shape_until_scroll(font_system, false);
+
+	let (width, total_lines) = buffer
+		.layout_runs()
+		.fold((0.0, 0usize), |(width, total_lines), run| {
+			(run.line_w.max(width), total_lines + 1)
+		});
+	let metrics = buffer.metrics();
+	let height = total_lines as f32 * metrics.line_height;
+
+	Size { width, height }
+}
+
+fn element_style(settings: &RenderSettings, name: &LocalName) -> Style {
+	match *name {
+		local_name!("p") => Style {
+			padding: Rect {
+				top: zero(),
+				bottom: length(settings.paragraph_padding()),
+				left: zero(),
+				right: zero(),
+			},
+			..Style::default()
+		},
+		_ => Style::default(),
 	}
-	Ok(())
+}
+
+fn create_text<'a>(
+	settings: &'a RenderSettings,
+	base: Option<&(cosmic_text::Metrics, cosmic_text::Attrs<'static>)>,
+	font_system: &mut FontSystem,
+	texts: impl IntoIterator<Item = (&'a str, Attrs<'a>)>,
+) -> Buffer {
+	let (metrics, attrs) = base.cloned().unwrap_or_else(|| settings.body_text());
+	let mut buffer = Buffer::new(font_system, metrics);
+	buffer.set_rich_text(font_system, texts, &attrs, Shaping::Advanced, None);
+	buffer
+}
+
+fn text_style(
+	settings: &RenderSettings,
+	base: Option<&(cosmic_text::Metrics, cosmic_text::Attrs<'static>)>,
+	name: &LocalName,
+) -> (cosmic_text::Metrics, cosmic_text::Attrs<'static>) {
+	let (metrics, attrs) = base.cloned().unwrap_or_else(|| settings.body_text());
+	match *name {
+		local_name!("b") | local_name!("strong") => {
+			(metrics, attrs.weight(cosmic_text::Weight::BOLD))
+		}
+		local_name!("i") | local_name!("em") => (metrics, attrs.style(cosmic_text::Style::Italic)),
+		local_name!("h1") => settings.h1_text(),
+		local_name!("h2") => settings.h2_text(),
+		local_name!("h3") => settings.h2_text(),
+		local_name!("h4") => settings.h2_text(),
+		_ => settings.body_text(),
+	}
+}
+
+fn has_text_style(name: &LocalName) -> bool {
+	name == &local_name!("h1")
+		|| name == &local_name!("h2")
+		|| name == &local_name!("h3")
+		|| name == &local_name!("h4")
+		|| name == &local_name!("strong")
+		|| name == &local_name!("b")
+		|| name == &local_name!("em")
+		|| name == &local_name!("i")
+}
+
+fn is_non_block(name: &LocalName) -> bool {
+	name == &local_name!("strong")
+		|| name == &local_name!("b")
+		|| name == &local_name!("em")
+		|| name == &local_name!("i")
 }
