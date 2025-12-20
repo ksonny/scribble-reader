@@ -699,7 +699,7 @@ impl GuiView for MainView {
 			ui.vertical(|ui| {
 				ui.add_space(5.0);
 				ui.horizontal(|ui| {
-					ui.columns(7, |columns| {
+					ui.columns(8, |columns| {
 						columns[1].with_layout(
 							Layout::centered_and_justified(egui::Direction::LeftToRight),
 							|ui| {
@@ -714,7 +714,9 @@ impl GuiView for MainView {
 							},
 						);
 						if let FeatureView::Illustrator(ref illustrator) = self.feature {
-							let book_open = matches!(illustrator.view, IllustratorInnerView::Book);
+							let toc_open =
+								matches!(illustrator.view, IllustratorInnerView::ToC(..));
+							let settings_open = false;
 							columns[3].with_layout(
 								Layout::centered_and_justified(egui::Direction::RightToLeft),
 								|ui| {
@@ -723,10 +725,10 @@ impl GuiView for MainView {
 										.button(
 											UiIcon::new(Icon::ListTree)
 												.xlarge()
-												.color(if book_open {
-													Color32::BLACK
-												} else {
+												.color(if toc_open {
 													theme::ACCENT_COLOR
+												} else {
+													Color32::BLACK
 												})
 												.build(),
 										)
@@ -736,8 +738,29 @@ impl GuiView for MainView {
 									}
 								},
 							);
+							columns[4].with_layout(
+								Layout::centered_and_justified(egui::Direction::RightToLeft),
+								|ui| {
+									ui.set_height(ui.available_width() * 0.5);
+									if ui
+										.button(
+											UiIcon::new(Icon::Cog)
+												.xlarge()
+												.color(if settings_open {
+													theme::ACCENT_COLOR
+												} else {
+													Color32::BLACK
+												})
+												.build(),
+										)
+										.clicked()
+									{
+										// poke_stick.settings();
+									}
+								},
+							);
 						}
-						columns[5].with_layout(
+						columns[6].with_layout(
 							Layout::centered_and_justified(egui::Direction::RightToLeft),
 							|ui| {
 								ui.set_height(ui.available_width() * 0.5);
