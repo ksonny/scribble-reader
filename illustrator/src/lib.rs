@@ -81,7 +81,7 @@ impl PageContentCache {
 
 		if loc.element == entry.elements.start {
 			Some((entry, entry.pages.first()?))
-		} else if loc.element == entry.elements.end {
+		} else if loc.element >= entry.elements.end {
 			Some((entry, entry.pages.last()?))
 		} else {
 			let page = entry
@@ -603,7 +603,7 @@ pub fn spawn_illustrator(
 					break;
 				}
 			};
-			log::info!("{:?}", req);
+			log::trace!("{req:?} {current_loc}");
 			match req {
 				Request::NextPage => {
 					current_loc = cache.read().unwrap().next_page(&book_meta, current_loc);
@@ -772,7 +772,7 @@ fn render_resource<R: io::Seek + io::Read>(
 					.map(|(_, attrs)| attrs)
 					.cloned()
 					.unwrap_or(settings.body_text().1);
-				texts.push((t, attr))
+				texts.push((t, attr));
 			}
 		}
 	}
