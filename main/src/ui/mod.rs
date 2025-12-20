@@ -28,10 +28,12 @@ use scribe::ScribeState;
 
 use scribe::library;
 use scribe::library::BookId;
+use scribe::library::Location;
 
 use crate::gestures;
 
 pub mod theme {
+	use egui::Color32;
 	use egui::FontFamily;
 	use egui::FontId;
 	use egui::TextStyle;
@@ -42,6 +44,7 @@ pub mod theme {
 	pub const M_SIZE: f32 = 18.0;
 	pub const L_SIZE: f32 = 24.0;
 	pub const XL_SIZE: f32 = 48.0;
+	pub const ACCENT_COLOR: Color32 = Color32::DARK_RED;
 
 	lazy_static! {
 		pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
@@ -290,7 +293,7 @@ impl egui::Widget for BookCardUi<'_> {
 			});
 			ui.interact(
 				ui.min_rect(),
-				egui::Id::new(card.id.value()),
+				ui.id().with(card.id.value()),
 				egui::Sense::click(),
 			)
 		})
@@ -304,18 +307,18 @@ impl BookCard {
 	}
 }
 
+pub const LIBRARY_LIST_SIZE: u32 = 5;
+
 pub(crate) struct ListView {
 	pub(crate) page: u32,
-	pub(crate) cards: [Option<BookCard>; 5],
+	pub(crate) cards: [Option<BookCard>; LIBRARY_LIST_SIZE as usize],
 }
 
 impl ListView {
-	pub const SIZE: u32 = 5;
-
 	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl Bell) {
 		let height =
-			ui.available_height() - (Self::SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
-		let card_height = height / 5.0;
+			ui.available_height() - (LIBRARY_LIST_SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
+		let card_height = height / LIBRARY_LIST_SIZE as f32;
 
 		ui.vertical(|ui| {
 			for card in self.cards.iter().flatten() {
@@ -329,6 +332,76 @@ impl ListView {
 	}
 }
 
+#[derive(Debug)]
+pub(crate) struct ToCCard {
+	pub(crate) location: Location,
+	pub(crate) title: Arc<String>,
+}
+
+struct ChapterCardUi<'a> {
+	card: &'a ToCCard,
+}
+
+impl egui::Widget for ChapterCardUi<'_> {
+	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		let card = self.card;
+		ui.group(|ui| {
+			ui.set_min_size(ui.available_size());
+			let title = card.title.as_ref();
+			ui.label(RichText::new(title).text_style(theme::HEADING2.clone()));
+			ui.interact(
+				ui.min_rect(),
+				ui.id().with(card.location.spine),
+				egui::Sense::click(),
+			)
+		})
+		.inner
+	}
+}
+
+impl ToCCard {
+	fn ui<'a>(&'a self) -> ChapterCardUi<'a> {
+		ChapterCardUi { card: self }
+	}
+}
+
+pub const TOC_LIST_SIZE: u32 = 12;
+
+#[derive(Default, Debug)]
+pub(crate) struct ToCView {
+	pub(crate) page: u32,
+	pub(crate) cards: [Option<ToCCard>; TOC_LIST_SIZE as usize],
+}
+
+impl ToCView {
+	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl Bell) {
+		let height =
+			ui.available_height() - (TOC_LIST_SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
+		let card_height = height / TOC_LIST_SIZE as f32;
+
+		ui.vertical(|ui| {
+			for card in self.cards.iter().flatten() {
+				ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
+					if ui.add(card.ui()).clicked() {
+						poke_stick.goto_location(card.location);
+					}
+				});
+			}
+		});
+	}
+}
+
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum IllustratorInnerView {
+	Book,
+	ToC(ToCView),
+}
+
+pub(crate) struct IllustratorView {
+	view: IllustratorInnerView,
+	handle: IllustratorHandle,
+}
+
 pub trait Bell {
 	fn scan_library(&self);
 
@@ -336,22 +409,26 @@ pub trait Bell {
 
 	fn previous_page(&self);
 
+	fn goto_location(&self, loc: Location);
+
 	fn open_book(&self, id: BookId);
 
 	fn open_library(&self);
+
+	fn toggle_chapters(&self);
 }
 
 pub enum FeatureView {
-	Illustrator(IllustratorHandle),
-	List(Box<ListView>),
+	Illustrator(IllustratorView),
+	List(ListView),
 }
 
 impl Default for FeatureView {
 	fn default() -> Self {
-		FeatureView::List(Box::new(ListView {
+		FeatureView::List(ListView {
 			page: 0,
 			cards: Default::default(),
-		}))
+		})
 	}
 }
 
@@ -371,17 +448,17 @@ impl MainView {
 
 	pub(crate) fn open_library(&mut self) {
 		self.invisible = false;
-		self.feature = FeatureView::List(Box::new(ListView {
+		self.feature = FeatureView::List(ListView {
 			cards: Default::default(),
 			page: 0,
-		}));
+		});
 	}
 
 	pub(crate) fn library_loaded(&mut self, scribe: &mut scribe::Scribe) {
 		match &mut self.feature {
 			FeatureView::Illustrator(_) => {}
 			FeatureView::List(list) => {
-				let books = scribe.library().books(0..ListView::SIZE);
+				let books = scribe.library().books(0..LIBRARY_LIST_SIZE);
 				self.working = scribe.poke_list(&books);
 				let mut books_iter = books.into_iter().map(|b| {
 					let id = b.id;
@@ -410,19 +487,45 @@ impl MainView {
 
 	pub(crate) fn open_book(&mut self, handle: IllustratorHandle) {
 		self.invisible = true;
-		self.feature = FeatureView::Illustrator(handle);
+		self.feature = FeatureView::Illustrator(IllustratorView {
+			view: IllustratorInnerView::Book,
+			handle,
+		});
 	}
 
 	pub(crate) fn next_page(&mut self, scribe: &mut scribe::Scribe) {
 		match &mut self.feature {
-			FeatureView::Illustrator(handle) => {
+			FeatureView::Illustrator(IllustratorView {
+				view: IllustratorInnerView::Book,
+				handle,
+			}) => {
 				if let Err(e) = handle.next_page() {
 					log::error!("Illustrator error: {e}");
 				}
 			}
+			FeatureView::Illustrator(IllustratorView {
+				view: IllustratorInnerView::ToC(toc_view),
+				handle,
+			}) => {
+				let page = toc_view.page + 1;
+				let offset = (page * TOC_LIST_SIZE) as usize;
+				let toc = handle.toc.read().unwrap();
+				if toc.items.len() > offset {
+					let mut item_iter = toc.items.iter().skip(offset);
+					for card in toc_view.cards.as_mut() {
+						if let Some(item) = item_iter.next() {
+							*card = Some(ToCCard {
+								location: item.location,
+								title: item.title.clone(),
+							});
+						}
+					}
+					toc_view.page = page;
+				}
+			}
 			FeatureView::List(list) => {
 				let page = list.page + 1;
-				let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
+				let r = (page * LIBRARY_LIST_SIZE)..(page * LIBRARY_LIST_SIZE + LIBRARY_LIST_SIZE);
 				let books = scribe.library().books(r);
 				if !books.is_empty() {
 					self.working = scribe.poke_list(&books);
@@ -439,14 +542,34 @@ impl MainView {
 
 	pub(crate) fn previous_page(&mut self, scribe: &mut scribe::Scribe) {
 		match &mut self.feature {
-			FeatureView::Illustrator(handle) => {
+			FeatureView::Illustrator(IllustratorView {
+				view: IllustratorInnerView::Book,
+				handle,
+			}) => {
 				if let Err(e) = handle.previous_page() {
 					log::error!("Illustrator error: {e}");
 				}
 			}
+			FeatureView::Illustrator(IllustratorView {
+				view: IllustratorInnerView::ToC(toc_view),
+				handle,
+			}) => {
+				toc_view.page = toc_view.page.saturating_sub(1);
+				let offset = toc_view.page * TOC_LIST_SIZE;
+				let toc = handle.toc.read().unwrap();
+				let mut item_iter = toc.items.iter().skip(offset as usize);
+				for card in toc_view.cards.as_mut() {
+					if let Some(item) = item_iter.next() {
+						*card = Some(ToCCard {
+							location: item.location,
+							title: item.title.clone(),
+						});
+					}
+				}
+			}
 			FeatureView::List(list) => {
 				let page = list.page.saturating_sub(1);
-				let r = (page * ListView::SIZE)..(page * ListView::SIZE + ListView::SIZE);
+				let r = (page * LIBRARY_LIST_SIZE)..(page * LIBRARY_LIST_SIZE + LIBRARY_LIST_SIZE);
 				let books = scribe.library().books(r);
 				self.working = scribe.poke_list(&books);
 				let mut books_iter = books.into_iter().map(|b| {
@@ -455,6 +578,48 @@ impl MainView {
 				});
 				list.cards = std::array::from_fn(|_| books_iter.next().map(BookCard::new));
 				list.page = page;
+			}
+		}
+	}
+
+	pub(crate) fn goto(&mut self, location: Location) {
+		match &mut self.feature {
+			FeatureView::Illustrator(illustrator) => {
+				if let Err(e) = illustrator.handle.goto(location) {
+					log::error!("Illustrator error: {e}");
+				}
+				illustrator.view = IllustratorInnerView::Book;
+			}
+			FeatureView::List(_) => {}
+		}
+	}
+
+	pub(crate) fn toggle_toc(&mut self) {
+		if let FeatureView::Illustrator(IllustratorView { view, handle }) = &mut self.feature {
+			match view {
+				IllustratorInnerView::Book => {
+					let loc = *handle.location.read().unwrap();
+					let mut toc_view = ToCView::default();
+					let toc = handle.toc.read().unwrap();
+					let index = toc.items.iter().position(|i| i.location.spine == loc.spine);
+					let page = index.map(|index| index as u32 / TOC_LIST_SIZE).unwrap_or(0);
+					let offset = page * TOC_LIST_SIZE;
+
+					let mut item_iter = toc.items.iter().skip(offset as usize);
+					for card in toc_view.cards.as_mut() {
+						if let Some(item) = item_iter.next() {
+							*card = Some(ToCCard {
+								location: item.location,
+								title: item.title.clone(),
+							});
+						}
+					}
+					toc_view.page = page;
+					*view = IllustratorInnerView::ToC(toc_view);
+				}
+				IllustratorInnerView::ToC(_) => {
+					*view = IllustratorInnerView::Book;
+				}
 			}
 		}
 	}
@@ -542,6 +707,30 @@ impl GuiView for MainView {
 								}
 							},
 						);
+						if let FeatureView::Illustrator(ref illustrator) = self.feature {
+							let book_open = matches!(illustrator.view, IllustratorInnerView::Book);
+							columns[3].with_layout(
+								Layout::centered_and_justified(egui::Direction::RightToLeft),
+								|ui| {
+									ui.set_height(ui.available_width() * 0.5);
+									if ui
+										.button(
+											UiIcon::new(Icon::ListTree)
+												.xlarge()
+												.color(if book_open {
+													Color32::BLACK
+												} else {
+													theme::ACCENT_COLOR
+												})
+												.build(),
+										)
+										.clicked()
+									{
+										poke_stick.toggle_chapters();
+									}
+								},
+							);
+						}
 						columns[5].with_layout(
 							Layout::centered_and_justified(egui::Direction::RightToLeft),
 							|ui| {
@@ -562,7 +751,22 @@ impl GuiView for MainView {
 		self.rects.push(bottom_panel.response.interact_rect);
 
 		match &self.feature {
-			FeatureView::Illustrator(_) => {}
+			FeatureView::Illustrator(IllustratorView {
+				view: IllustratorInnerView::Book,
+				..
+			}) => {}
+			FeatureView::Illustrator(IllustratorView {
+				view: IllustratorInnerView::ToC(chapters),
+				..
+			}) => {
+				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
+					if self.menu_open {
+						ui.disable();
+					}
+					chapters.draw(ui, poke_stick)
+				});
+				self.rects.push(central_panel.response.interact_rect);
+			}
 			FeatureView::List(list) => {
 				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
 					if self.menu_open {

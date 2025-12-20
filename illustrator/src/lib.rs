@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::io::Cursor;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::range::Range;
@@ -29,11 +30,11 @@ use cosmic_text::Buffer;
 use cosmic_text::FontSystem;
 use cosmic_text::Shaping;
 use epub::doc::EpubDoc;
-use epub::doc::NavPoint;
 use html5ever::LocalName;
 use html5ever::local_name;
 use scribe::library;
 use scribe::library::Location;
+use serde::Deserialize;
 use taffy::prelude::*;
 use zip::ZipArchive;
 use zip::read::ZipFile;
@@ -183,6 +184,8 @@ pub struct IllustratorHandle {
 	req_tx: Sender<Request>,
 	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorError>>,
+	pub toc: Arc<RwLock<IllustratorToC>>,
+	pub location: Arc<RwLock<Location>>,
 }
 
 impl IllustratorHandle {
@@ -203,6 +206,16 @@ impl IllustratorHandle {
 			.send(Request::PreviousPage)
 			.map_err(|_| IllustratorRequestError::NotRunning)
 	}
+}
+
+pub struct IllustratorToCItem {
+	pub title: Arc<String>,
+	pub location: Location,
+}
+
+#[derive(Default)]
+pub struct IllustratorToC {
+	pub items: Vec<IllustratorToCItem>,
 }
 
 pub struct Illustrator {
@@ -319,15 +332,72 @@ impl BookResource {
 	}
 }
 
-#[allow(unused)]
-#[derive(Debug)]
-struct BookToCItem {
-	label: String,
-	content: PathBuf,
-	play_order: usize,
+#[derive(Debug, Deserialize)]
+pub(crate) struct NavLabel {
+	text: String,
 }
 
-#[allow(unused)]
+#[derive(Debug, Deserialize)]
+pub(crate) struct Content {
+	#[serde(rename = "@src")]
+	src: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct NavPoint {
+	#[serde(rename = "@id")]
+	id: String,
+	#[serde(rename = "navLabel")]
+	nav_label: NavLabel,
+	#[serde(rename = "content")]
+	content: Content,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct NavMap {
+	#[serde(rename = "navPoint")]
+	nav_points: Vec<NavPoint>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct Navigation {
+	#[serde(rename = "navMap")]
+	nav_map: NavMap,
+}
+
+fn read_navigation(s: &str) -> Result<Navigation, quick_xml::de::DeError> {
+	quick_xml::de::from_str(s)
+}
+
+impl Navigation {
+	fn into_toc(self, spine: &[BookSpineItem]) -> IllustratorToC {
+		let spine_lookup = spine
+			.iter()
+			.enumerate()
+			.map(|(i, s)| (&s.idref, i))
+			.collect::<BTreeMap<_, _>>();
+		let mut items = Vec::new();
+		for nav_point in &self.nav_map.nav_points {
+			if let Some(spine) = spine_lookup.get(&nav_point.content.src) {
+				items.push(IllustratorToCItem {
+					title: Arc::new(nav_point.nav_label.text.clone()),
+					location: Location {
+						spine: *spine as u32,
+						element: 0,
+					},
+				});
+			} else {
+				log::warn!(
+					"Failed to find {} {} in spine",
+					nav_point.id,
+					nav_point.nav_label.text
+				);
+			}
+		}
+		IllustratorToC { items }
+	}
+}
+
 #[derive(Debug)]
 struct BookSpineItem {
 	index: u32,
@@ -336,20 +406,11 @@ struct BookSpineItem {
 }
 
 #[allow(unused)]
+#[derive(Debug)]
 struct BookMeta {
 	resources: BTreeMap<String, BookResource>,
 	spine: Vec<BookSpineItem>,
-	toc: Vec<BookToCItem>,
-	toc_title: String,
 	cover_id: Option<String>,
-}
-
-impl BookMeta {
-	fn spine_resource(&self, loc: Location) -> Option<(&BookSpineItem, &Path)> {
-		self.spine
-			.get(loc.spine as usize)
-			.and_then(|s| self.resources.get(&s.idref).map(|r| (s, r.path.as_path())))
-	}
 }
 
 impl BookMeta {
@@ -361,8 +422,6 @@ impl BookMeta {
 		let EpubDoc {
 			resources,
 			spine,
-			toc,
-			toc_title,
 			cover_id,
 			metadata,
 			..
@@ -371,11 +430,6 @@ impl BookMeta {
 			.into_iter()
 			.map(|(key, (path, mime))| (key, BookResource::new(path, &mime)))
 			.collect::<BTreeMap<_, _>>();
-		let toc = {
-			let mut items = Vec::new();
-			convert_toc(&mut items, toc.into_iter());
-			items
-		};
 		let spine = {
 			let mut builder = NodeTreeBuilder::new();
 			let mut items = Vec::new();
@@ -405,28 +459,39 @@ impl BookMeta {
 		Ok(Self {
 			resources,
 			spine,
-			toc_title,
-			toc,
 			cover_id,
 		})
 	}
+
+	fn spine_resource(&self, loc: Location) -> Option<(&BookSpineItem, &Path)> {
+		self.spine
+			.get(loc.spine as usize)
+			.and_then(|s| self.resources.get(&s.idref).map(|r| (s, r.path.as_path())))
+	}
 }
 
-fn convert_toc(toc_items: &mut Vec<BookToCItem>, iter: impl Iterator<Item = NavPoint>) {
-	for item in iter {
-		let NavPoint {
-			label,
-			content,
-			children,
-			play_order,
-		} = item;
-		toc_items.push(BookToCItem {
-			label,
-			content,
-			play_order,
-		});
-		convert_toc(toc_items, children.into_iter());
-	}
+fn read_book_meta(
+	bytes: SharedVec,
+	archive: &mut ZipArchive<Cursor<SharedVec>>,
+) -> Result<(BookMeta, Option<IllustratorToC>), IllustratorError> {
+	let doc = EpubDoc::from_reader(Cursor::new(bytes.clone()))
+		.inspect_err(|e| log::error!("Error: {e}"))?;
+	let book_meta = BookMeta::create(doc, archive)?;
+	let toc = book_meta.resources.get("ncx").and_then(|res| {
+		let mut buf = String::new();
+		archive
+			.by_path(&res.path)
+			.inspect_err(|e| log::error!("Error: {e}"))
+			.ok()?
+			.read_to_string(&mut buf)
+			.inspect_err(|e| log::error!("Error: {e}"))
+			.ok()?;
+		let nav = read_navigation(&buf)
+			.inspect_err(|e| log::error!("Error: {e}"))
+			.ok()?;
+		Some(nav.into_toc(&book_meta.spine))
+	});
+	Ok((book_meta, toc))
 }
 
 #[derive(Debug)]
@@ -538,16 +603,23 @@ pub fn spawn_illustrator(
 
 	illustrator.req_tx = Some(req_tx.clone());
 
+	let handle_toc = Arc::new(RwLock::new(IllustratorToC::default()));
+	let handle_loc = Arc::new(RwLock::new(book.location()));
+
+	let shared_toc = handle_toc.clone();
+	let shared_loc = handle_loc.clone();
+
 	let handle = std::thread::spawn(move || -> Result<(), IllustratorError> {
 		log::trace!("Launching illustrator");
 		let bytes = SharedVec(Arc::new(
 			fs::read(&book.path).inspect_err(|e| log::error!("Error: {e}"))?,
 		));
-		let doc = EpubDoc::from_reader(Cursor::new(bytes.clone()))
+		let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))
 			.inspect_err(|e| log::error!("Error: {e}"))?;
-		let mut archive =
-			ZipArchive::new(Cursor::new(bytes)).inspect_err(|e| log::error!("Error: {e}"))?;
-		let book_meta = BookMeta::create(doc, &mut archive)?;
+		let (book_meta, toc) = read_book_meta(bytes, &mut archive)?;
+		if let Some(toc) = toc {
+			*shared_toc.write().unwrap() = toc;
+		}
 
 		log::info!(
 			"Opened book with {} resources, {} spine items",
@@ -589,6 +661,7 @@ pub fn spawn_illustrator(
 					)
 					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
 					log::info!("Record loc {current_loc}");
+					*shared_loc.write().unwrap() = current_loc;
 					records
 						.record_book_state(id, Some(current_loc))
 						.inspect_err(|e| log::error!("Error: {e}"))?;
@@ -624,7 +697,12 @@ pub fn spawn_illustrator(
 		Ok(())
 	});
 
-	Ok(IllustratorHandle { req_tx, handle })
+	Ok(IllustratorHandle {
+		req_tx,
+		handle,
+		toc: handle_toc,
+		location: handle_loc,
+	})
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -964,4 +1042,36 @@ fn is_non_block(name: &LocalName) -> bool {
 		|| name == &local_name!("b")
 		|| name == &local_name!("em")
 		|| name == &local_name!("i")
+}
+
+#[cfg(test)]
+mod tests {
+	use quick_xml::de::from_str;
+
+	#[test]
+	fn test_parse_basic() -> Result<(), quick_xml::de::DeError> {
+		let input = r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<ncx version="2005-1" xmlns="http://www.daisy.org/z3986/2005/ncx/">
+  <head>
+    <meta name="dtb:depth" content="1" />
+    <meta name="dtb:totalPageCount" content="0" />
+    <meta name="dtb:maxPageNumber" content="0" />
+  </head>
+  <docTitle>
+    <text>Table Of Contents</text>
+  </docTitle>
+  <navMap>
+    <navPoint id="navPoint-1">
+      <navLabel>
+       <text>Cover</text>
+      </navLabel>
+      <content src="cover.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>"#;
+
+		let _nav_map: super::Navigation = from_str(input)?;
+		Ok(())
+	}
 }

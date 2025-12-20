@@ -213,6 +213,10 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				self.view.previous_page(&mut self.scribe);
 				self.request_redraw();
 			}
+			AppPoke::Goto(location) => {
+				self.view.goto(location);
+				self.request_redraw();
+			}
 			AppPoke::OpenBook(book_id) => {
 				match spawn_illustrator(&mut self.illustrator, self.bell.clone(), book_id) {
 					Ok(handle) => {
@@ -231,6 +235,10 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 						}
 					};
 				}
+			}
+			AppPoke::ToggleToC => {
+				self.view.toggle_toc();
+				self.request_redraw();
 			}
 			AppPoke::BookContentReady(book_id, loc) => {
 				log::trace!("Book content ready {book_id:?} {loc}",);
@@ -376,7 +384,9 @@ pub enum AppPoke {
 	LibraryUpdated(BookId),
 	NextPage,
 	PreviousPage,
+	Goto(Location),
 	OpenBook(BookId),
+	ToggleToC,
 	LibraryOpen,
 	ScanLibrary,
 	BookContentReady(BookId, Location),
@@ -402,6 +412,11 @@ impl ui::Bell for EventLoopBell {
 		proxy.send_event(AppPoke::PreviousPage).unwrap();
 	}
 
+	fn goto_location(&self, loc: Location) {
+		let EventLoopBell(proxy) = self;
+		proxy.send_event(AppPoke::Goto(loc)).unwrap();
+	}
+
 	fn open_book(&self, id: BookId) {
 		let EventLoopBell(proxy) = self;
 		proxy.send_event(AppPoke::OpenBook(id)).unwrap();
@@ -410,6 +425,11 @@ impl ui::Bell for EventLoopBell {
 	fn open_library(&self) {
 		let EventLoopBell(proxy) = self;
 		proxy.send_event(AppPoke::LibraryOpen).unwrap();
+	}
+
+	fn toggle_chapters(&self) {
+		let EventLoopBell(proxy) = self;
+		proxy.send_event(AppPoke::ToggleToC).unwrap();
 	}
 }
 

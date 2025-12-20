@@ -11,8 +11,10 @@ html5ever = "0.35.0"
 image = { workspace = true }
 log = { workspace = true }
 mime = "0.3.17"
+quick-xml = { version = "0.38.4", features = ["serialize"] }
 rayon = { workspace = true }
 scribe = { version = "0.1.0", path = "../scribe" }
+serde.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror = { workspace = true }
 zip = "5.1.1"

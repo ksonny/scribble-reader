@@ -191,7 +191,7 @@ impl Scribe {
 			}
 			Err(e) => {
 				log::info!("Error sending to scribe: {e}");
-				todo!()
+				todo!();
 			}
 		}
 	}

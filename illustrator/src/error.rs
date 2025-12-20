@@ -11,6 +11,8 @@ pub enum IllustratorError {
 	#[error(transparent)]
 	Zip(#[from] zip::result::ZipError),
 	#[error(transparent)]
+	QuickXml(#[from] quick_xml::de::DeError),
+	#[error(transparent)]
 	Render(#[from] IllustratorRenderError),
 	#[error("at {1}: {0}")]
 	Io(std::io::Error, &'static std::panic::Location<'static>),
