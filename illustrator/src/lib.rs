@@ -820,9 +820,8 @@ fn render_resource<R: io::Seek + io::Read>(
 						buffers.entry(current).or_insert_with(|| {
 							create_text(
 								settings,
-								text_styles.last(),
 								&mut font_system.lock().unwrap(),
-								texts.drain(..),
+								std::mem::take(&mut texts),
 							)
 						});
 					}
@@ -841,9 +840,8 @@ fn render_resource<R: io::Seek + io::Read>(
 						buffers.entry(current).or_insert_with(|| {
 							create_text(
 								settings,
-								text_styles.last(),
 								&mut font_system.lock().unwrap(),
-								texts.drain(..),
+								std::mem::take(&mut texts),
 							)
 						});
 					}
@@ -853,12 +851,11 @@ fn render_resource<R: io::Seek + io::Read>(
 				}
 			}
 			EdgeRef::Text(TextWrapper { t: Text { t }, .. }) => {
-				let attr = text_styles
+				let (metrics, attr) = text_styles
 					.last()
-					.map(|(_, attrs)| attrs)
 					.cloned()
-					.unwrap_or(settings.body_text().1);
-				texts.push((t, attr));
+					.unwrap_or(settings.body_text());
+				texts.push((t, metrics, attr));
 			}
 		}
 	}
@@ -997,11 +994,14 @@ fn element_style(settings: &RenderSettings, name: &LocalName) -> Style {
 
 fn create_text<'a>(
 	settings: &'a RenderSettings,
-	base: Option<&(cosmic_text::Metrics, cosmic_text::Attrs<'static>)>,
 	font_system: &mut FontSystem,
-	texts: impl IntoIterator<Item = (&'a str, Attrs<'a>)>,
+	texts: Vec<(&'a str, cosmic_text::Metrics, Attrs<'a>)>,
 ) -> Buffer {
-	let (metrics, attrs) = base.cloned().unwrap_or_else(|| settings.body_text());
+	let first = texts.first();
+	let metrics = first.map(|(_, m, _)| *m).unwrap_or(settings.body_text().0);
+	let attrs = first.map(|(_, _, a)| a.clone()).unwrap_or(settings.body_text().1);
+	let texts = texts.into_iter().map(|(t, _, a)| (t, a));
+
 	let mut buffer = Buffer::new(font_system, metrics);
 	buffer.set_rich_text(font_system, texts, &attrs, Shaping::Advanced, None);
 	buffer
