@@ -175,8 +175,8 @@ fn create_thumbnail(
 
 fn scan_book(path: PathBuf, metadata: fs::Metadata) -> Result<InsertBook, SecretStorageError> {
 	let doc = EpubDoc::new(&path)?;
-	let title = doc.mdata("title");
-	let author = doc.mdata("creator");
+	let title = doc.mdata("title").map(|m| m.value.clone());
+	let author = doc.mdata("creator").map(|m| m.value.clone());
 	let size = metadata.size();
 	let modified_at = metadata.modified().or_else(|_| metadata.created())?.into();
 	let added_at = Utc::now();

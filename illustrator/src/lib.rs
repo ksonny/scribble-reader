@@ -422,13 +422,15 @@ impl BookMeta {
 		let EpubDoc {
 			resources,
 			spine,
-			cover_id,
 			metadata,
 			..
 		} = epub;
+		let cover_id = metadata.iter().find(|data| data.property == "cover").map(|m| m.value.clone());
+		let title = metadata.iter().find(|data| data.property == "title").map(|m| m.value.clone());
+
 		let resources = resources
 			.into_iter()
-			.map(|(key, (path, mime))| (key, BookResource::new(path, &mime)))
+			.map(|(key, res)| (key, BookResource::new(res.path, &res.mime)))
 			.collect::<BTreeMap<_, _>>();
 		let spine = {
 			let mut builder = NodeTreeBuilder::new();
@@ -452,7 +454,7 @@ impl BookMeta {
 		let dur = Instant::now().duration_since(start);
 		log::info!(
 			"Opened {:?} in {}",
-			metadata.get("title"),
+			title,
 			dur.as_secs_f64()
 		);
 
