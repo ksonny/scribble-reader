@@ -30,6 +30,12 @@ pub struct SortOrder(pub SortField, pub SortDirection);
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
 pub struct BookId(pub i64);
 
+impl Display for BookId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "[b{}]", self.0)
+    }
+}
+
 impl BookId {
 	pub fn value(&self) -> i64 {
 		let BookId(id) = self;

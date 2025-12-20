@@ -595,7 +595,7 @@ pub fn spawn_illustrator(
 ) -> Result<IllustratorHandle, IllustratorSpawnError> {
 	let records = scribe::record_keeper::create(&illustrator.state_db_path)?;
 
-	log::info!("Open book {id:?}");
+	log::info!("Open book {id}");
 	let book = records.fetch_book(id)?;
 
 	let (req_tx, req_rx) = channel();
@@ -662,7 +662,7 @@ pub fn spawn_illustrator(
 						path,
 					)
 					.inspect_err(|e| log::error!("Illustrator error: {e}"))?;
-					log::info!("Record loc {current_loc}");
+					log::debug!("Save location {current_loc} in {}", book.id);
 					*shared_loc.write().unwrap() = current_loc;
 					records
 						.record_book_state(id, Some(current_loc))
