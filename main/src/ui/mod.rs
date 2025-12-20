@@ -518,6 +518,8 @@ impl MainView {
 								location: item.location,
 								title: item.title.clone(),
 							});
+						} else {
+							*card = None;
 						}
 					}
 					toc_view.page = page;
@@ -564,6 +566,8 @@ impl MainView {
 							location: item.location,
 							title: item.title.clone(),
 						});
+					} else {
+						*card = None;
 					}
 				}
 			}
@@ -612,6 +616,8 @@ impl MainView {
 								location: item.location,
 								title: item.title.clone(),
 							});
+						} else {
+							*card = None;
 						}
 					}
 					toc_view.page = page;
