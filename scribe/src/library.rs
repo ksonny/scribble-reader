@@ -45,7 +45,7 @@ pub struct Location {
 
 impl Display for Location {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "[Spine {}:{}]", self.spine, self.element)
+		write!(f, "[sp{}_el{}]", self.spine, self.element)
 	}
 }
 

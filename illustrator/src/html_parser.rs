@@ -349,12 +349,13 @@ impl TreeSink for NodeTreeBuilder {
 		_flags: html5ever::interface::ElementFlags,
 	) -> Self::Handle {
 		log::trace!("create_element({name:?}, {attrs:?})");
-		let is_body =  matches!(&name.local, &local_name!("body"));
+		let is_body = matches!(&name.local, &local_name!("body"));
 		let attrs = attrs
 			.into_iter()
 			.map(|a| ((a.name.ns, a.name.local), a.value.to_string()))
 			.collect();
-		let node_id = self.tree
+		let node_id = self
+			.tree
 			.borrow_mut()
 			.add_node_with_context(Leaf::Element(Element { name, attrs }));
 		if is_body {

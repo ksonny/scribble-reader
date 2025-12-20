@@ -251,7 +251,7 @@ impl Illustrator {
 	}
 
 	pub fn resize(&mut self, width: u32, height: u32) {
-		log::info!("Resize event");
+		log::debug!("Resize event {width}/{height}");
 		let mut settings = self.settings.write().unwrap();
 		settings.page_width = width;
 		settings.page_height = height;
@@ -259,7 +259,7 @@ impl Illustrator {
 	}
 
 	pub fn rescale(&mut self, scale: f32) {
-		log::info!("Rescale event");
+		log::debug!("Rescale event {scale}");
 		let mut settings = self.settings.write().unwrap();
 		settings.scale = scale;
 		self.settings_changed = true;
@@ -647,9 +647,8 @@ fn assure_cached<R: io::Seek + io::Read>(
 		let file = archive.by_path(path)?;
 		let (pages, b) = render_resource(
 			&settings.read().unwrap(),
-			&mut font_system.lock().unwrap(),
+			font_system,
 			file,
-			item,
 			builder,
 			taffy_tree,
 		)?;
@@ -711,9 +710,8 @@ impl<'a, C> Iterator for TaffyTreeIter<'a, C> {
 
 fn render_resource<R: io::Seek + io::Read>(
 	settings: &RenderSettings,
-	font_system: &mut FontSystem,
+	font_system: &Mutex<FontSystem>,
 	file: ZipFile<R>,
-	_item: &BookSpineItem,
 	builder: NodeTreeBuilder,
 	tree: &mut taffy::TaffyTree<html_parser::NodeId>,
 ) -> Result<(Vec<PageContent>, NodeTreeBuilder), IllustratorRenderError> {
@@ -742,7 +740,12 @@ fn render_resource<R: io::Seek + io::Read>(
 				if !is_non_block(el.local_name()) {
 					if !texts.is_empty() {
 						buffers.entry(current).or_insert_with(|| {
-							create_text(settings, text_styles.last(), font_system, texts.drain(..))
+							create_text(
+								settings,
+								text_styles.last(),
+								&mut font_system.lock().unwrap(),
+								texts.drain(..),
+							)
 						});
 					}
 					let node = tree
@@ -758,7 +761,12 @@ fn render_resource<R: io::Seek + io::Read>(
 				if !is_non_block(&name) {
 					if !texts.is_empty() {
 						buffers.entry(current).or_insert_with(|| {
-							create_text(settings, text_styles.last(), font_system, texts.drain(..))
+							create_text(
+								settings,
+								text_styles.last(),
+								&mut font_system.lock().unwrap(),
+								texts.drain(..),
+							)
 						});
 					}
 					current = tree
@@ -788,7 +796,12 @@ fn render_resource<R: io::Seek + io::Read>(
 		|known_dimensions, available_space, node_id, _node_context, _style| match buffers
 			.get_mut(&node_id)
 		{
-			Some(buffer) => measure_text(font_system, buffer, known_dimensions, available_space),
+			Some(buffer) => measure_text(
+				&mut font_system.lock().unwrap(),
+				buffer,
+				known_dimensions,
+				available_space,
+			),
 			None => Size::ZERO,
 		},
 	)?;
