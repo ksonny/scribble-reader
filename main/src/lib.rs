@@ -245,7 +245,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				if let Some(renderer) = &mut self.renderer {
 					let state = self.illustrator.state().unwrap();
 					if let Some(page) = state.page(loc) {
-						log::trace!("Fond page, render {} items", page.items.len());
+						log::trace!("Found page, render {} items", page.items.len());
 						match renderer.prepare_page(
 							&mut self.illustrator.font_system().unwrap(),
 							page.items.iter().map(|d| match d {
