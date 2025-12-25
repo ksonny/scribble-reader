@@ -425,8 +425,14 @@ impl BookMeta {
 			metadata,
 			..
 		} = epub;
-		let cover_id = metadata.iter().find(|data| data.property == "cover").map(|m| m.value.clone());
-		let title = metadata.iter().find(|data| data.property == "title").map(|m| m.value.clone());
+		let cover_id = metadata
+			.iter()
+			.find(|data| data.property == "cover")
+			.map(|m| m.value.clone());
+		let title = metadata
+			.iter()
+			.find(|data| data.property == "title")
+			.map(|m| m.value.clone());
 
 		let resources = resources
 			.into_iter()
@@ -452,11 +458,7 @@ impl BookMeta {
 			items
 		};
 		let dur = Instant::now().duration_since(start);
-		log::info!(
-			"Opened {:?} in {}",
-			title,
-			dur.as_secs_f64()
-		);
+		log::info!("Opened {:?} in {}", title, dur.as_secs_f64());
 
 		Ok(Self {
 			resources,
@@ -524,18 +526,6 @@ pub struct PageContent {
 	pub items: Vec<DisplayItem>,
 }
 
-pub struct RenderTextSettings {
-	pub font_size: f32,
-	pub line_height: f32,
-	pub attrs: cosmic_text::Attrs<'static>,
-}
-
-impl RenderTextSettings {
-	fn metrics(&self, scale: f32) -> cosmic_text::Metrics {
-		cosmic_text::Metrics::new(self.font_size * scale, self.line_height * scale)
-	}
-}
-
 pub struct RenderSettings {
 	pub page_width: u32,
 	pub page_height: u32,
@@ -547,24 +537,42 @@ pub struct RenderSettings {
 	pub padding_bottom_em: f32,
 	pub padding_paragraph_em: f32,
 
-	pub body_text: RenderTextSettings,
-	pub h1_text: RenderTextSettings,
-	pub h2_text: RenderTextSettings,
+	pub body_metrics: cosmic_text::Metrics,
+	pub body_attrs: cosmic_text::Attrs<'static>,
+	pub bold_attrs: cosmic_text::Attrs<'static>,
+	pub italic_attrs: cosmic_text::Attrs<'static>,
+	pub h1_attrs: cosmic_text::Attrs<'static>,
+	pub h2_attrs: cosmic_text::Attrs<'static>,
+	pub h3_attrs: cosmic_text::Attrs<'static>,
+	pub h4_attrs: cosmic_text::Attrs<'static>,
+	pub h5_attrs: cosmic_text::Attrs<'static>,
 }
 
-#[allow(unused)]
+#[derive(Debug, Default, Clone, Copy)]
+enum TextStyle {
+	#[default]
+	Body,
+	Bold,
+	Italic,
+	H1,
+	H2,
+	H3,
+	H4,
+	H5,
+}
+
 impl RenderSettings {
-	fn body_text(&self) -> (cosmic_text::Metrics, Attrs<'static>) {
-		(
-			self.body_text.metrics(self.scale),
-			self.body_text.attrs.clone(),
-		)
-	}
-	fn h1_text(&self) -> (cosmic_text::Metrics, Attrs<'static>) {
-		(self.h1_text.metrics(self.scale), self.h1_text.attrs.clone())
-	}
-	fn h2_text(&self) -> (cosmic_text::Metrics, Attrs<'static>) {
-		(self.h2_text.metrics(self.scale), self.h2_text.attrs.clone())
+	fn text_attrs(&self, style: TextStyle) -> &Attrs<'static> {
+		match style {
+			TextStyle::Body => &self.body_attrs,
+			TextStyle::Bold => &self.bold_attrs,
+			TextStyle::Italic => &self.italic_attrs,
+			TextStyle::H1 => &self.h1_attrs,
+			TextStyle::H2 => &self.h2_attrs,
+			TextStyle::H3 => &self.h3_attrs,
+			TextStyle::H4 => &self.h4_attrs,
+			TextStyle::H5 => &self.h5_attrs,
+		}
 	}
 
 	fn page_height_padded(&self) -> f32 {
@@ -583,7 +591,7 @@ impl RenderSettings {
 	}
 
 	fn em(&self) -> f32 {
-		self.body_text.font_size * self.scale
+		self.body_metrics.font_size * self.scale
 	}
 }
 
@@ -814,30 +822,21 @@ fn render_resource<R: io::Seek + io::Read>(
 	{
 		match edge {
 			EdgeRef::OpenElement(el) => {
-				if has_text_style(el.local_name()) {
-					text_styles.push(text_style(settings, text_styles.last(), el.local_name()));
+				if let Some(text_style) = text_style(el.local_name()) {
+					text_styles.push((el.id, text_style))
 				}
-				if !is_non_block(el.local_name()) {
-					if !texts.is_empty() {
-						buffers.entry(current).or_insert_with(|| {
-							create_text(
-								settings,
-								&mut font_system.lock().unwrap(),
-								std::mem::take(&mut texts),
-							)
-						});
-					}
+				if !is_inline(el.local_name()) {
 					let node = tree
 						.new_leaf_with_context(element_style(settings, el.local_name()), el.id)?;
 					tree.add_child(current, node)?;
 					current = node;
 				}
 			}
-			EdgeRef::CloseElement(_id, name) => {
-				if has_text_style(&name) {
+			EdgeRef::CloseElement(id, name) => {
+				if text_styles.last().is_some_and(|(el_id, _)| *el_id == id) {
 					text_styles.pop();
 				}
-				if !is_non_block(&name) {
+				if !is_inline(&name) {
 					if !texts.is_empty() {
 						buffers.entry(current).or_insert_with(|| {
 							create_text(
@@ -853,11 +852,8 @@ fn render_resource<R: io::Seek + io::Read>(
 				}
 			}
 			EdgeRef::Text(TextWrapper { t: Text { t }, .. }) => {
-				let (metrics, attr) = text_styles
-					.last()
-					.cloned()
-					.unwrap_or(settings.body_text());
-				texts.push((t, metrics, attr));
+				let text_style = text_styles.last().map(|(_, s)| *s).unwrap_or_default();
+				texts.push((t, text_style));
 			}
 		}
 	}
@@ -910,6 +906,12 @@ fn render_resource<R: io::Seek + io::Read>(
 				if let Some(buffer) = buffers.remove(&id) {
 					let content_end = offset.y + l.size.height;
 					if content_end - page_end > page_height {
+						if let Some(eid) = tree.get_node_context(id) && let Some(leaf) = node_tree.tree.get_context(*eid) {
+							log::info!("Page break at {}:{:?} with elh {}", page.elements.end, leaf, l.size.height);
+						} else {
+							log::info!("Page break at {} with elh {}", page.elements.end, l.size.height);
+						}
+
 						let index = page.index + 1;
 						let elements_end = page.elements.end;
 						pages.push(page);
@@ -997,49 +999,38 @@ fn element_style(settings: &RenderSettings, name: &LocalName) -> Style {
 fn create_text<'a>(
 	settings: &'a RenderSettings,
 	font_system: &mut FontSystem,
-	texts: Vec<(&'a str, cosmic_text::Metrics, Attrs<'a>)>,
+	texts: Vec<(&'a str, TextStyle)>,
 ) -> Buffer {
-	let first = texts.first();
-	let metrics = first.map(|(_, m, _)| *m).unwrap_or(settings.body_text().0);
-	let attrs = first.map(|(_, _, a)| a.clone()).unwrap_or(settings.body_text().1);
-	let texts = texts.into_iter().map(|(t, _, a)| (t, a));
+	let text_style = texts.first().map(|(_, s)| *s).unwrap_or_default();
+	let attrs = settings.text_attrs(text_style);
+	let metrics = attrs
+		.metrics_opt
+		.map(|m| m.into())
+		.unwrap_or(settings.body_metrics)
+		.scale(settings.scale);
+	let texts = texts
+		.into_iter()
+		.map(|(t, s)| (t, settings.text_attrs(s).clone()));
 
 	let mut buffer = Buffer::new(font_system, metrics);
-	buffer.set_rich_text(font_system, texts, &attrs, Shaping::Advanced, None);
+	buffer.set_rich_text(font_system, texts, attrs, Shaping::Advanced, None);
 	buffer
 }
 
-fn text_style(
-	settings: &RenderSettings,
-	base: Option<&(cosmic_text::Metrics, cosmic_text::Attrs<'static>)>,
-	name: &LocalName,
-) -> (cosmic_text::Metrics, cosmic_text::Attrs<'static>) {
-	let (metrics, attrs) = base.cloned().unwrap_or_else(|| settings.body_text());
+fn text_style(name: &LocalName) -> Option<TextStyle> {
 	match *name {
-		local_name!("b") | local_name!("strong") => {
-			(metrics, attrs.weight(cosmic_text::Weight::BOLD))
-		}
-		local_name!("i") | local_name!("em") => (metrics, attrs.style(cosmic_text::Style::Italic)),
-		local_name!("h1") => settings.h1_text(),
-		local_name!("h2") => settings.h2_text(),
-		local_name!("h3") => settings.h2_text(),
-		local_name!("h4") => settings.h2_text(),
-		_ => settings.body_text(),
+		local_name!("b") | local_name!("strong") => Some(TextStyle::Bold),
+		local_name!("i") | local_name!("em") => Some(TextStyle::Italic),
+		local_name!("h1") => Some(TextStyle::H1),
+		local_name!("h2") => Some(TextStyle::H2),
+		local_name!("h3") => Some(TextStyle::H3),
+		local_name!("h4") => Some(TextStyle::H4),
+		local_name!("h5") => Some(TextStyle::H5),
+		_ => None,
 	}
 }
 
-fn has_text_style(name: &LocalName) -> bool {
-	name == &local_name!("h1")
-		|| name == &local_name!("h2")
-		|| name == &local_name!("h3")
-		|| name == &local_name!("h4")
-		|| name == &local_name!("strong")
-		|| name == &local_name!("b")
-		|| name == &local_name!("em")
-		|| name == &local_name!("i")
-}
-
-fn is_non_block(name: &LocalName) -> bool {
+fn is_inline(name: &LocalName) -> bool {
 	name == &local_name!("strong")
 		|| name == &local_name!("b")
 		|| name == &local_name!("em")

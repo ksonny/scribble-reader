@@ -31,9 +31,9 @@ pub struct SortOrder(pub SortField, pub SortDirection);
 pub struct BookId(pub i64);
 
 impl Display for BookId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "[b{}]", self.0)
-    }
+	}
 }
 
 impl BookId {

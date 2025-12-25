@@ -10,7 +10,6 @@ use std::time::Instant;
 
 use illustrator::Illustrator;
 use illustrator::RenderSettings;
-use illustrator::RenderTextSettings;
 use illustrator::spawn_illustrator;
 use scribe::library::Location;
 use winit::application::ApplicationHandler;
@@ -491,6 +490,16 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
 
+	let body_metrics = cosmic_text::Metrics::relative(18., 1.25);
+	let body_attrs = cosmic_text::Attrs::new();
+	let bold_attrs = cosmic_text::Attrs::new().weight(cosmic_text::Weight::BOLD);
+	let italic_attrs = cosmic_text::Attrs::new().style(glyphon::Style::Italic);
+	let h1_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(30., 1.5));
+	let h2_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
+	let h3_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
+	let h4_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
+	let h5_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
+
 	let illustrator = Illustrator::new(
 		settings.data_path.join("state.db"),
 		RenderSettings {
@@ -504,21 +513,15 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 			padding_bottom_em: 2.,
 			padding_paragraph_em: 0.5,
 
-			body_text: RenderTextSettings {
-				font_size: 18.0,
-				line_height: 24.0,
-				attrs: glyphon::Attrs::new(),
-			},
-			h1_text: RenderTextSettings {
-				font_size: 30.0,
-				line_height: 40.0,
-				attrs: glyphon::Attrs::new(),
-			},
-			h2_text: RenderTextSettings {
-				font_size: 30.0,
-				line_height: 40.0,
-				attrs: glyphon::Attrs::new(),
-			},
+			body_metrics,
+			body_attrs,
+			bold_attrs,
+			italic_attrs,
+			h1_attrs,
+			h2_attrs,
+			h3_attrs,
+			h4_attrs,
+			h5_attrs,
 		},
 	);
 	let areas = ActiveAreas::default();
