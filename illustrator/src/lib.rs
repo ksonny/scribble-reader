@@ -32,6 +32,7 @@ use cosmic_text::Shaping;
 use epub::doc::EpubDoc;
 use html5ever::LocalName;
 use html5ever::local_name;
+use html5ever::ns;
 use scribe::library;
 use scribe::library::Location;
 use serde::Deserialize;
@@ -722,7 +723,7 @@ fn assure_cached<R: io::Seek + io::Read>(
 	cache: &RwLock<PageContentCache>,
 	archive: &mut ZipArchive<R>,
 	builder: NodeTreeBuilder,
-	taffy_tree: &mut taffy::TaffyTree<html_parser::NodeId>,
+	taffy_tree: &mut taffy::TaffyTree<NodeContext>,
 	item: &BookSpineItem,
 	path: &Path,
 ) -> Result<NodeTreeBuilder, IllustratorError> {
@@ -796,12 +797,41 @@ impl<'a, C> Iterator for TaffyTreeIter<'a, C> {
 	}
 }
 
+#[derive(Debug)]
+enum NodeContent {
+	Block,
+	Text,
+}
+
+#[derive(Debug)]
+#[allow(unused)]
+struct NodeContext {
+	element: u32,
+	content: NodeContent,
+}
+
+impl NodeContext {
+	fn block(element: u32) -> Self {
+		Self {
+			element,
+			content: NodeContent::Block,
+		}
+	}
+
+	fn text(element: u32) -> Self {
+		Self {
+			element,
+			content: NodeContent::Text,
+		}
+	}
+}
+
 fn render_resource<R: io::Seek + io::Read>(
 	settings: &RenderSettings,
 	font_system: &Mutex<FontSystem>,
 	file: ZipFile<R>,
 	builder: NodeTreeBuilder,
-	tree: &mut taffy::TaffyTree<html_parser::NodeId>,
+	tree: &mut taffy::TaffyTree<NodeContext>,
 ) -> Result<(Vec<PageContent>, NodeTreeBuilder), IllustratorRenderError> {
 	let node_tree = builder.read_from(file)?;
 
@@ -831,7 +861,10 @@ fn render_resource<R: io::Seek + io::Read>(
 					text_styles.push((el.id, text_style))
 				}
 				if !texts.is_empty() {
-					let node = tree.new_leaf(Style::default())?;
+					let node = tree.new_leaf_with_context(
+						Style::default(),
+						NodeContext::text(el.id.value()),
+					)?;
 					buffers.entry(node).or_insert_with(|| {
 						create_text(
 							settings,
@@ -841,8 +874,10 @@ fn render_resource<R: io::Seek + io::Read>(
 					});
 					tree.add_child(current, node)?;
 				}
-				let node =
-					tree.new_leaf_with_context(element_style(settings, el.local_name()), el.id)?;
+				let node = tree.new_leaf_with_context(
+					element_style(settings, el.local_name()),
+					NodeContext::block(el.id.value()),
+				)?;
 				tree.add_child(current, node)?;
 				current = node;
 			}
@@ -856,7 +891,8 @@ fn render_resource<R: io::Seek + io::Read>(
 					text_styles.pop();
 				}
 				if !texts.is_empty() {
-					let node = tree.new_leaf(Style::default())?;
+					let node = tree
+						.new_leaf_with_context(Style::default(), NodeContext::text(id.value()))?;
 					buffers.entry(node).or_insert_with(|| {
 						create_text(
 							settings,
@@ -914,8 +950,8 @@ fn render_resource<R: io::Seek + io::Read>(
 	for edge in TaffyTreeIter::new(tree, body) {
 		match edge {
 			Edge::Open(id) => {
-				if let Some(id) = tree.get_node_context(id) {
-					page.elements.end = id.value();
+				if let Some(ctx) = tree.get_node_context(id) {
+					page.elements.end = ctx.element;
 				}
 				let l = tree.layout(id)?;
 				offset = taffy::Point {
@@ -925,22 +961,7 @@ fn render_resource<R: io::Seek + io::Read>(
 				if let Some(buffer) = buffers.remove(&id) {
 					let content_end = offset.y + l.size.height;
 					if content_end - page_end > page_height {
-						if let Some(eid) = tree.get_node_context(id)
-							&& let Some(leaf) = node_tree.tree.get_context(*eid)
-						{
-							log::info!(
-								"Page break at {}:{:?} with elh {}",
-								page.elements.end,
-								leaf,
-								l.size.height
-							);
-						} else {
-							log::info!(
-								"Page break at {} with elh {}",
-								page.elements.end,
-								l.size.height
-							);
-						}
+						log::debug!("Page break at el {}", page.elements.end,);
 
 						let index = page.index + 1;
 						let elements_end = page.elements.end;
