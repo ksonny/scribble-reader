@@ -821,35 +821,54 @@ fn render_resource<R: io::Seek + io::Read>(
 		.ok_or(IllustratorRenderError::MissingBody)?
 	{
 		match edge {
+			EdgeRef::OpenElement(el) if is_inline(el.local_name()) => {
+				if let Some(text_style) = text_style(el.local_name()) {
+					text_styles.push((el.id, text_style))
+				}
+			}
 			EdgeRef::OpenElement(el) => {
 				if let Some(text_style) = text_style(el.local_name()) {
 					text_styles.push((el.id, text_style))
 				}
-				if !is_inline(el.local_name()) {
-					let node = tree
-						.new_leaf_with_context(element_style(settings, el.local_name()), el.id)?;
+				if !texts.is_empty() {
+					let node = tree.new_leaf(Style::default())?;
+					buffers.entry(node).or_insert_with(|| {
+						create_text(
+							settings,
+							&mut font_system.lock().unwrap(),
+							std::mem::take(&mut texts),
+						)
+					});
 					tree.add_child(current, node)?;
-					current = node;
 				}
+				let node =
+					tree.new_leaf_with_context(element_style(settings, el.local_name()), el.id)?;
+				tree.add_child(current, node)?;
+				current = node;
 			}
-			EdgeRef::CloseElement(id, name) => {
+			EdgeRef::CloseElement(id, name) if is_inline(&name) => {
 				if text_styles.last().is_some_and(|(el_id, _)| *el_id == id) {
 					text_styles.pop();
 				}
-				if !is_inline(&name) {
-					if !texts.is_empty() {
-						buffers.entry(current).or_insert_with(|| {
-							create_text(
-								settings,
-								&mut font_system.lock().unwrap(),
-								std::mem::take(&mut texts),
-							)
-						});
-					}
-					current = tree
-						.parent(current)
-						.ok_or(IllustratorRenderError::UnexpectedExtraClose)?;
+			}
+			EdgeRef::CloseElement(id, _name) => {
+				if text_styles.last().is_some_and(|(el_id, _)| *el_id == id) {
+					text_styles.pop();
 				}
+				if !texts.is_empty() {
+					let node = tree.new_leaf(Style::default())?;
+					buffers.entry(node).or_insert_with(|| {
+						create_text(
+							settings,
+							&mut font_system.lock().unwrap(),
+							std::mem::take(&mut texts),
+						)
+					});
+					tree.add_child(current, node)?;
+				}
+				current = tree
+					.parent(current)
+					.ok_or(IllustratorRenderError::UnexpectedExtraClose)?;
 			}
 			EdgeRef::Text(TextWrapper { t: Text { t }, .. }) => {
 				let text_style = text_styles.last().map(|(_, s)| *s).unwrap_or_default();
@@ -906,10 +925,21 @@ fn render_resource<R: io::Seek + io::Read>(
 				if let Some(buffer) = buffers.remove(&id) {
 					let content_end = offset.y + l.size.height;
 					if content_end - page_end > page_height {
-						if let Some(eid) = tree.get_node_context(id) && let Some(leaf) = node_tree.tree.get_context(*eid) {
-							log::info!("Page break at {}:{:?} with elh {}", page.elements.end, leaf, l.size.height);
+						if let Some(eid) = tree.get_node_context(id)
+							&& let Some(leaf) = node_tree.tree.get_context(*eid)
+						{
+							log::info!(
+								"Page break at {}:{:?} with elh {}",
+								page.elements.end,
+								leaf,
+								l.size.height
+							);
 						} else {
-							log::info!("Page break at {} with elh {}", page.elements.end, l.size.height);
+							log::info!(
+								"Page break at {} with elh {}",
+								page.elements.end,
+								l.size.height
+							);
 						}
 
 						let index = page.index + 1;
@@ -1035,6 +1065,7 @@ fn is_inline(name: &LocalName) -> bool {
 		|| name == &local_name!("b")
 		|| name == &local_name!("em")
 		|| name == &local_name!("i")
+		|| name == &local_name!("span")
 }
 
 #[cfg(test)]
