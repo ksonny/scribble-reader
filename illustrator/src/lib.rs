@@ -32,7 +32,6 @@ use cosmic_text::Shaping;
 use epub::doc::EpubDoc;
 use html5ever::LocalName;
 use html5ever::local_name;
-use html5ever::ns;
 use scribe::library;
 use scribe::library::Location;
 use serde::Deserialize;
