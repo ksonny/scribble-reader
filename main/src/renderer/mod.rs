@@ -20,9 +20,9 @@ pub(crate) enum RendererError {
 	#[error(transparent)]
 	Surface(#[from] wgpu::SurfaceError),
 	#[error(transparent)]
-	GlyphoPrepare(#[from] glyphon::PrepareError),
+	GlyphonPrepare(#[from] glyphon::PrepareError),
 	#[error(transparent)]
-	GlyphoRender(#[from] glyphon::RenderError),
+	GlyphonRender(#[from] glyphon::RenderError),
 	#[error("Failed to get surface format")]
 	NoTextureFormat,
 	#[error("Failed to get surface alpha mode")]
