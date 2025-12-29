@@ -1,5 +1,5 @@
 mod gui_renderer;
-mod illurstrator_renderer;
+mod glyphon_renderer;
 
 use winit::dpi::PhysicalSize;
 
@@ -60,7 +60,7 @@ pub(crate) struct Renderer<'window> {
 	adapter: wgpu::Adapter,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
-	book_renderer: illurstrator_renderer::Renderer,
+	glyphon_renderer: glyphon_renderer::Renderer,
 	gui_renderer: gui_renderer::Renderer,
 	surface_state: Option<SurfaceState<'window>>,
 	resized: Option<PhysicalSize<u32>>,
@@ -99,8 +99,8 @@ impl Renderer<'_> {
 		let size = window.inner_size();
 		let (format, alpha_mode) = surface_format(&surface, &adapter)?;
 
-		let mut text_renderer = illurstrator_renderer::Renderer::new(&device, &queue, format);
-		text_renderer.resize(&queue, size.width, size.height);
+		let mut glyphon_renderer = glyphon_renderer::Renderer::new(&device, &queue, format);
+		glyphon_renderer.resize(&queue, size.width, size.height);
 
 		let mut gui_renderer = gui_renderer::Renderer::new(&device, format, egui_ctx.clone());
 		gui_renderer.resume(&device, window.clone());
@@ -118,7 +118,7 @@ impl Renderer<'_> {
 			adapter,
 			device,
 			queue,
-			book_renderer: text_renderer,
+			glyphon_renderer,
 			gui_renderer,
 			resized: None,
 			rescale: None,
@@ -139,7 +139,7 @@ impl Renderer<'_> {
 		let size = window.inner_size();
 		let (format, alpha_mode) = surface_format(&surface, &self.adapter)?;
 
-		self.book_renderer
+		self.glyphon_renderer
 			.resize(&self.queue, size.width, size.height);
 		self.gui_renderer.resume(&self.device, window.clone());
 
@@ -183,7 +183,7 @@ impl Renderer<'_> {
 		font_system: &mut cosmic_text::FontSystem,
 		text_areas: impl IntoIterator<Item = glyphon::TextArea<'a>>,
 	) -> Result<(), RendererError> {
-		self.book_renderer
+		self.glyphon_renderer
 			.prepare(&self.device, &self.queue, font_system, text_areas)?;
 		Ok(())
 	}
@@ -195,7 +195,7 @@ impl Renderer<'_> {
 			.ok_or(RendererError::SurfaceNotAvailable)?;
 		if let Some(size) = self.resized.take() {
 			self.gui_renderer.resize(size.width, size.height);
-			self.book_renderer
+			self.glyphon_renderer
 				.resize(&self.queue, size.width, size.height);
 			surface_state.setup_swapchain(&self.device, size.width, size.height);
 		}
@@ -235,14 +235,14 @@ impl Renderer<'_> {
 					})
 					.forget_lifetime();
 
-				self.book_renderer.render(&mut rpass)?;
+				self.glyphon_renderer.render(&mut rpass)?;
 				self.gui_renderer.render(&mut rpass);
 
 				drop(rpass);
 				self.queue.submit(Some(encoder.finish()));
 				frame.present();
 
-				self.book_renderer.cleanup();
+				self.glyphon_renderer.cleanup();
 				self.gui_renderer.cleanup();
 
 				Ok(())
