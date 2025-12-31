@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::html_parser;
 
 #[derive(Debug, thiserror::Error)]
@@ -35,10 +37,22 @@ pub enum IllustratorRenderError {
 	Zip(#[from] zip::result::ZipError),
 	#[error(transparent)]
 	Taffy(#[from] taffy::TaffyError),
+	#[error(transparent)]
+	Svg(#[from] IllustratorSvgError),
 	#[error("Unexpected extra close")]
 	UnexpectedExtraClose,
 	#[error("Missing body")]
 	MissingBody,
+	#[error("Scale svg failed")]
+	ScaleSvgFailed,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IllustratorSvgError {
+	#[error(transparent)]
+	Usvg(#[from] resvg::usvg::Error),
+	#[error(transparent)]
+	Write(#[from] fmt::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -5,6 +5,7 @@ mod gestures;
 mod renderer;
 mod ui;
 
+use std::iter;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -217,6 +218,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				self.request_redraw();
 			}
 			AppPoke::OpenBook(book_id) => {
+				log::debug!("Open book {book_id:?}");
 				match spawn_illustrator(&mut self.illustrator, self.bell.clone(), book_id) {
 					Ok(handle) => {
 						self.view.open_book(handle);
@@ -227,7 +229,9 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					}
 				};
 				if let Some(renderer) = &mut self.renderer {
-					match renderer.prepare_page(&mut self.illustrator.font_system().unwrap(), []) {
+					match renderer
+						.prepare_page(&mut self.illustrator.font_system().unwrap(), iter::empty())
+					{
 						Ok(_) => {}
 						Err(e) => {
 							log::error!("Prepare failed: {e}");
@@ -240,24 +244,14 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				self.request_redraw();
 			}
 			AppPoke::BookContentReady(book_id, loc) => {
-				log::trace!("Book content ready {book_id:?} {loc}",);
+				log::debug!("Book content ready {book_id:?} {loc}");
 				if let Some(renderer) = &mut self.renderer {
 					let state = self.illustrator.state().unwrap();
 					if let Some(page) = state.page(loc) {
 						log::trace!("Found page, render {} items", page.items.len());
 						match renderer.prepare_page(
 							&mut self.illustrator.font_system().unwrap(),
-							page.items.iter().map(|d| match d {
-								illustrator::DisplayItem::Text(item) => glyphon::TextArea {
-									buffer: &item.buffer,
-									left: item.pos.x,
-									top: item.pos.y,
-									scale: 1.0,
-									bounds: glyphon::TextBounds::default(),
-									default_color: glyphon::Color::rgb(0, 0, 0),
-									custom_glyphs: &[],
-								},
-							}),
+							page.items.iter(),
 						) {
 							Ok(_) => {}
 							Err(e) => {

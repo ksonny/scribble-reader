@@ -316,6 +316,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -772,6 +778,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "data-url"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
 name = "deflate64"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1191,6 +1203,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "float-cmp"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1304,6 +1322,16 @@ dependencies = [
  "libc",
  "r-efi",
  "wasip2",
+]
+
+[[package]]
+name = "gif"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
+dependencies = [
+ "color_quant",
+ "weezl",
 ]
 
 [[package]]
@@ -1637,10 +1665,12 @@ dependencies = [
  "epub",
  "html5ever",
  "image",
+ "imagesize 0.14.0",
  "log",
  "mime",
  "quick-xml 0.38.4",
  "rayon",
+ "resvg",
  "scribe",
  "serde",
  "taffy",
@@ -1658,11 +1688,11 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "exr",
- "gif",
+ "gif 0.14.1",
  "image-webp",
  "moxcms",
  "num-traits",
- "png",
+ "png 0.18.0",
  "qoi",
  "ravif",
  "rayon",
@@ -1681,6 +1711,18 @@ dependencies = [
  "byteorder-lite",
  "quick-error",
 ]
+
+[[package]]
+name = "imagesize"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
+
+[[package]]
+name = "imagesize"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 
 [[package]]
 name = "imgref"
@@ -1824,6 +1866,17 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "kurbo"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
+dependencies = [
+ "arrayvec",
+ "euclid",
+ "smallvec",
+]
 
 [[package]]
 name = "lazy_static"
@@ -2692,6 +2745,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pico-args"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
+
+[[package]]
 name = "pin-project"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2722,6 +2781,19 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "png"
+version = "0.17.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
+dependencies = [
+ "bitflags 1.3.2",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide",
+]
 
 [[package]]
 name = "png"
@@ -3113,10 +3185,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "resvg"
+version = "0.45.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8928798c0a55e03c9ca6c4c6846f76377427d2c1e1f7e6de3c06ae57942df43"
+dependencies = [
+ "gif 0.13.3",
+ "image-webp",
+ "log",
+ "pico-args",
+ "rgb",
+ "svgtypes",
+ "tiny-skia",
+ "usvg",
+ "zune-jpeg 0.4.21",
+]
+
+[[package]]
 name = "rgb"
 version = "0.8.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c6a884d2998352bb4daf0183589aec883f16a6da1f4dde84d8e2e9a5409a1ce"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "roxmltree"
@@ -3248,6 +3340,7 @@ name = "scribble-reader"
 version = "0.1.0"
 dependencies = [
  "android_logger",
+ "bytemuck",
  "chrono",
  "config",
  "cosmic-text",
@@ -3405,6 +3498,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "simplecss"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a9c6883ca9c3c7c90e888de77b7a5c849c779d25d74a1269b0218b14e8b136c"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3557,6 +3659,9 @@ name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
+dependencies = [
+ "float-cmp",
+]
 
 [[package]]
 name = "string_cache"
@@ -3616,6 +3721,16 @@ name = "svg_fmt"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb"
+
+[[package]]
+name = "svgtypes"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
+dependencies = [
+ "kurbo",
+ "siphasher",
+]
 
 [[package]]
 name = "swash"
@@ -3775,6 +3890,7 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "log",
+ "png 0.17.16",
  "tiny-skia-path",
 ]
 
@@ -3986,6 +4102,28 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+]
+
+[[package]]
+name = "usvg"
+version = "0.45.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80be9b06fbae3b8b303400ab20778c80bbaf338f563afe567cf3c9eea17b47ef"
+dependencies = [
+ "base64",
+ "data-url",
+ "flate2",
+ "imagesize 0.13.0",
+ "kurbo",
+ "log",
+ "pico-args",
+ "roxmltree",
+ "simplecss",
+ "siphasher",
+ "strict-num",
+ "svgtypes",
+ "tiny-skia-path",
+ "xmlwriter",
 ]
 
 [[package]]
@@ -4961,6 +5099,12 @@ checksum = "c3a56132a0d6ecbe77352edc10232f788fc4ceefefff4cab784a98e0e16b6b51"
 dependencies = [
  "xml",
 ]
+
+[[package]]
+name = "xmlwriter"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "y4m"

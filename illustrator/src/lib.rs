@@ -5,6 +5,8 @@ mod html_parser;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Write;
 use std::fs;
 use std::io;
 use std::io::Cursor;
@@ -32,17 +34,19 @@ use cosmic_text::Shaping;
 use epub::doc::EpubDoc;
 use html5ever::LocalName;
 use html5ever::local_name;
+use resvg::tiny_skia;
+use resvg::usvg;
 use scribe::library;
 use scribe::library::Location;
 use serde::Deserialize;
 use taffy::prelude::*;
 use zip::ZipArchive;
-use zip::read::ZipFile;
 
 use crate::error::IllustratorError;
 use crate::error::IllustratorRenderError;
 use crate::error::IllustratorRequestError;
 use crate::error::IllustratorSpawnError;
+use crate::error::IllustratorSvgError;
 use crate::html_parser::EdgeRef;
 use crate::html_parser::NodeTreeBuilder;
 use crate::html_parser::Text;
@@ -499,15 +503,58 @@ fn read_book_meta(
 }
 
 #[derive(Debug)]
+pub struct Position {
+	pub x: u32,
+	pub y: u32,
+}
+
+impl From<taffy::Point<f32>> for Position {
+	fn from(value: taffy::Point<f32>) -> Self {
+		Self {
+			x: value.x.round() as u32,
+			y: value.y.round() as u32,
+		}
+	}
+}
+
+#[derive(Debug)]
+pub struct Size {
+	pub width: u32,
+	pub height: u32,
+}
+
+impl From<taffy::Size<f32>> for Size {
+	fn from(value: taffy::Size<f32>) -> Self {
+		Self {
+			width: value.width.round() as u32,
+			height: value.height.round() as u32,
+		}
+	}
+}
+
+#[derive(Debug)]
 pub struct DisplayText {
-	pub pos: taffy::Point<f32>,
-	pub size: taffy::Size<f32>,
 	pub buffer: Buffer,
 }
 
 #[derive(Debug)]
-pub enum DisplayItem {
+pub struct DisplayPixmap {
+	pub pixmap_width: u32,
+	pub pixmap_height: u32,
+	pub pixmap_rgba: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum DisplayContent {
 	Text(DisplayText),
+	Pixmap(DisplayPixmap),
+}
+
+#[derive(Debug)]
+pub struct DisplayItem {
+	pub pos: Position,
+	pub size: Size,
+	pub content: DisplayContent,
 }
 
 bitflags! {
@@ -624,9 +671,13 @@ pub fn spawn_illustrator(
 		let bytes = SharedVec(Arc::new(
 			fs::read(&book.path).inspect_err(|e| log::error!("Error: {e}"))?,
 		));
-		let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))
-			.inspect_err(|e| log::error!("Error: {e}"))?;
-		let (book_meta, toc) = read_book_meta(bytes, &mut archive)?;
+
+		let (archive, book_meta, toc) = {
+			let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))
+				.inspect_err(|e| log::error!("Error: {e}"))?;
+			let (meta, toc) = read_book_meta(bytes, &mut archive)?;
+			(Mutex::new(archive), meta, toc)
+		};
 		if let Some(toc) = toc {
 			*shared_toc.write().unwrap() = toc;
 		}
@@ -662,8 +713,8 @@ pub fn spawn_illustrator(
 					builder = assure_cached(
 						&settings,
 						&font_system,
+						&archive,
 						&cache,
-						&mut archive,
 						builder,
 						&mut taffy_tree,
 						item,
@@ -716,11 +767,11 @@ pub fn spawn_illustrator(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn assure_cached<R: io::Seek + io::Read>(
+fn assure_cached<R: io::Seek + io::Read + Sync + Send>(
 	settings: &RwLock<RenderSettings>,
 	font_system: &Mutex<FontSystem>,
+	archive: &Mutex<ZipArchive<R>>,
 	cache: &RwLock<PageContentCache>,
-	archive: &mut ZipArchive<R>,
 	builder: NodeTreeBuilder,
 	taffy_tree: &mut taffy::TaffyTree<NodeContext>,
 	item: &BookSpineItem,
@@ -732,11 +783,11 @@ fn assure_cached<R: io::Seek + io::Read>(
 	} else {
 		log::info!("Refresh cache for {}", path.display());
 		let start = Instant::now();
-		let file = archive.by_path(path)?;
 		let (pages, b) = render_resource(
 			&settings.read().unwrap(),
 			font_system,
-			file,
+			archive,
+			path,
 			builder,
 			taffy_tree,
 		)?;
@@ -800,6 +851,7 @@ impl<'a, C> Iterator for TaffyTreeIter<'a, C> {
 enum NodeContent {
 	Block,
 	Text,
+	Svg { scale: f32 },
 }
 
 #[derive(Debug)]
@@ -823,16 +875,28 @@ impl NodeContext {
 			content: NodeContent::Text,
 		}
 	}
+
+	fn svg(element: u32, scale: f32) -> Self {
+		Self {
+			element,
+			content: NodeContent::Svg { scale },
+		}
+	}
 }
 
-fn render_resource<R: io::Seek + io::Read>(
+fn render_resource<R: io::Seek + io::Read + Sync + Send>(
 	settings: &RenderSettings,
 	font_system: &Mutex<FontSystem>,
-	file: ZipFile<R>,
+	archive: &Mutex<ZipArchive<R>>,
+	path: &Path,
 	builder: NodeTreeBuilder,
 	tree: &mut taffy::TaffyTree<NodeContext>,
 ) -> Result<(Vec<PageContent>, NodeTreeBuilder), IllustratorRenderError> {
-	let node_tree = builder.read_from(file)?;
+	let node_tree = {
+		let mut archive = archive.lock().unwrap();
+		let file = archive.by_path(path)?;
+		builder.read_from(file)?
+	};
 
 	let body: NodeId = tree.new_leaf(Style {
 		size: taffy::Size {
@@ -841,15 +905,38 @@ fn render_resource<R: io::Seek + io::Read>(
 		},
 		..Default::default()
 	})?;
-	let mut buffers = HashMap::new();
+	let options = svg_options(archive, path.parent().unwrap_or(Path::new("OEBPS/")));
+
 	let mut current = body;
+	let mut buffers = HashMap::new();
 	let mut text_styles = Vec::new();
 	let mut texts = Vec::new();
-	for edge in node_tree
+	let mut svgs = HashMap::new();
+	let mut svg_buf = String::new();
+
+	let mut node_iter = node_tree
 		.body_iter()
-		.ok_or(IllustratorRenderError::MissingBody)?
-	{
+		.ok_or(IllustratorRenderError::MissingBody)?;
+	while let Some(edge) = node_iter.next() {
 		match edge {
+			EdgeRef::OpenElement(el) if el.local_name() == &local_name!("svg") => {
+				let svg = read_svg(&mut svg_buf, &el, &mut node_iter, &options)?;
+				let size = svg.size();
+				let scale = scale_to_fit(
+					size.width(),
+					size.height(),
+					settings.page_width_padded(),
+					settings.page_height_padded(),
+				);
+				let style = Style {
+					size: taffy::Size::from_lengths(size.width() * scale, size.height() * scale),
+					..Default::default()
+				};
+				let node =
+					tree.new_leaf_with_context(style, NodeContext::svg(el.id.value(), scale))?;
+				svgs.insert(node, svg);
+				tree.add_child(current, node)?;
+			}
 			EdgeRef::OpenElement(el) if is_inline(el.local_name()) => {
 				if let Some(text_style) = text_style(el.local_name()) {
 					text_styles.push((el.id, text_style))
@@ -880,7 +967,7 @@ fn render_resource<R: io::Seek + io::Read>(
 				tree.add_child(current, node)?;
 				current = node;
 			}
-			EdgeRef::CloseElement(id, name) if is_inline(&name) => {
+			EdgeRef::CloseElement(id, name) if is_inline(&name.local) => {
 				if text_styles.last().is_some_and(|(el_id, _)| *el_id == id) {
 					text_styles.pop();
 				}
@@ -919,7 +1006,7 @@ fn render_resource<R: io::Seek + io::Read>(
 
 	tree.compute_layout_with_measure(
 		body,
-		Size::MAX_CONTENT,
+		taffy::Size::MAX_CONTENT,
 		|known_dimensions, available_space, node_id, _node_context, _style| match buffers
 			.get_mut(&node_id)
 		{
@@ -929,7 +1016,7 @@ fn render_resource<R: io::Seek + io::Read>(
 				known_dimensions,
 				available_space,
 			),
-			None => Size::ZERO,
+			None => taffy::Size::ZERO,
 		},
 	)?;
 
@@ -949,38 +1036,42 @@ fn render_resource<R: io::Seek + io::Read>(
 	for edge in TaffyTreeIter::new(tree, body) {
 		match edge {
 			Edge::Open(id) => {
-				if let Some(ctx) = tree.get_node_context(id) {
-					page.elements.end = ctx.element;
-				}
 				let l = tree.layout(id)?;
 				offset = taffy::Point {
 					x: offset.x + l.location.x,
 					y: offset.y + l.location.y,
 				};
-				if let Some(buffer) = buffers.remove(&id) {
-					let content_end = offset.y + l.size.height;
-					if content_end - page_end > page_height {
-						log::debug!("Page break at el {}", page.elements.end,);
 
-						let index = page.index + 1;
-						let elements_end = page.elements.end;
-						pages.push(page);
-						page = PageContent {
-							position: PagePosition::empty(),
-							index,
-							elements: Range::from(elements_end..elements_end),
-							items: Vec::new(),
-						};
-						page_end = offset.y;
+				if let Some(ctx) = tree.get_node_context(id) {
+					page.elements.end = ctx.element;
+
+					if let Some(content) = create_display_item(&mut buffers, &mut svgs, id, ctx)? {
+						let content_end = offset.y + l.size.height;
+						if content_end - page_end > page_height {
+							log::debug!("Page break at el {}", page.elements.end,);
+
+							let index = page.index + 1;
+							let elements_end = page.elements.end;
+							pages.push(page);
+							page = PageContent {
+								position: PagePosition::empty(),
+								index,
+								elements: Range::from(elements_end..elements_end),
+								items: Vec::new(),
+							};
+							page_end = offset.y;
+						}
+
+						page.items.push(DisplayItem {
+							pos: taffy::Point {
+								x: padding_left + offset.x,
+								y: padding_top + offset.y - page_end,
+							}
+							.into(),
+							size: l.size.into(),
+							content,
+						});
 					}
-					page.items.push(DisplayItem::Text(DisplayText {
-						pos: taffy::Point {
-							x: padding_left + offset.x,
-							y: padding_top + offset.y - page_end,
-						},
-						size: l.size,
-						buffer,
-					}));
 				}
 			}
 			Edge::Close(id) => {
@@ -1004,12 +1095,220 @@ fn render_resource<R: io::Seek + io::Read>(
 	Ok((pages, node_tree.into_builder()))
 }
 
+fn create_display_item(
+	buffers: &mut HashMap<NodeId, Buffer>,
+	svgs: &mut HashMap<NodeId, usvg::Tree>,
+	id: NodeId,
+	ctx: &NodeContext,
+) -> Result<Option<DisplayContent>, IllustratorRenderError> {
+	Ok(match ctx.content {
+		NodeContent::Block => None,
+		NodeContent::Text => buffers
+			.remove(&id)
+			.map(|buffer| DisplayContent::Text(DisplayText { buffer })),
+		NodeContent::Svg { scale } => {
+			if let Some(tree) = svgs.remove(&id) {
+				let pixmap_size = tree
+					.size()
+					.to_int_size()
+					.scale_by(scale)
+					.ok_or(IllustratorRenderError::ScaleSvgFailed)?;
+				let transform = tiny_skia::Transform::from_scale(scale, scale);
+				let mut pixmap =
+					tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height()).unwrap();
+				resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+				Some(DisplayContent::Pixmap(DisplayPixmap {
+					pixmap_width: pixmap.width(),
+					pixmap_height: pixmap.height(),
+					pixmap_rgba: pixmap.take(),
+				}))
+			} else {
+				None
+			}
+		}
+	})
+}
+
+fn scale_to_fit(width: f32, height: f32, max_width: f32, max_height: f32) -> f32 {
+	if width < max_width && height < max_height {
+		1.0
+	} else {
+		let ws = max_width / width;
+		let hs = max_height / height;
+		ws.min(hs)
+	}
+}
+
+fn svg_options<'a, R: io::Seek + io::Read + Sync + Send>(
+	archive: &'a Mutex<ZipArchive<R>>,
+	base_path: &'a Path,
+) -> usvg::Options<'a> {
+	usvg::Options {
+		image_href_resolver: usvg::ImageHrefResolver {
+			resolve_string: Box::new(move |href: &str, opts: &usvg::Options| {
+				let path = Path::new(href);
+				let data = {
+					let mut archive = archive.lock().unwrap();
+					let file = if path.is_absolute() {
+						archive.by_path(path)
+					} else {
+						archive.by_path(base_path.join(path))
+					};
+					match file {
+						Ok(mut f) => {
+							let mut content = Vec::new();
+							match f.read_to_end(&mut content) {
+								Ok(_) => Some(content),
+								Err(e) => {
+									log::warn!("Failed to load '{href}': {e}");
+									None
+								}
+							}
+						}
+						Err(e) => {
+							log::warn!("Failed to load '{href}': {e}");
+							None
+						}
+					}
+				};
+
+				if let Some(data) = data {
+					let ext = path.extension().and_then(|e| e.to_str())?.to_lowercase();
+					if ext == "svg" || ext == "svgz" {
+						loab_sub_svg(data.as_slice(), opts)
+					} else {
+						match imagesize::image_type(&data) {
+							Ok(imagesize::ImageType::Gif) => {
+								Some(usvg::ImageKind::GIF(Arc::new(data)))
+							}
+							Ok(imagesize::ImageType::Png) => {
+								Some(usvg::ImageKind::PNG(Arc::new(data)))
+							}
+							Ok(imagesize::ImageType::Jpeg) => {
+								Some(usvg::ImageKind::JPEG(Arc::new(data)))
+							}
+							Ok(imagesize::ImageType::Webp) => {
+								Some(usvg::ImageKind::WEBP(Arc::new(data)))
+							}
+							Ok(image_type) => {
+								log::warn!("unknown image type of '{href}': {image_type:?}");
+								None
+							}
+							Err(e) => {
+								log::warn!("error decoding image type of '{href}': {e}");
+								None
+							}
+						}
+					}
+				} else {
+					log::warn!("Not an image file '{href}'");
+					None
+				}
+			}),
+			..Default::default()
+		},
+		..Default::default()
+	}
+}
+
+// Extracted from usvg/src/parser/image.rs and modified to fit
+fn loab_sub_svg(data: &[u8], opts: &usvg::Options<'_>) -> Option<usvg::ImageKind> {
+	let sub_opts = usvg::Options {
+		resources_dir: None,
+		dpi: opts.dpi,
+		font_size: opts.font_size,
+		shape_rendering: opts.shape_rendering,
+		text_rendering: opts.text_rendering,
+		image_rendering: opts.image_rendering,
+		default_size: opts.default_size,
+		// The referenced SVG image cannot have any 'image' elements by itself.
+		// Not only recursive. Any. Don't know why.
+		image_href_resolver: usvg::ImageHrefResolver {
+			resolve_data: Box::new(|_, _, _| None),
+			resolve_string: Box::new(|_, _| None),
+		},
+		..Default::default()
+	};
+
+	let tree = usvg::Tree::from_data(data, &sub_opts);
+	let tree = match tree {
+		Ok(tree) => tree,
+		Err(e) => {
+			log::warn!("Failed to load subsvg image: {e}");
+			return None;
+		}
+	};
+
+	Some(usvg::ImageKind::SVG(tree))
+}
+
+fn read_svg(
+	buf: &mut String,
+	el: &html_parser::ElementWrapper<'_>,
+	node_iter: &mut html_parser::NodeTreeIter<'_>,
+	options: &usvg::Options,
+) -> Result<usvg::Tree, IllustratorSvgError> {
+	buf.clear();
+	write_begin_node(buf, el.el)?;
+	for edge in node_iter.by_ref() {
+		match edge {
+			EdgeRef::CloseElement(id, _name) if id == el.id => {
+				break;
+			}
+			EdgeRef::OpenElement(el) => write_begin_node(buf, el.el)?,
+			EdgeRef::CloseElement(_id, name) => {
+				write_end_node(buf, &name)?;
+			}
+			EdgeRef::Text(TextWrapper { t, .. }) => {
+				write!(buf, "{}", t.t)?;
+			}
+		}
+	}
+	write_end_node(buf, el.name())?;
+	log::debug!("Svg node '''\n{buf}\n'''");
+
+	let svg = usvg::Tree::from_str(buf.as_str(), options)?;
+	Ok(svg)
+}
+
+fn write_begin_node<W: fmt::Write>(w: &mut W, el: &html_parser::Element) -> Result<(), fmt::Error> {
+	write!(w, "<")?;
+	if let Some(prefix) = &el.name.prefix
+		&& !prefix.is_empty()
+	{
+		write!(w, "{}:", prefix)?;
+	}
+	write!(w, "{}", el.name.local)?;
+
+	for (name, value) in &el.attrs {
+		write!(w, " ")?;
+		if let Some(prefix) = &name.prefix {
+			write!(w, "{}:", prefix)?;
+		}
+		write!(w, r#"{}="{}""#, name.local, value)?;
+	}
+
+	write!(w, ">")
+}
+
+fn write_end_node<W: fmt::Write>(w: &mut W, name: &html5ever::QualName) -> Result<(), fmt::Error> {
+	write!(w, "</")?;
+	if let Some(prefix) = &name.prefix
+		&& !prefix.is_empty()
+	{
+		write!(w, "{}:", prefix)?;
+	}
+	write!(w, "{}", name.local)?;
+	write!(w, ">")
+}
+
 fn measure_text(
 	font_system: &mut FontSystem,
 	buffer: &mut Buffer,
-	known_dimensions: Size<Option<f32>>,
-	available_space: Size<taffy::AvailableSpace>,
-) -> Size<f32> {
+	known_dimensions: taffy::Size<Option<f32>>,
+	available_space: taffy::Size<taffy::AvailableSpace>,
+) -> taffy::Size<f32> {
 	let width_constraint = known_dimensions.width.or(match available_space.width {
 		AvailableSpace::MinContent => Some(0.0),
 		AvailableSpace::MaxContent => None,
@@ -1028,7 +1327,7 @@ fn measure_text(
 	let metrics = buffer.metrics();
 	let height = total_lines as f32 * metrics.line_height;
 
-	Size { width, height }
+	taffy::Size { width, height }
 }
 
 fn element_style(settings: &RenderSettings, name: &LocalName) -> Style {

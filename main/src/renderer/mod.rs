@@ -1,6 +1,8 @@
-mod gui_renderer;
 mod glyphon_renderer;
+mod gui_renderer;
+mod pixmap_renderer;
 
+use illustrator::DisplayItem;
 use winit::dpi::PhysicalSize;
 
 use egui_wgpu::wgpu::{
@@ -19,6 +21,10 @@ pub(crate) enum RendererError {
 	RequestAdapter(#[from] wgpu::wgt::RequestAdapterError),
 	#[error(transparent)]
 	Surface(#[from] wgpu::SurfaceError),
+	#[error(transparent)]
+	PixmapPrepare(#[from] pixmap_renderer::PrepareError),
+	#[error(transparent)]
+	PixmapRender(#[from] pixmap_renderer::RenderError),
 	#[error(transparent)]
 	GlyphonPrepare(#[from] glyphon::PrepareError),
 	#[error(transparent)]
@@ -60,6 +66,7 @@ pub(crate) struct Renderer<'window> {
 	adapter: wgpu::Adapter,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
+	pixmap_renderer: pixmap_renderer::Renderer,
 	glyphon_renderer: glyphon_renderer::Renderer,
 	gui_renderer: gui_renderer::Renderer,
 	surface_state: Option<SurfaceState<'window>>,
@@ -99,6 +106,9 @@ impl Renderer<'_> {
 		let size = window.inner_size();
 		let (format, alpha_mode) = surface_format(&surface, &adapter)?;
 
+		let mut pixmap_renderer = pixmap_renderer::Renderer::new(&device, format);
+		pixmap_renderer.resize(size.width, size.height);
+
 		let mut glyphon_renderer = glyphon_renderer::Renderer::new(&device, &queue, format);
 		glyphon_renderer.resize(&queue, size.width, size.height);
 
@@ -118,6 +128,7 @@ impl Renderer<'_> {
 			adapter,
 			device,
 			queue,
+			pixmap_renderer,
 			glyphon_renderer,
 			gui_renderer,
 			resized: None,
@@ -138,6 +149,8 @@ impl Renderer<'_> {
 
 		let size = window.inner_size();
 		let (format, alpha_mode) = surface_format(&surface, &self.adapter)?;
+
+		self.pixmap_renderer.resize(size.width, size.height);
 
 		self.glyphon_renderer
 			.resize(&self.queue, size.width, size.height);
@@ -181,8 +194,45 @@ impl Renderer<'_> {
 	pub(crate) fn prepare_page<'a>(
 		&mut self,
 		font_system: &mut cosmic_text::FontSystem,
-		text_areas: impl IntoIterator<Item = glyphon::TextArea<'a>>,
+		items: impl Iterator<Item = &'a DisplayItem> + Clone,
 	) -> Result<(), RendererError> {
+		let pixmap_input = items.clone().filter_map(|d| match d {
+			illustrator::DisplayItem {
+				pos,
+				size,
+				content: illustrator::DisplayContent::Pixmap(item),
+			} => Some(pixmap_renderer::PixmapInput {
+				pixmap_rgba: &item.pixmap_rgba,
+				pixmap_width: item.pixmap_width,
+				pixmap_height: item.pixmap_height,
+				targets: vec![pixmap_renderer::PixmapTargetInput {
+					pos: [pos.x, pos.y],
+					dim: [size.width, size.height],
+					tex_pos: [0; 2],
+					tex_dim: [item.pixmap_width, item.pixmap_height],
+				}],
+			}),
+			_ => None,
+		});
+		self.pixmap_renderer
+			.prepare(&self.device, &self.queue, pixmap_input)?;
+
+		let text_areas = items.filter_map(|d| match d {
+			illustrator::DisplayItem {
+				pos,
+				content: illustrator::DisplayContent::Text(item),
+				..
+			} => Some(glyphon::TextArea {
+				buffer: &item.buffer,
+				left: pos.x as f32,
+				top: pos.y as f32,
+				scale: 1.0,
+				bounds: glyphon::TextBounds::default(),
+				default_color: glyphon::Color::rgb(0, 0, 0),
+				custom_glyphs: &[],
+			}),
+			_ => None,
+		});
 		self.glyphon_renderer
 			.prepare(&self.device, &self.queue, font_system, text_areas)?;
 		Ok(())
@@ -195,6 +245,7 @@ impl Renderer<'_> {
 			.ok_or(RendererError::SurfaceNotAvailable)?;
 		if let Some(size) = self.resized.take() {
 			self.gui_renderer.resize(size.width, size.height);
+			self.pixmap_renderer.resize(size.width, size.height);
 			self.glyphon_renderer
 				.resize(&self.queue, size.width, size.height);
 			surface_state.setup_swapchain(&self.device, size.width, size.height);
@@ -235,6 +286,7 @@ impl Renderer<'_> {
 					})
 					.forget_lifetime();
 
+				self.pixmap_renderer.render(&mut rpass)?;
 				self.glyphon_renderer.render(&mut rpass)?;
 				self.gui_renderer.render(&mut rpass);
 
