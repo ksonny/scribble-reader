@@ -5,21 +5,22 @@ edition = "2024"
 
 [dependencies]
 bitflags = "2.9.4"
-cosmic-text = { workspace = true }
-epub = { workspace = true }
+config.workspace = true
+cosmic-text.workspace = true
+epub.workspace = true
 html5ever = "0.35.0"
-image = { workspace = true }
+image.workspace = true
 imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
-log = { workspace = true }
+log.workspace = true
 mime = "0.3.17"
 quick-xml = { version = "0.38.4", features = ["serialize"] }
-rayon = { workspace = true }
+rayon.workspace = true
 resvg = { version = "0.45.1", default-features = false, features = ["raster-images"] }
 scribe = { version = "0.1.0", path = "../scribe" }
 serde.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
-thiserror = { workspace = true }
+thiserror.workspace = true
 zip = "5.1.1"
 
 [dev-dependencies]
-env_logger = { workspace = true }
+env_logger.workspace = true
