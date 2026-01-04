@@ -9,10 +9,12 @@ cosmic-text = { workspace = true }
 epub = { workspace = true }
 html5ever = "0.35.0"
 image = { workspace = true }
+imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 log = { workspace = true }
 mime = "0.3.17"
 quick-xml = { version = "0.38.4", features = ["serialize"] }
 rayon = { workspace = true }
+resvg = { version = "0.45.1", default-features = false, features = ["raster-images"] }
 scribe = { version = "0.1.0", path = "../scribe" }
 serde.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }

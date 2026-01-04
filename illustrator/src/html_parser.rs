@@ -7,7 +7,6 @@ use std::io;
 
 use html5ever::Attribute;
 use html5ever::LocalName;
-use html5ever::Namespace;
 use html5ever::QualName;
 use html5ever::interface::NodeOrText;
 use html5ever::interface::TreeSink;
@@ -25,7 +24,7 @@ pub enum TreeBuilderError {
 #[derive(Debug)]
 pub struct Element {
 	pub name: QualName,
-	pub attrs: BTreeMap<(Namespace, LocalName), String>,
+	pub attrs: BTreeMap<QualName, String>,
 }
 
 #[derive(Debug)]
@@ -45,22 +44,13 @@ pub struct ElementWrapper<'a> {
 	pub el: &'a Element,
 }
 
-#[allow(unused)]
 impl<'a> ElementWrapper<'a> {
 	pub fn name(&'a self) -> &'a QualName {
 		&self.el.name
 	}
 
-	pub fn namespace(&'a self) -> &'a Namespace {
-		&self.el.name.ns
-	}
-
 	pub fn local_name(&'a self) -> &'a LocalName {
 		&self.el.name.local
-	}
-
-	pub fn attr_ns(&'a self, ns: Namespace, name: LocalName) -> Option<&'a str> {
-		self.el.attrs.get(&(ns, name)).map(|v| v.as_str())
 	}
 }
 
@@ -73,7 +63,7 @@ pub struct TextWrapper<'a> {
 
 pub enum EdgeRef<'a> {
 	OpenElement(ElementWrapper<'a>),
-	CloseElement(NodeId, LocalName),
+	CloseElement(NodeId, QualName),
 	Text(TextWrapper<'a>),
 }
 
@@ -248,7 +238,7 @@ impl<'a> Iterator for NodeTreeIter<'a> {
 		let node = self.stack.pop()?;
 		if let EdgeRef::OpenElement(ref el) = node {
 			self.stack
-				.push(EdgeRef::CloseElement(el.id, el.local_name().clone()));
+				.push(EdgeRef::CloseElement(el.id, el.name().clone()));
 			self.stack.extend(Self::child_edges_rev(self.tree, el.id));
 		}
 		Some(node)
@@ -352,7 +342,7 @@ impl TreeSink for NodeTreeBuilder {
 		let is_body = matches!(&name.local, &local_name!("body"));
 		let attrs = attrs
 			.into_iter()
-			.map(|a| ((a.name.ns, a.name.local), a.value.to_string()))
+			.map(|a| (a.name, a.value.to_string()))
 			.collect();
 		let node_id = self
 			.tree
@@ -488,7 +478,7 @@ impl TreeSink for NodeTreeBuilder {
 		};
 		for attr in add_attrs {
 			attrs
-				.entry((attr.name.ns, attr.name.local))
+				.entry(attr.name)
 				.or_insert_with(|| attr.value.to_string());
 		}
 	}
