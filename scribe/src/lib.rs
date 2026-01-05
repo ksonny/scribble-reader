@@ -10,6 +10,7 @@ use std::collections::BinaryHeap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::RecvError;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::channel;
@@ -77,19 +78,52 @@ pub enum ScribeRequest {
 	Sort(SortOrder),
 }
 
+#[derive(Clone)]
+pub struct ScribeConfig {
+	paths: Arc<settings::Paths>,
+	config_builder: Arc<config::ConfigBuilder<config::builder::DefaultState>>,
+}
+
+impl ScribeConfig {
+	pub fn new(paths: settings::Paths) -> Self {
+		let config_path = paths.config_path.join("config.toml");
+		let config_builder = config::Config::builder()
+			.add_source(config::File::from_str(
+				settings::DEFAULT_SCRIBE_CONFIG,
+				config::FileFormat::Toml,
+			))
+			.add_source(config::File::from(config_path.as_path()).required(false))
+			.add_source(config::Environment::with_prefix("SCRAPE").separator("_"));
+		let paths = Arc::new(paths);
+		let config_builder = Arc::new(config_builder);
+
+		Self {
+			paths,
+			config_builder,
+		}
+	}
+
+	pub fn paths(&self) -> &settings::Paths {
+		&self.paths
+	}
+
+	pub fn library(&self) -> Result<settings::Library, config::ConfigError> {
+		let config = self.config_builder.build_cloned()?;
+		config.get("library")
+	}
+
+	pub fn illustrator(&self) -> Result<settings::Illustrator, config::ConfigError> {
+		let config = self.config_builder.build_cloned()?;
+		config.get("illustrator")
+	}
+}
+
 pub struct Scribe {
 	lib: library::Library,
 	order_tx: Sender<(ScribeTicket, ScribeRequest)>,
 	handle: JoinHandle<Result<(), ScribeError>>,
 	ticket_set: BTreeSet<ScribeTicket>,
 	ticket_cnt: Cell<usize>,
-}
-
-#[derive(Debug)]
-pub struct Settings {
-	pub cache_path: PathBuf,
-	pub config_path: PathBuf,
-	pub data_path: PathBuf,
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -102,52 +136,39 @@ pub enum ScribeState {
 impl Scribe {
 	pub fn create(
 		bell: impl Bell + Send + 'static,
-		settings: &Settings,
+		config: ScribeConfig,
 	) -> Result<Self, ScribeCreateError> {
-		log::info!("Create scribe with {:?}", settings);
+		let paths = config.paths();
+		let library_settings = config.library()?;
 
-		let config_path = settings.config_path.join("config.toml");
-		let scribe_settings: settings::Scribe = config::Config::builder()
-			.add_source(config::File::from_str(
-				settings::DEFAULT_SCRIBE_CONFIG,
-				config::FileFormat::Toml,
-			))
-			.add_source(config::File::from(config_path).required(false))
-			.add_source(config::Environment::with_prefix("SCRAPE").separator("_"))
-			.build()?
-			.try_deserialize()?;
-
+		log::info!("Create scribe with {:?}", paths);
 		#[cfg(target_os = "android")]
-		let lib_path = scribe_settings.library.path;
+		let lib_path = library_settings.path;
 		#[cfg(not(target_os = "android"))]
-		let lib_path = expand_tilde_owned(scribe_settings.library.path)?;
+		let lib_path = expand_tilde_owned(library_settings.path)?;
 		if !lib_path.try_exists()? {
 			fs::create_dir_all(&lib_path)?;
 		}
 		if !lib_path.is_dir() {
 			return Err(ScribeCreateError::LibraryPathNotDir(lib_path.to_path_buf()));
 		}
-		if !settings.cache_path.try_exists()? {
-			fs::create_dir_all(&settings.cache_path)?;
+		if !paths.cache_path.try_exists()? {
+			fs::create_dir_all(&paths.cache_path)?;
 		}
-		if !settings.cache_path.is_dir() {
-			return Err(ScribeCreateError::CachePathNotDir(
-				settings.cache_path.clone(),
-			));
+		if !paths.cache_path.is_dir() {
+			return Err(ScribeCreateError::CachePathNotDir(paths.cache_path.clone()));
 		}
-		if !settings.data_path.try_exists()? {
-			fs::create_dir_all(&settings.data_path)?;
+		if !paths.data_path.try_exists()? {
+			fs::create_dir_all(&paths.data_path)?;
 		}
-		if !settings.data_path.is_dir() {
-			return Err(ScribeCreateError::DataPathNotDir(
-				settings.data_path.clone(),
-			));
+		if !paths.data_path.is_dir() {
+			return Err(ScribeCreateError::DataPathNotDir(paths.data_path.clone()));
 		}
-		let state_db_path = settings.data_path.join("state.db");
+		let state_db_path = paths.data_path.join("state.db");
 
 		let lib = library::Library::default();
 		let records = record_keeper::create(&state_db_path)?;
-		let storage = secret_storage::create(&settings.cache_path)?;
+		let storage = secret_storage::create(&paths.cache_path)?;
 		let (order_tx, order_rx) = channel();
 		let handle = spawn_scribe(bell, lib_path, lib.clone(), records, storage, order_rx);
 

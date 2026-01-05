@@ -4,20 +4,22 @@ use crate::html_parser;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorError {
-	#[error(transparent)]
+	#[error("record keeper error: {0}")]
 	RecordKeeper(#[from] scribe::record_keeper::RecordKeeperError),
-	#[error(transparent)]
+	#[error("tree builder error: {0}")]
 	TreeBuilder(#[from] html_parser::TreeBuilderError),
-	#[error(transparent)]
+	#[error("epub error: {0}")]
 	Epub(#[from] epub::doc::DocError),
-	#[error(transparent)]
+	#[error("zip error: {0}")]
 	Zip(#[from] zip::result::ZipError),
-	#[error(transparent)]
+	#[error("xml error: {0}")]
 	QuickXml(#[from] quick_xml::de::DeError),
-	#[error(transparent)]
+	#[error("render error: {0}")]
 	Render(#[from] IllustratorRenderError),
-	#[error("at {1}: {0}")]
+	#[error("io error at {1}: {0}")]
 	Io(std::io::Error, &'static std::panic::Location<'static>),
+	#[error("config error: {0}")]
+	Config(#[from] config::ConfigError),
 	#[error("Missing resource {0}")]
 	MissingResource(String),
 }

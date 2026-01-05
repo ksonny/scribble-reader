@@ -36,6 +36,7 @@ use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
 use resvg::usvg;
+use scribe::ScribeConfig;
 use scribe::library;
 use scribe::library::Location;
 use serde::Deserialize;
@@ -222,13 +223,19 @@ pub struct IllustratorToC {
 	pub items: Vec<IllustratorToCItem>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Params {
+	page_width: u32,
+	page_height: u32,
+	scale: f32,
+}
+
 pub struct Illustrator {
-	state_db_path: PathBuf,
+	params: Params,
+	config: ScribeConfig,
 	font_system: Arc<Mutex<FontSystem>>,
-	settings: Arc<RwLock<RenderSettings>>,
 	cache: Arc<RwLock<PageContentCache>>,
 	req_tx: Option<Sender<Request>>,
-	settings_changed: bool,
 }
 
 #[cfg(target_os = "android")]
@@ -244,18 +251,24 @@ fn create_font_system() -> FontSystem {
 }
 
 impl Illustrator {
-	pub fn new(state_path: PathBuf, settings: RenderSettings) -> Self {
+	pub fn create(config: ScribeConfig) -> Self {
 		#[cfg(target_os = "android")]
-		let font_system = create_font_system();
+		let font_system = Arc::new(Mutex::new(create_font_system()));
 		#[cfg(not(target_os = "android"))]
-		let font_system = FontSystem::new();
+		let font_system = Arc::new(Mutex::new(FontSystem::new()));
+		let params = Params {
+			page_height: 800,
+			page_width: 600,
+			scale: 1.0,
+		};
+		let cache = Arc::new(RwLock::new(PageContentCache::default()));
+
 		Self {
-			state_db_path: state_path,
-			font_system: Arc::new(Mutex::new(font_system)),
-			settings: Arc::new(RwLock::new(settings)),
-			cache: Arc::new(RwLock::new(PageContentCache::default())),
+			params,
+			config,
+			font_system,
+			cache,
 			req_tx: None,
-			settings_changed: false,
 		}
 	}
 
@@ -269,31 +282,32 @@ impl Illustrator {
 
 	pub fn resize(&mut self, width: u32, height: u32) {
 		log::debug!("Resize event {width}/{height}");
-		let mut settings = self.settings.write().unwrap();
-		settings.page_width = width;
-		settings.page_height = height;
-		self.settings_changed = true;
+		self.params.page_width = width;
+		self.params.page_height = height;
+
+		if let Some(req_tx) = &self.req_tx {
+			match req_tx.send(Request::Resize { width, height }) {
+				Ok(_) => {}
+				Err(e) => {
+					log::info!("Error on illustrator channel, close: {e}");
+					self.req_tx = None;
+				}
+			}
+		}
 	}
 
 	pub fn rescale(&mut self, scale: f32) {
 		log::debug!("Rescale event {scale}");
-		let mut settings = self.settings.write().unwrap();
-		settings.scale = scale;
-		self.settings_changed = true;
-	}
+		self.params.scale = scale;
 
-	pub fn refresh_if_needed(&mut self) {
-		if self.settings_changed {
-			if let Some(req_tx) = &self.req_tx {
-				match req_tx.send(Request::RefreshCache) {
-					Ok(_) => {}
-					Err(e) => {
-						log::info!("Error on illustrator channel, close: {e}");
-						self.req_tx = None;
-					}
+		if let Some(req_tx) = &self.req_tx {
+			match req_tx.send(Request::Rescale { scale }) {
+				Ok(_) => {}
+				Err(e) => {
+					log::info!("Error on illustrator channel, close: {e}");
+					self.req_tx = None;
 				}
 			}
-			self.settings_changed = false;
 		}
 	}
 }
@@ -307,7 +321,8 @@ pub enum Request {
 	Goto(Location),
 	NextPage,
 	PreviousPage,
-	RefreshCache,
+	Resize { width: u32, height: u32 },
+	Rescale { scale: f32 },
 }
 
 #[derive(Clone)]
@@ -573,26 +588,26 @@ pub struct PageContent {
 	pub items: Vec<DisplayItem>,
 }
 
-pub struct RenderSettings {
-	pub page_width: u32,
-	pub page_height: u32,
-	pub scale: f32,
+struct RenderSettings<'a> {
+	page_width: u32,
+	page_height: u32,
+	scale: f32,
 
-	pub padding_top_em: f32,
-	pub padding_left_em: f32,
-	pub padding_right_em: f32,
-	pub padding_bottom_em: f32,
-	pub padding_paragraph_em: f32,
+	padding_top_em: f32,
+	padding_left_em: f32,
+	padding_right_em: f32,
+	padding_bottom_em: f32,
+	padding_paragraph_em: f32,
 
-	pub body_metrics: cosmic_text::Metrics,
-	pub body_attrs: cosmic_text::Attrs<'static>,
-	pub bold_attrs: cosmic_text::Attrs<'static>,
-	pub italic_attrs: cosmic_text::Attrs<'static>,
-	pub h1_attrs: cosmic_text::Attrs<'static>,
-	pub h2_attrs: cosmic_text::Attrs<'static>,
-	pub h3_attrs: cosmic_text::Attrs<'static>,
-	pub h4_attrs: cosmic_text::Attrs<'static>,
-	pub h5_attrs: cosmic_text::Attrs<'static>,
+	body_metrics: cosmic_text::Metrics,
+	body: cosmic_text::Attrs<'a>,
+	bold: cosmic_text::Attrs<'a>,
+	italic: cosmic_text::Attrs<'a>,
+	h1: cosmic_text::Attrs<'a>,
+	h2: cosmic_text::Attrs<'a>,
+	h3: cosmic_text::Attrs<'a>,
+	h4: cosmic_text::Attrs<'a>,
+	h5: cosmic_text::Attrs<'a>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -608,17 +623,85 @@ enum TextStyle {
 	H5,
 }
 
-impl RenderSettings {
-	fn text_attrs(&self, style: TextStyle) -> &Attrs<'static> {
+impl<'a> RenderSettings<'a> {
+	fn new(params: &Params, config: &'a scribe::settings::Illustrator) -> Self {
+		use cosmic_text::Attrs;
+		use cosmic_text::Family;
+		use cosmic_text::Metrics;
+		use cosmic_text::Style;
+		use cosmic_text::Weight;
+
+		let family = match config.body.family.as_str() {
+			"serif" => Family::Serif,
+			"sans serif" => Family::SansSerif,
+			"fantasy" => Family::Fantasy,
+			"cursive" => Family::Cursive,
+			"monospace" => Family::Monospace,
+			family => Family::Name(family),
+		};
+		let size = params.scale * config.body.size_px;
+		let line = config.body.line_height;
+
+		let body_metrics = Metrics::relative(size, line);
+		let body = Attrs::new().family(family);
+		let bold = body.clone().weight(Weight::BOLD);
+		let italic = body.clone().style(Style::Italic);
+
+		let h1 = body
+			.clone()
+			.metrics(Metrics::relative(size * config.h1.size_em, line));
+		let h2 = body
+			.clone()
+			.metrics(Metrics::relative(size * config.h2.size_em, line));
+		let h3 = body
+			.clone()
+			.metrics(Metrics::relative(size * config.h3.size_em, line));
+		let h4 = body
+			.clone()
+			.metrics(Metrics::relative(size * config.h4.size_em, line));
+		let h5 = body
+			.clone()
+			.metrics(Metrics::relative(size * config.h5.size_em, line));
+
+		let padding_top_em = config.padding.top_em;
+		let padding_left_em = config.padding.left_em;
+		let padding_right_em = config.padding.right_em;
+		let padding_bottom_em = config.padding.bottom_em;
+		let padding_paragraph_em = config.padding.paragraph_em;
+
+		RenderSettings {
+			page_width: params.page_width,
+			page_height: params.page_height,
+			scale: params.scale,
+
+			padding_top_em,
+			padding_left_em,
+			padding_right_em,
+			padding_bottom_em,
+			padding_paragraph_em,
+
+			body_metrics,
+			body,
+			bold,
+			italic,
+			h1,
+			h2,
+			h3,
+			h4,
+			h5,
+		}
+	}
+
+	fn text_attrs(&self, style: TextStyle) -> &Attrs<'a> {
 		match style {
-			TextStyle::Body => &self.body_attrs,
-			TextStyle::Bold => &self.bold_attrs,
-			TextStyle::Italic => &self.italic_attrs,
-			TextStyle::H1 => &self.h1_attrs,
-			TextStyle::H2 => &self.h2_attrs,
-			TextStyle::H3 => &self.h3_attrs,
-			TextStyle::H4 => &self.h4_attrs,
-			TextStyle::H5 => &self.h5_attrs,
+			TextStyle::Body => &self.body,
+			TextStyle::Bold => &self.bold,
+			TextStyle::Italic => &self.italic,
+			TextStyle::H1 => &self.h1,
+			TextStyle::H2 => &self.h2,
+			TextStyle::H3 => &self.h3,
+			TextStyle::H4 => &self.h4,
+			TextStyle::H5 => &self.h5,
 		}
 	}
 
@@ -648,16 +731,18 @@ pub fn spawn_illustrator(
 	bell: impl Bell + Send + 'static,
 	id: library::BookId,
 ) -> Result<IllustratorHandle, IllustratorSpawnError> {
-	let records = scribe::record_keeper::create(&illustrator.state_db_path)?;
+	let state_path = illustrator.config.paths().data_path.join("state.db");
+	let records = scribe::record_keeper::create(&state_path)?;
 
 	log::info!("Open book {id}");
 	let book = records.fetch_book(id)?;
 
-	let (req_tx, req_rx) = channel();
+	let mut params = illustrator.params.clone();
+	let config = illustrator.config.clone();
 	let font_system = illustrator.font_system.clone();
-	let settings = illustrator.settings.clone();
 	let cache = illustrator.cache.clone();
 
+	let (req_tx, req_rx) = channel();
 	illustrator.req_tx = Some(req_tx.clone());
 
 	let handle_toc = Arc::new(RwLock::new(IllustratorToC::default()));
@@ -671,10 +756,13 @@ pub fn spawn_illustrator(
 		let bytes = SharedVec(Arc::new(
 			fs::read(&book.path).inspect_err(|e| log::error!("Error: {e}"))?,
 		));
+		let illustrator_config = config
+			.illustrator()
+			.inspect_err(|e| log::error!("Config error: {e}"))?;
 
 		let (archive, book_meta, toc) = {
 			let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))
-				.inspect_err(|e| log::error!("Error: {e}"))?;
+				.inspect_err(|e| log::error!("Zip error: {e}"))?;
 			let (meta, toc) = read_book_meta(bytes, &mut archive)?;
 			(Mutex::new(archive), meta, toc)
 		};
@@ -707,6 +795,7 @@ pub fn spawn_illustrator(
 			let req = match req_rx.try_recv() {
 				Ok(req) => req,
 				Err(TryRecvError::Empty) => {
+					let settings = RenderSettings::new(&params, &illustrator_config);
 					let (item, path) = book_meta
 						.spine_resource(current_loc)
 						.expect("On location without spine");
@@ -748,8 +837,14 @@ pub fn spawn_illustrator(
 				Request::Goto(loc) => {
 					current_loc = loc;
 				}
-				Request::RefreshCache => {
+				Request::Resize { width, height } => {
 					cache.write().unwrap().clear();
+					params.page_width = width;
+					params.page_height = height;
+				}
+				Request::Rescale { scale } => {
+					cache.write().unwrap().clear();
+					params.scale = scale;
 				}
 			}
 		}
@@ -768,7 +863,7 @@ pub fn spawn_illustrator(
 
 #[allow(clippy::too_many_arguments)]
 fn assure_cached<R: io::Seek + io::Read + Sync + Send>(
-	settings: &RwLock<RenderSettings>,
+	settings: &RenderSettings,
 	font_system: &Mutex<FontSystem>,
 	archive: &Mutex<ZipArchive<R>>,
 	cache: &RwLock<PageContentCache>,
@@ -783,14 +878,8 @@ fn assure_cached<R: io::Seek + io::Read + Sync + Send>(
 	} else {
 		log::info!("Refresh cache for {}", path.display());
 		let start = Instant::now();
-		let (pages, b) = render_resource(
-			&settings.read().unwrap(),
-			font_system,
-			archive,
-			path,
-			builder,
-			taffy_tree,
-		)?;
+		let (pages, b) =
+			render_resource(settings, font_system, archive, path, builder, taffy_tree)?;
 		let mut cache = cache.write().unwrap();
 		cache.insert(item, pages);
 		drop(cache);
@@ -914,6 +1003,9 @@ fn render_resource<R: io::Seek + io::Read + Sync + Send>(
 	let mut svgs = HashMap::new();
 	let mut svg_buf = String::new();
 
+	let page_height = settings.page_height_padded();
+	let page_width = settings.page_width_padded();
+
 	let mut node_iter = node_tree
 		.body_iter()
 		.ok_or(IllustratorRenderError::MissingBody)?;
@@ -922,12 +1014,7 @@ fn render_resource<R: io::Seek + io::Read + Sync + Send>(
 			EdgeRef::OpenElement(el) if el.local_name() == &local_name!("svg") => {
 				let svg = read_svg(&mut svg_buf, &el, &mut node_iter, &options)?;
 				let size = svg.size();
-				let scale = scale_to_fit(
-					size.width(),
-					size.height(),
-					settings.page_width_padded(),
-					settings.page_height_padded(),
-				);
+				let scale = scale_to_fit(size.width(), size.height(), page_width, page_height);
 				let style = Style {
 					size: taffy::Size::from_lengths(size.width() * scale, size.height() * scale),
 					..Default::default()
@@ -1020,7 +1107,6 @@ fn render_resource<R: io::Seek + io::Read + Sync + Send>(
 		},
 	)?;
 
-	let page_height = settings.page_height_padded();
 	let padding_top = settings.padding_top_em * settings.em();
 	let padding_left = settings.padding_left_em * settings.em();
 
@@ -1345,18 +1431,17 @@ fn element_style(settings: &RenderSettings, name: &LocalName) -> Style {
 	}
 }
 
-fn create_text<'a>(
-	settings: &'a RenderSettings,
+fn create_text(
+	settings: &RenderSettings,
 	font_system: &mut FontSystem,
-	texts: Vec<(&'a str, TextStyle)>,
+	texts: Vec<(&str, TextStyle)>,
 ) -> Buffer {
 	let text_style = texts.first().map(|(_, s)| *s).unwrap_or_default();
 	let attrs = settings.text_attrs(text_style);
 	let metrics = attrs
 		.metrics_opt
 		.map(|m| m.into())
-		.unwrap_or(settings.body_metrics)
-		.scale(settings.scale);
+		.unwrap_or(settings.body_metrics);
 	let texts = texts
 		.into_iter()
 		.map(|(t, s)| (t, settings.text_attrs(s).clone()));
