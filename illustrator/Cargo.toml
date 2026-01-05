@@ -20,7 +20,7 @@ scribe = { version = "0.1.0", path = "../scribe" }
 serde.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror.workspace = true
-zip = "5.1.1"
+zip = "7.0.0"
 
 [dev-dependencies]
 env_logger.workspace = true
