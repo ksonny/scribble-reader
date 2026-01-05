@@ -8,7 +8,7 @@ bitflags = "2.9.4"
 config.workspace = true
 cosmic-text.workspace = true
 epub.workspace = true
-html5ever = "0.35.0"
+html5ever = "0.36.1"
 image.workspace = true
 imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 log.workspace = true
