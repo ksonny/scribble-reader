@@ -10,8 +10,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use illustrator::Illustrator;
-use illustrator::RenderSettings;
 use illustrator::spawn_illustrator;
+use scribe::ScribeConfig;
 use scribe::library::Location;
 use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
@@ -123,8 +123,6 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				} else {
 					log::trace!("Render sleep");
 					event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-
-					self.illustrator.refresh_if_needed();
 				}
 			}
 			winit::event::StartCause::WaitCancelled {
@@ -474,9 +472,9 @@ pub enum Error {
 	Scribe(#[from] scribe::ScribeError),
 }
 
-pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Result<(), Error> {
+pub fn start(event_loop: EventLoop<AppPoke>, config: ScribeConfig) -> Result<(), Error> {
 	let bell = EventLoopBell(event_loop.create_proxy());
-	let scribe = Scribe::create(bell.clone(), &settings)?;
+	let scribe = Scribe::create(bell.clone(), config.clone())?;
 	let view = MainView::default();
 
 	let egui_ctx = ui::create_egui_ctx();
@@ -484,40 +482,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
 
-	let body_metrics = cosmic_text::Metrics::relative(18., 1.25);
-	let body_attrs = cosmic_text::Attrs::new();
-	let bold_attrs = cosmic_text::Attrs::new().weight(cosmic_text::Weight::BOLD);
-	let italic_attrs = cosmic_text::Attrs::new().style(glyphon::Style::Italic);
-	let h1_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(30., 1.5));
-	let h2_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
-	let h3_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
-	let h4_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
-	let h5_attrs = cosmic_text::Attrs::new().metrics(cosmic_text::Metrics::relative(24., 1.5));
-
-	let illustrator = Illustrator::new(
-		settings.data_path.join("state.db"),
-		RenderSettings {
-			page_height: 800,
-			page_width: 600,
-			scale: 1.0,
-
-			padding_top_em: 2.,
-			padding_left_em: 2.,
-			padding_right_em: 2.,
-			padding_bottom_em: 2.,
-			padding_paragraph_em: 0.5,
-
-			body_metrics,
-			body_attrs,
-			bold_attrs,
-			italic_attrs,
-			h1_attrs,
-			h2_attrs,
-			h3_attrs,
-			h4_attrs,
-			h5_attrs,
-		},
-	);
+	let illustrator = Illustrator::create(config);
 	let areas = ActiveAreas::default();
 
 	let mut app = App {
@@ -545,6 +510,7 @@ pub fn start(event_loop: EventLoop<AppPoke>, settings: scribe::Settings) -> Resu
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
 	use android_logger::Config;
+	use scribe::settings::Paths;
 	use winit::platform::android::EventLoopBuilderExtAndroid;
 
 	android_logger::init_once(
@@ -554,17 +520,18 @@ fn android_main(app: AndroidApp) {
 	);
 
 	let ext_data_path = app.external_data_path().unwrap();
-	let s = scribe::Settings {
+	let paths = Paths {
 		cache_path: ext_data_path.parent().unwrap().join("cache"),
 		config_path: ext_data_path.join("config"),
 		data_path: ext_data_path.join("data"),
 	};
+	let config = ScribeConfig::new(paths);
 
 	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
 		.build()
 		.unwrap();
-	match start(event_loop, s) {
+	match start(event_loop, config) {
 		Ok(_) => {}
 		Err(e) => log::error!("Error: {e}"),
 	}

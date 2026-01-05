@@ -1,5 +1,6 @@
 use scribble_reader::start;
-use scribe::Settings;
+use scribe::ScribeConfig;
+use scribe::settings::Paths;
 use winit::event_loop::EventLoop;
 
 fn main() {
@@ -11,14 +12,15 @@ fn main() {
 		.init();
 
 	let xdg_dirs = xdg::BaseDirectories::with_prefix("scribble-reader");
-	let s = Settings {
+	let paths = Paths {
 		cache_path: xdg_dirs.get_cache_home().unwrap(),
 		config_path: xdg_dirs.get_config_home().unwrap(),
 		data_path: xdg_dirs.get_data_home().unwrap(),
 	};
+	let config = ScribeConfig::new(paths);
 
 	let event_loop = EventLoop::with_user_event().build().unwrap();
-	match start(event_loop, s) {
+	match start(event_loop, config) {
 		Ok(_) => {}
 		Err(e) => log::error!("Error: {e}"),
 	}
