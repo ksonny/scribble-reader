@@ -7,29 +7,48 @@ use wgpu::RenderPass;
 use wgpu::TextureFormat;
 use wgpu::util::DeviceExt;
 
+use bitflags::bitflags;
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RenderError {}
+
+bitflags! {
+	#[repr(C)]
+	#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+	struct Flags: u32 {
+		const GRAYSCALE = 0b00000001;
+	}
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
 	screen_resolution: [u32; 2],
+	offset_pos: [u32; 2],
+	flags: Flags,
+	_unused: u32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct PixmapTargetInput {
-	pub(crate) pos: [u32; 2],
-	pub(crate) dim: [u32; 2],
+	pub(crate) pos: [f32; 2],
+	pub(crate) dim: [f32; 2],
 	pub(crate) tex_pos: [u32; 2],
 	pub(crate) tex_dim: [u32; 2],
 }
 
 #[derive(Debug)]
+pub(crate) enum Pixmap<'a> {
+	RgbA(&'a [u8]),
+	Luma(&'a [u8]),
+}
+
+#[derive(Debug)]
 pub(crate) struct PixmapInput<'a> {
-	pub(crate) pixmap_rgba: &'a [u8],
-	pub(crate) pixmap_width: u32,
-	pub(crate) pixmap_height: u32,
+	pub(crate) pixmap: Pixmap<'a>,
+	pub(crate) pixmap_dim: [u32; 2],
+	pub(crate) offset_pos: [u32; 2],
 	pub(crate) targets: Vec<PixmapTargetInput>,
 }
 
@@ -37,21 +56,27 @@ pub(crate) struct PixmapInput<'a> {
 struct PixmapEntry {
 	texture: wgpu::Texture,
 	bind_group: wgpu::BindGroup,
+	params_buffer: wgpu::Buffer,
 	instance_buffer: wgpu::Buffer,
 	instances: u32,
 }
 
 pub(crate) struct Renderer {
 	sampler: wgpu::Sampler,
-	params_buffer: wgpu::Buffer,
 	bind_group_layout: wgpu::BindGroupLayout,
 	pipeline: wgpu::RenderPipeline,
-	params: Option<Params>,
+	screen_width: u32,
+	screen_height: u32,
 	entries: Vec<PixmapEntry>,
 }
 
 impl Renderer {
-	pub(crate) fn new(device: &Device, format: TextureFormat) -> Self {
+	pub(crate) fn new(
+		device: &Device,
+		format: TextureFormat,
+		screen_width: u32,
+		screen_height: u32,
+	) -> Self {
 		let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
 		let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -60,18 +85,9 @@ impl Renderer {
 			address_mode_v: wgpu::AddressMode::ClampToEdge,
 			address_mode_w: wgpu::AddressMode::ClampToEdge,
 			mag_filter: wgpu::FilterMode::Linear,
-			min_filter: wgpu::FilterMode::Nearest,
+			min_filter: wgpu::FilterMode::Linear,
 			mipmap_filter: wgpu::FilterMode::Nearest,
 			..Default::default()
-		});
-
-		let params = Params {
-			screen_resolution: [800, 600],
-		};
-		let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-			label: Some("pixmap params buffer"),
-			contents: bytemuck::cast_slice(&[params]),
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 		});
 
 		let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -143,21 +159,17 @@ impl Renderer {
 				conservative: false,
 			},
 			depth_stencil: None,
-			multisample: wgpu::MultisampleState {
-				count: 1,
-				mask: !0,
-				alpha_to_coverage_enabled: false,
-			},
+			multisample: wgpu::MultisampleState::default(),
 			multiview: None,
 			cache: None,
 		});
 
 		Self {
 			sampler,
-			params_buffer,
 			bind_group_layout,
 			pipeline,
-			params: None,
+			screen_width,
+			screen_height,
 			entries: Vec::new(),
 		}
 	}
@@ -168,13 +180,13 @@ impl Renderer {
 			step_mode: wgpu::VertexStepMode::Instance,
 			attributes: &[
 				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Uint32x2,
+					format: wgpu::VertexFormat::Float32x2,
 					offset: 0,
 					shader_location: 0,
 				},
 				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Uint32x2,
-					offset: mem::size_of::<[u32; 2]>() as wgpu::BufferAddress,
+					format: wgpu::VertexFormat::Float32x2,
+					offset: mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
 					shader_location: 1,
 				},
 				wgpu::VertexAttribute {
@@ -192,9 +204,8 @@ impl Renderer {
 	}
 
 	pub(crate) fn resize(&mut self, width: u32, height: u32) {
-		self.params = Some(Params {
-			screen_resolution: [width, height],
-		});
+		self.screen_width = width;
+		self.screen_height = height;
 	}
 
 	pub(crate) fn prepare<'a>(
@@ -203,25 +214,43 @@ impl Renderer {
 		queue: &Queue,
 		inputs: impl Iterator<Item = PixmapInput<'a>>,
 	) {
-		if let Some(params) = self.params {
-			queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
-		}
-
-		// TODO: Reuse textures
+		// TODO: Reuse textures, and buffers
 		self.entries.clear();
 		for input in inputs {
+			if input.targets.is_empty() {
+				continue;
+			}
+
+			let [pixmap_width, pixmap_height] = input.pixmap_dim;
 			let size = wgpu::Extent3d {
-				width: input.pixmap_width,
-				height: input.pixmap_height,
+				width: pixmap_width,
+				height: pixmap_height,
 				depth_or_array_layers: 1,
 			};
+			let (format, bs, flags, data) = match input.pixmap {
+				Pixmap::RgbA(data) => (wgpu::TextureFormat::Rgba8Unorm, 4, Flags::empty(), data),
+				Pixmap::Luma(data) => (wgpu::TextureFormat::R8Unorm, 1, Flags::GRAYSCALE, data),
+			};
+
+			let params = Params {
+				screen_resolution: [self.screen_width, self.screen_height],
+				offset_pos: input.offset_pos,
+				flags,
+				_unused: 0,
+			};
+			let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("pixmap params buffer"),
+				contents: bytemuck::cast_slice(&[params]),
+				usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			});
+
 			let texture = device.create_texture(&wgpu::TextureDescriptor {
 				label: Some("pixmap texture"),
 				size,
 				mip_level_count: 1,
 				sample_count: 1,
 				dimension: wgpu::TextureDimension::D2,
-				format: wgpu::TextureFormat::Rgba8Unorm,
+				format,
 				usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
 				view_formats: &[],
 			});
@@ -232,11 +261,11 @@ impl Renderer {
 					origin: wgpu::Origin3d::ZERO,
 					aspect: wgpu::TextureAspect::All,
 				},
-				input.pixmap_rgba,
+				data,
 				wgpu::TexelCopyBufferLayout {
 					offset: 0,
-					bytes_per_row: Some(4 * input.pixmap_width),
-					rows_per_image: Some(input.pixmap_height),
+					bytes_per_row: Some(bs * pixmap_width),
+					rows_per_image: Some(pixmap_height),
 				},
 				size,
 			);
@@ -247,7 +276,7 @@ impl Renderer {
 				entries: &[
 					wgpu::BindGroupEntry {
 						binding: 0,
-						resource: self.params_buffer.as_entire_binding(),
+						resource: params_buffer.as_entire_binding(),
 					},
 					wgpu::BindGroupEntry {
 						binding: 1,
@@ -270,6 +299,7 @@ impl Renderer {
 			self.entries.push(PixmapEntry {
 				texture,
 				bind_group,
+				params_buffer,
 				instance_buffer,
 				instances,
 			});

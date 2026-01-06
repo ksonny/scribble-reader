@@ -1,18 +1,22 @@
 #![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
 
+mod fonts;
 mod fps_calculator;
 mod gestures;
 mod renderer;
 mod ui;
 mod views;
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use illustrator::Illustrator;
-use illustrator::spawn_illustrator;
+use illustrator::create_illustrator;
 use scribe::ScribeConfig;
 use scribe::library::Location;
+use sculpter::fonts::SculpterFontErrors;
+use sculpter::fonts::SculpterFonts;
+use sculpter::fonts::SculpterFontsBuilder;
 use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent;
@@ -44,7 +48,8 @@ struct App<'window> {
 	fps: FpsCalculator,
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
-	illustrator: Illustrator,
+	config: ScribeConfig,
+	fonts: Arc<SculpterFonts>,
 }
 
 impl App<'_> {
@@ -119,8 +124,6 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 		self.input.resume(size, scale_factor);
 		self.gestures
 			.set_min_distance_by_screen(size.width, size.height);
-		self.illustrator.resize(size.width, size.height);
-		self.illustrator.rescale(scale_factor);
 		self.view.resize(size.width, size.height);
 		self.view.rescale(scale_factor);
 
@@ -158,7 +161,12 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 			}
 			AppEvent::OpenReader(book_id) => {
 				log::debug!("Open book {book_id:?}");
-				match spawn_illustrator(&mut self.illustrator, self.bell.clone(), book_id) {
+				match create_illustrator(
+					self.config.clone(),
+					self.fonts.clone(),
+					self.bell.clone(),
+					book_id,
+				) {
 					Ok(handle) => {
 						self.view.reader(handle);
 					}
@@ -169,7 +177,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 			}
 			AppEvent::OpenExperiments => {
 				log::debug!("Open experiments");
-				self.view.experiments();
+				self.view.experiments(self.fonts.clone());
 			}
 			AppEvent::Exit => {
 				log::debug!("Exit");
@@ -234,7 +242,6 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				self.gestures
 					.set_min_distance_by_screen(size.width, size.height);
 				self.input.resize(size);
-				self.illustrator.resize(size.width, size.height);
 				self.view.resize(size.width, size.height);
 				self.request_redraw();
 			}
@@ -243,7 +250,6 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 					renderer.rescale(scale_factor)
 				}
 				self.input.rescale(scale_factor as f32);
-				self.illustrator.rescale(scale_factor as f32);
 				self.view.rescale(scale_factor as f32);
 				self.request_redraw();
 			}
@@ -324,6 +330,8 @@ pub enum Error {
 	ScribeCreate(#[from] scribe::ScribeCreateError),
 	#[error(transparent)]
 	Scribe(#[from] scribe::ScribeError),
+	#[error(transparent)]
+	SculpterFonts(#[from] SculpterFontErrors),
 }
 
 pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<(), Error> {
@@ -336,7 +344,16 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 	let gestures = GestureTracker::<_>::new();
 
 	let scribe = Scribe::create(bell.clone(), config.clone())?;
-	let illustrator = Illustrator::create(config);
+	let fonts = {
+		let fonts = SculpterFontsBuilder::new("EB Garamond", "Open Sans")
+			.add_font(fonts::EB_GARAMOND_VF_TTF)?
+			.add_font(fonts::EB_GARAMOND_ITALIC_VF_TTF)?
+			.add_font(fonts::OPEN_SANS_VF_TTF)?
+			.add_font(fonts::OPEN_SANS_ITALIC_VF_TTF)?
+			.add_fallback(fonts::NOTO_EMOJI_VF_TTF)?
+			.build();
+		Arc::new(fonts)
+	};
 
 	let mut app = App {
 		input,
@@ -348,7 +365,8 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 		fps,
 		request_redraw: Instant::now(),
 		gestures,
-		illustrator,
+		config,
+		fonts,
 	};
 
 	event_loop.run_app(&mut app)?;

@@ -1,7 +1,5 @@
-#![allow(dead_code)]
 use std::marker::PhantomData;
 
-use crate::renderer::glyphon_renderer;
 use crate::renderer::gui_renderer;
 use crate::renderer::pixmap_renderer;
 use crate::ui::UiInput;
@@ -17,7 +15,6 @@ pub(crate) struct Painter<'a, PainterUI = PainterUIReady, PainterPixmap = Painte
 	ui_input: &'a mut UiInput,
 	gui_renderer: &'a mut gui_renderer::Renderer,
 	pixmap_renderer: &'a mut pixmap_renderer::Renderer,
-	glyphon_renderer: &'a mut glyphon_renderer::Renderer,
 	phantom: PhantomData<(PainterUI, PainterPixmap)>,
 }
 
@@ -28,7 +25,6 @@ impl<'a> Painter<'a> {
 		ui_input: &'a mut UiInput,
 		gui_renderer: &'a mut gui_renderer::Renderer,
 		pixmap_renderer: &'a mut pixmap_renderer::Renderer,
-		glyphon_renderer: &'a mut glyphon_renderer::Renderer,
 	) -> Self {
 		Self {
 			device,
@@ -36,22 +32,8 @@ impl<'a> Painter<'a> {
 			ui_input,
 			gui_renderer,
 			pixmap_renderer,
-			glyphon_renderer,
 			phantom: PhantomData,
 		}
-	}
-
-	// Temporary, while we get rid of it
-	pub(crate) fn draw_glyphon<'b>(
-		self,
-		font_system: &mut cosmic_text::FontSystem,
-		items: impl Iterator<Item = glyphon::TextArea<'b>> + Clone,
-	) -> Self {
-		let _ = self
-			.glyphon_renderer
-			.prepare(self.device, self.queue, font_system, items)
-			.inspect_err(|err| log::error!("Glyphon prepare error: {err}"));
-		self
 	}
 }
 
@@ -63,7 +45,6 @@ impl<'a, APainterUI, APainterPixmap> Painter<'a, APainterUI, APainterPixmap> {
 			pixmap_renderer: self.pixmap_renderer,
 			ui_input: self.ui_input,
 			gui_renderer: self.gui_renderer,
-			glyphon_renderer: self.glyphon_renderer,
 			phantom: PhantomData,
 		}
 	}

@@ -1,12 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["main", "illustrator", "scribe"]
+members = ["main", "illustrator", "scribe", "sculpter"]
 default-members = ["main"]
 
 [workspace.dependencies]
+illustrator = { version = "0.1.0", path = "./illustrator" }
+scribe = { version = "0.1.0", path = "./scribe" }
 chrono = { version = "0.4.42", default-features = false, features = ["alloc", "clock", "now", "std", "serde"] }
 config = { version = "0.15.18", default-features = false, features = ["toml"] }
-cosmic-text = "0.14.2"
 env_logger = "0.11.8"
 epub = "2.1.4"
 image = { version = "0.25.8", features = ["png", "jpeg", "ico"] }
@@ -14,6 +15,9 @@ log = "0.4.28"
 rayon = "1.11.0"
 serde = { version = "1.0.226", features = ["derive"] }
 thiserror = "2.0.17"
+sculpter = { version = "0.1.0", path = "./sculpter" }
+ttf-parser = "0.25.1"
+
 
 [profile.dev-opt]
 inherits = "dev"
