@@ -631,7 +631,7 @@ impl<'a> RenderSettings<'a> {
 
 		let family = match config.body.family.as_str() {
 			"serif" => Family::Serif,
-			"sans serif" => Family::SansSerif,
+			"sans-serif" => Family::SansSerif,
 			"fantasy" => Family::Fantasy,
 			"cursive" => Family::Cursive,
 			"monospace" => Family::Monospace,

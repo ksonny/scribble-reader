@@ -1,0 +1,12 @@
+[package]
+name = "sculpter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ab_glyph = "0.2.32"
+etagere = "0.2.15"
+image.workspace = true
+rustybuzz = "0.20.1"
+thiserror.workspace = true
+ttf-parser = "0.25.1"
