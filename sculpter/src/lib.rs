@@ -9,6 +9,7 @@ use crate::error::SculpterError;
 
 mod error;
 mod fonts;
+mod shape;
 
 #[derive(Debug, Default)]
 pub enum Family<'a> {
