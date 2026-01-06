@@ -10,9 +10,10 @@ use crate::error::SculpterError;
 mod error;
 mod fonts;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum Family<'a> {
 	Name(&'a str),
+	#[default]
 	Serif,
 	SansSerif,
 	Emoji,

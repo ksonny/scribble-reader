@@ -629,7 +629,7 @@ impl<'a> RenderSettings<'a> {
 		use cosmic_text::Style;
 		use cosmic_text::Weight;
 
-		let family = match config.body.family.as_str() {
+		let family = match config.font_regular.family.as_str() {
 			"serif" => Family::Serif,
 			"sans-serif" => Family::SansSerif,
 			"fantasy" => Family::Fantasy,
@@ -637,8 +637,8 @@ impl<'a> RenderSettings<'a> {
 			"monospace" => Family::Monospace,
 			family => Family::Name(family),
 		};
-		let size = params.scale * config.body.size_px;
-		let line = config.body.line_height;
+		let size = config.font_size_px * params.scale;
+		let line = config.line_height;
 
 		let body_metrics = Metrics::relative(size, line);
 		let body = Attrs::new().family(family);
@@ -647,19 +647,19 @@ impl<'a> RenderSettings<'a> {
 
 		let h1 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h1.size_em, line));
+			.metrics(Metrics::relative(size * config.h1.font_size_em, line));
 		let h2 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h2.size_em, line));
+			.metrics(Metrics::relative(size * config.h2.font_size_em, line));
 		let h3 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h3.size_em, line));
+			.metrics(Metrics::relative(size * config.h3.font_size_em, line));
 		let h4 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h4.size_em, line));
+			.metrics(Metrics::relative(size * config.h4.font_size_em, line));
 		let h5 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h5.size_em, line));
+			.metrics(Metrics::relative(size * config.h5.font_size_em, line));
 
 		let padding_top_em = config.padding.top_em;
 		let padding_left_em = config.padding.left_em;
