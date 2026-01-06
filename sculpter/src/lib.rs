@@ -10,7 +10,9 @@ use fixed::types::I26F6;
 pub use ttf_parser::Tag;
 
 use crate::fonts::FontEntry;
+pub use crate::fonts::SculpterFontErrors;
 pub use crate::fonts::SculpterFonts;
+pub use crate::fonts::SculpterFontsBuilder;
 use crate::lines::ShapeLines;
 pub use crate::printer::AtlasImage;
 use crate::printer::SculpturePrinter;
@@ -18,10 +20,10 @@ use crate::shaper::GlyphPlan;
 use crate::shaper::SculptureShaper;
 use crate::shaper::ShapeFaceRef;
 
-pub mod fonts;
+mod fonts;
 mod lines;
-pub mod printer;
-pub mod shaper;
+mod printer;
+mod shaper;
 
 pub type Fixed = I26F6;
 
