@@ -16,11 +16,13 @@ mime = "0.3.17"
 quick-xml = { version = "0.38.4", features = ["serialize"] }
 rayon.workspace = true
 resvg = { version = "0.45.1", default-features = false, features = ["raster-images"] }
-scribe = { version = "0.1.0", path = "../scribe" }
+scribe.workspace = true
 serde.workspace = true
+sculpter.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror.workspace = true
 zip = "5.1.1"
+ttf-parser.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true

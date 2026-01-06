@@ -20,6 +20,8 @@ pub enum IllustratorError {
 	Io(std::io::Error, &'static std::panic::Location<'static>),
 	#[error("config error: {0}")]
 	Config(#[from] config::ConfigError),
+	#[error(transparent)]
+	SculpterCreate(#[from] sculpter::error::SculpterCreateError),
 	#[error("Missing resource {0}")]
 	MissingResource(String),
 }

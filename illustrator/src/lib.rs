@@ -37,6 +37,9 @@ use resvg::usvg;
 use scribe::ScribeConfig;
 use scribe::library;
 use scribe::library::Location;
+use sculpter::FontOptions;
+use sculpter::Sculpter;
+use sculpter::error::SculpterLoadError;
 use serde::Deserialize;
 use taffy::prelude::*;
 use zip::ZipArchive;
@@ -241,6 +244,7 @@ pub struct Params {
 pub struct Illustrator {
 	params: Params,
 	config: ScribeConfig,
+	sculpter: Arc<Sculpter>,
 	font_system: Arc<Mutex<FontSystem>>,
 	cache: Arc<RwLock<PageContentCache>>,
 	req_tx: Option<Sender<Request>>,
@@ -259,7 +263,7 @@ fn create_font_system() -> FontSystem {
 }
 
 impl Illustrator {
-	pub fn create(config: ScribeConfig) -> Self {
+	pub fn create(config: ScribeConfig) -> Result<Self, SculpterLoadError> {
 		#[cfg(target_os = "android")]
 		let font_system = Arc::new(Mutex::new(create_font_system()));
 		#[cfg(not(target_os = "android"))]
@@ -269,15 +273,22 @@ impl Illustrator {
 			page_width: 600,
 			scale: 1.0,
 		};
+		let sculpter = {
+			let mut sculpter = Sculpter::new();
+			sculpter.load_builtin_fonts()?;
+			Arc::new(sculpter)
+		};
+
 		let cache = Arc::new(RwLock::new(PageContentCache::default()));
 
-		Self {
+		Ok(Self {
 			params,
 			config,
+			sculpter,
 			font_system,
 			cache,
 			req_tx: None,
-		}
+		})
 	}
 
 	pub fn font_system(&self) -> LockResult<MutexGuard<'_, FontSystem>> {
@@ -639,16 +650,16 @@ impl<'a> RenderSettings<'a> {
 		use cosmic_text::Style;
 		use cosmic_text::Weight;
 
-		let family = match config.body.family.as_str() {
+		let family = match config.font_regular.family.as_str() {
 			"serif" => Family::Serif,
-			"sans serif" => Family::SansSerif,
+			"sans-serif" => Family::SansSerif,
 			"fantasy" => Family::Fantasy,
 			"cursive" => Family::Cursive,
 			"monospace" => Family::Monospace,
 			family => Family::Name(family),
 		};
-		let size = params.scale * config.body.size_px;
-		let line = config.body.line_height;
+		let size = config.font_size_px * params.scale;
+		let line = config.line_height;
 
 		let body_metrics = Metrics::relative(size, line);
 		let body = Attrs::new().family(family);
@@ -657,19 +668,19 @@ impl<'a> RenderSettings<'a> {
 
 		let h1 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h1.size_em, line));
+			.metrics(Metrics::relative(size * config.h1.font_size_em, line));
 		let h2 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h2.size_em, line));
+			.metrics(Metrics::relative(size * config.h2.font_size_em, line));
 		let h3 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h3.size_em, line));
+			.metrics(Metrics::relative(size * config.h3.font_size_em, line));
 		let h4 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h4.size_em, line));
+			.metrics(Metrics::relative(size * config.h4.font_size_em, line));
 		let h5 = body
 			.clone()
-			.metrics(Metrics::relative(size * config.h5.size_em, line));
+			.metrics(Metrics::relative(size * config.h5.font_size_em, line));
 
 		let padding_top_em = config.padding.top_em;
 		let padding_left_em = config.padding.left_em;
@@ -747,6 +758,8 @@ pub fn spawn_illustrator(
 
 	let mut params = illustrator.params.clone();
 	let config = illustrator.config.clone();
+
+	let sculpter = illustrator.sculpter.clone();
 	let font_system = illustrator.font_system.clone();
 	let cache = illustrator.cache.clone();
 
@@ -767,6 +780,19 @@ pub fn spawn_illustrator(
 		let illustrator_config = config
 			.illustrator()
 			.inspect_err(|e| log::error!("Config error: {e}"))?;
+
+		let font_opts = vec![
+			FontOptions::new(sculpter::Family::SansSerif),
+			FontOptions::new(sculpter::Family::SansSerif).with_variations(
+				[ttf_parser::Variation {
+					axis: ttf_parser::Tag::from_bytes(b"wght"),
+					value: 500.0,
+				}]
+				.into_iter(),
+			),
+		];
+		let (style_refs, _shaper, _printer) = sculpter.create_shaper(params.scale, &font_opts)?;
+		log::info!("Created style refs {style_refs:?}");
 
 		let (archive, book_meta, toc) = {
 			let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))

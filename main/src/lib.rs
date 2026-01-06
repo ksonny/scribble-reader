@@ -324,6 +324,8 @@ pub enum Error {
 	ScribeCreate(#[from] scribe::ScribeCreateError),
 	#[error(transparent)]
 	Scribe(#[from] scribe::ScribeError),
+	#[error(transparent)]
+	Sculpter(#[from] sculpter::error::SculpterLoadError),
 }
 
 pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<(), Error> {
@@ -336,7 +338,7 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 	let gestures = GestureTracker::<_>::new();
 
 	let scribe = Scribe::create(bell.clone(), config.clone())?;
-	let illustrator = Illustrator::create(config);
+	let illustrator = Illustrator::create(config)?;
 
 	let mut app = App {
 		input,

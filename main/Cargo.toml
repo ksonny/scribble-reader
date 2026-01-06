@@ -17,7 +17,7 @@ egui-winit = "0.32.3"
 egui_extras = { version = "0.32.3", features = ["image"] }
 env_logger.workspace = true
 glyphon = "0.9.0"
-illustrator = { version = "0.1.0", path = "../illustrator" }
+illustrator.workspace = true
 image.workspace = true
 integer-sqrt = "0.1.5"
 lazy_static = "1.5.0"
@@ -26,7 +26,8 @@ lucide-icons = "0.545.0"
 pollster = "0.4.0"
 rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
-scribe = { version = "0.1.0", path = "../scribe" }
+scribe.workspace = true
+sculpter.workspace = true
 serde.workspace = true
 serde_rusqlite = "0.40.0"
 thiserror.workspace = true
