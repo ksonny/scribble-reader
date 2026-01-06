@@ -19,24 +19,10 @@ pub enum Family<'a> {
 	Emoji,
 }
 
-enum FontData {
-	Static(&'static [u8]),
-	Owned(Vec<u8>),
-}
-
-impl AsRef<[u8]> for FontData {
-	fn as_ref(&self) -> &[u8] {
-		match self {
-			FontData::Static(data) => data,
-			FontData::Owned(data) => data.as_slice(),
-		}
-	}
-}
-
 pub struct FontEntry {
 	hash: u64,
 	families: Vec<(String, ttf_parser::Language)>,
-	d: FontData,
+	d: Cow<'static, [u8]>,
 }
 
 pub struct Sculpter {
@@ -63,15 +49,15 @@ impl Sculpter {
 	}
 
 	pub fn load_builtin_fonts(&mut self) -> Result<(), SculpterError> {
-		let (h, e) = create_font_entry(FontData::Static(fonts::EB_GARAMOND_VF_TTF))?;
+		let (h, e) = create_font_entry(fonts::EB_GARAMOND_VF_TTF)?;
 		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(FontData::Static(fonts::EB_GARAMOND_ITALIC_VF_TTF))?;
+		let (h, e) = create_font_entry(fonts::EB_GARAMOND_ITALIC_VF_TTF)?;
 		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(FontData::Static(fonts::OPEN_SANS_VF_TTF))?;
+		let (h, e) = create_font_entry(fonts::OPEN_SANS_VF_TTF)?;
 		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(FontData::Static(fonts::OPEN_SANS_ITALIC_VF_TTF))?;
+		let (h, e) = create_font_entry(fonts::OPEN_SANS_ITALIC_VF_TTF)?;
 		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(FontData::Static(fonts::NOTO_EMOJI_VF_TTF))?;
+		let (h, e) = create_font_entry(fonts::NOTO_EMOJI_VF_TTF)?;
 		self.fonts.insert(h, e);
 		Ok(())
 	}
@@ -105,12 +91,13 @@ impl Sculpter {
 	}
 }
 
-fn create_font_entry(d: FontData) -> Result<(u64, FontEntry), SculpterError> {
+fn create_font_entry<D: Into<Cow<'static, [u8]>>>(d: D) -> Result<(u64, FontEntry), SculpterError> {
+	let d = d.into();
 	let mut s = DefaultHasher::new();
-	d.as_ref().hash(&mut s);
+	d.hash(&mut s);
 	let hash = s.finish();
 
-	let face = ttf_parser::Face::parse(d.as_ref(), 0)?;
+	let face = ttf_parser::Face::parse(&d, 0)?;
 	let families = collect_families(&face);
 
 	let entry = FontEntry { hash, families, d };
