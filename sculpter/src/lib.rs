@@ -9,6 +9,7 @@ use crate::error::SculpterError;
 
 mod error;
 mod fonts;
+mod layout;
 mod shape;
 
 #[derive(Debug, Default)]

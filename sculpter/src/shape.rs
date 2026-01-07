@@ -1,17 +1,14 @@
-use std::collections::BTreeMap;
-
 use fixed::types::I26F6;
 use rustybuzz::shape_with_plan;
 
-use crate::error::SculpterScaleError;
 use crate::error::SculpterShapeError;
 
 #[derive(Debug)]
-struct GlyphPosition {
-	x_advance: I26F6,
-	y_advance: I26F6,
-	x_offset: I26F6,
-	y_offset: I26F6,
+pub(crate) struct GlyphPosition {
+	pub(crate) x_advance: I26F6,
+	pub(crate) y_advance: I26F6,
+	pub(crate) x_offset: I26F6,
+	pub(crate) y_offset: I26F6,
 }
 
 impl From<&rustybuzz::GlyphPosition> for GlyphPosition {
@@ -26,7 +23,7 @@ impl From<&rustybuzz::GlyphPosition> for GlyphPosition {
 }
 
 impl GlyphPosition {
-	fn scale(&self, scale: I26F6) -> Self {
+	pub(crate) fn scale(&self, scale: I26F6) -> Self {
 		Self {
 			x_advance: self.x_advance * scale,
 			y_advance: self.y_advance * scale,
@@ -37,53 +34,14 @@ impl GlyphPosition {
 }
 
 #[derive(Debug)]
-struct GlyphPlan {
-	face_ref: ShapeFaceRef,
-	glyph_id: u16,
-	pos: GlyphPosition,
+pub(crate) struct GlyphPlan {
+	pub(crate) face_ref: ShapeFaceRef,
+	pub(crate) glyph_id: u16,
+	pub(crate) pos: GlyphPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShapeFaceRef(u32);
-
-#[derive(Debug)]
-pub struct SculpterScaler {
-	units_per_em_map: BTreeMap<ShapeFaceRef, I26F6>,
-	scale_factor: I26F6,
-}
-
-impl SculpterScaler {
-	fn new(scale_factor: f32) -> Self {
-		Self {
-			units_per_em_map: BTreeMap::new(),
-			scale_factor: I26F6::from_num(scale_factor),
-		}
-	}
-
-	fn add(&mut self, face_ref: ShapeFaceRef, face: ttf_parser::Face<'_>) {
-		let units_per_em = I26F6::from_bits(face.units_per_em() as i32);
-		self.units_per_em_map.insert(face_ref, units_per_em);
-	}
-
-	fn scale(&self, font_size: I26F6, glyphs: &mut [GlyphPlan]) -> Result<(), SculpterScaleError> {
-		let font_size = font_size * self.scale_factor;
-
-		for glyph in glyphs {
-			let units_per_em = self
-				.units_per_em_map
-				.get(&glyph.face_ref)
-				.ok_or(SculpterScaleError::MissingEntryForPlanRef(glyph.face_ref))?;
-			let font_scale = font_size / units_per_em;
-			glyph.pos = glyph.pos.scale(font_scale);
-		}
-
-		Ok(())
-	}
-
-	fn clear(&mut self) {
-		self.units_per_em_map.clear();
-	}
-}
 
 struct ShapePlan<'a> {
 	face: rustybuzz::Face<'a>,
@@ -115,7 +73,7 @@ impl<'a> SculpterState<'a> {
 		face_ref
 	}
 
-	fn shape<I: IntoIterator<Item = &'a str>>(
+	fn shape<I: Iterator<Item = &'a str>>(
 		self,
 		face_ref: ShapeFaceRef,
 		input_iter: I,
