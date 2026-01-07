@@ -1,9 +1,8 @@
-# Build with the `pixels` MSRV. This will be updated in lockstep.
-FROM rust:1.82.0-slim
+FROM docker.io/library/rust:latest
 
 # Variable arguments
-ARG JAVA_VERSION=17
-ARG NDK_VERSION=28.2.13676358
+ARG JAVA_VERSION=25
+ARG NDK_VERSION=29.0.14033849
 ARG BUILDTOOLS_VERSION=35.0.1
 ARG PLATFORM_VERSION=android-35
 ARG CLITOOLS_VERSION=13114758_latest
@@ -16,7 +15,7 @@ RUN apt-get update -yqq && \
     rm -rf /var/lib/apt/lists/*
 
 # Install android targets
-RUN rustup target add armv7-linux-androideabi aarch64-linux-android
+RUN rustup target add aarch64-linux-android
 
 # Install cargo-apk
 RUN cargo install --locked cargo-apk
@@ -34,7 +33,7 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
     unzip -d ${ANDROID_HOME} /tmp/commandlinetools-linux-${CLITOOLS_VERSION}.zip && \
     rm -fr /tmp/commandlinetools-linux-${CLITOOLS_VERSION}.zip
 # Install sdk requirements
-RUN echo y | sdkmanager --sdk_root=${ANDROID_HOME} --install \
+RUN yes | sdkmanager --sdk_root=${ANDROID_HOME} --install \
     "build-tools;${BUILDTOOLS_VERSION}" "ndk;${NDK_VERSION}" "platforms;${PLATFORM_VERSION}"
 
 # Create APK keystore for debug profile
@@ -47,4 +46,4 @@ RUN rm -rf /tmp/*
 
 WORKDIR /mnt
 
-ENTRYPOINT [ "cargo", "apk", "build", "--lib" ]
+ENTRYPOINT [ "cargo", "apk", "build"]
