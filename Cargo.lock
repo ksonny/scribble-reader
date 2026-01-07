@@ -708,9 +708,9 @@ dependencies = [
 
 [[package]]
 name = "crc"
-version = "3.4.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+checksum = "9710d3b3739c2e349eb44fe848ad0b7c8cb1e42bd87ee49371df2f7acaf3e675"
 dependencies = [
  "crc-catalog",
 ]
@@ -1676,7 +1676,7 @@ dependencies = [
  "serde",
  "taffy",
  "thiserror 2.0.17",
- "zip 5.1.1",
+ "zip 7.0.0",
 ]
 
 [[package]]
@@ -2022,9 +2022,9 @@ checksum = "26c55d460d5b616e4a92a67d5d509b2565d22fe8266017a9324129f7beaa6226"
 
 [[package]]
 name = "lzma-rust2"
-version = "0.13.0"
+version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c60a23ffb90d527e23192f1246b14746e2f7f071cb84476dd879071696c18a4a"
+checksum = "c58d5ec1eaf77e4477beb8a14921fdf313527cd02686fcc181c6fe9abe4461e4"
 dependencies = [
  "crc",
  "sha2",
@@ -5258,9 +5258,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "5.1.1"
+version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f852905151ac8d4d06fdca66520a661c09730a74c6d4e2b0f27b436b382e532"
+checksum = "bdd8a47718a4ee5fe78e07667cd36f3de80e7c2bfe727c7074245ffc7303c037"
 dependencies = [
  "aes",
  "arbitrary",
@@ -5269,6 +5269,7 @@ dependencies = [
  "crc32fast",
  "deflate64",
  "flate2",
+ "generic-array",
  "getrandom",
  "hmac",
  "indexmap",
