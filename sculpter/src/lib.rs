@@ -17,7 +17,6 @@ pub enum Family<'a> {
 	#[default]
 	Serif,
 	SansSerif,
-	Emoji,
 }
 
 pub struct FontEntry {
@@ -26,11 +25,16 @@ pub struct FontEntry {
 	d: Cow<'static, [u8]>,
 }
 
+pub struct FontFallback {
+	hash: u64,
+	d: Cow<'static, [u8]>,
+}
+
 pub struct Sculpter {
 	fonts: BTreeMap<u64, FontEntry>,
+	font_fallbacks: Vec<FontFallback>,
 	family_serif: Cow<'static, str>,
 	family_sans_serif: Cow<'static, str>,
-	family_emoji: Cow<'static, str>,
 }
 
 impl Default for Sculpter {
@@ -43,23 +47,25 @@ impl Sculpter {
 	pub fn new() -> Self {
 		Self {
 			fonts: BTreeMap::new(),
+			font_fallbacks: Vec::new(),
 			family_serif: Cow::from("EB Garamond"),
 			family_sans_serif: Cow::from("Open Sans"),
-			family_emoji: Cow::from("Noto Emoji"),
 		}
 	}
 
 	pub fn load_builtin_fonts(&mut self) -> Result<(), SculpterError> {
-		let (h, e) = create_font_entry(fonts::EB_GARAMOND_VF_TTF)?;
-		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(fonts::EB_GARAMOND_ITALIC_VF_TTF)?;
-		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(fonts::OPEN_SANS_VF_TTF)?;
-		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(fonts::OPEN_SANS_ITALIC_VF_TTF)?;
-		self.fonts.insert(h, e);
-		let (h, e) = create_font_entry(fonts::NOTO_EMOJI_VF_TTF)?;
-		self.fonts.insert(h, e);
+		let e = create_font_entry(fonts::EB_GARAMOND_VF_TTF)?;
+		self.fonts.insert(e.hash, e);
+		let e = create_font_entry(fonts::EB_GARAMOND_ITALIC_VF_TTF)?;
+		self.fonts.insert(e.hash, e);
+		let e = create_font_entry(fonts::OPEN_SANS_VF_TTF)?;
+		self.fonts.insert(e.hash, e);
+		let e = create_font_entry(fonts::OPEN_SANS_ITALIC_VF_TTF)?;
+		self.fonts.insert(e.hash, e);
+
+		let e = create_font_fallback(fonts::NOTO_EMOJI_VF_TTF);
+		self.font_fallbacks.push(e);
+
 		Ok(())
 	}
 
@@ -71,16 +77,11 @@ impl Sculpter {
 		self.family_sans_serif = name.into();
 	}
 
-	pub fn set_emoji_family<S: Into<Cow<'static, str>>>(&mut self, name: S) {
-		self.family_emoji = name.into();
-	}
-
 	pub fn query(&self, family: Family) -> Option<&FontEntry> {
 		let family_name = match family {
 			Family::Name(s) => s,
 			Family::Serif => &self.family_serif,
 			Family::SansSerif => &self.family_sans_serif,
-			Family::Emoji => &self.family_emoji,
 		};
 
 		self.fonts.values().find(|entry| {
@@ -92,7 +93,7 @@ impl Sculpter {
 	}
 }
 
-fn create_font_entry<D: Into<Cow<'static, [u8]>>>(d: D) -> Result<(u64, FontEntry), SculpterError> {
+fn create_font_entry<D: Into<Cow<'static, [u8]>>>(d: D) -> Result<FontEntry, SculpterError> {
 	let d = d.into();
 	let mut s = DefaultHasher::new();
 	d.hash(&mut s);
@@ -101,8 +102,16 @@ fn create_font_entry<D: Into<Cow<'static, [u8]>>>(d: D) -> Result<(u64, FontEntr
 	let face = ttf_parser::Face::parse(&d, 0)?;
 	let families = collect_families(&face);
 
-	let entry = FontEntry { hash, families, d };
-	Ok((hash, entry))
+	Ok(FontEntry { hash, families, d })
+}
+
+fn create_font_fallback<D: Into<Cow<'static, [u8]>>>(d: D) -> FontFallback {
+	let d = d.into();
+	let mut s = DefaultHasher::new();
+	d.hash(&mut s);
+	let hash = s.finish();
+
+	FontFallback { hash, d }
 }
 
 fn collect_families(face: &ttf_parser::Face<'_>) -> Vec<(String, ttf_parser::Language)> {
