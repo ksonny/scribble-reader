@@ -1,8 +1,8 @@
-mod glyphon_renderer;
-mod gui_renderer;
-mod pixmap_renderer;
+pub(crate) mod glyphon_renderer;
+pub(crate) mod gui_renderer;
+pub(crate) mod painter;
+pub(crate) mod pixmap_renderer;
 
-use illustrator::DisplayItem;
 use winit::dpi::PhysicalSize;
 
 use egui_wgpu::wgpu::{
@@ -10,6 +10,9 @@ use egui_wgpu::wgpu::{
 };
 use std::sync::Arc;
 use winit::window::Window;
+
+pub(crate) use crate::renderer::painter::Painter;
+use crate::ui::UiInput;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RendererError {
@@ -21,8 +24,6 @@ pub(crate) enum RendererError {
 	RequestAdapter(#[from] wgpu::wgt::RequestAdapterError),
 	#[error(transparent)]
 	Surface(#[from] wgpu::SurfaceError),
-	#[error(transparent)]
-	PixmapPrepare(#[from] pixmap_renderer::PrepareError),
 	#[error(transparent)]
 	PixmapRender(#[from] pixmap_renderer::RenderError),
 	#[error(transparent)]
@@ -67,11 +68,10 @@ pub(crate) struct Renderer<'window> {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	pixmap_renderer: pixmap_renderer::Renderer,
-	glyphon_renderer: glyphon_renderer::Renderer,
+	pub(crate) glyphon_renderer: glyphon_renderer::Renderer,
 	gui_renderer: gui_renderer::Renderer,
 	surface_state: Option<SurfaceState<'window>>,
 	resized: Option<PhysicalSize<u32>>,
-	rescale: Option<f64>,
 }
 
 impl Renderer<'_> {
@@ -132,7 +132,6 @@ impl Renderer<'_> {
 			glyphon_renderer,
 			gui_renderer,
 			resized: None,
-			rescale: None,
 			surface_state: Some(surface_state),
 		})
 	}
@@ -175,10 +174,15 @@ impl Renderer<'_> {
 
 	pub(crate) fn resize(&mut self, size: PhysicalSize<u32>) {
 		self.resized = Some(size);
+
+		self.gui_renderer.resize(size.width, size.height);
+		self.pixmap_renderer.resize(size.width, size.height);
+		self.glyphon_renderer
+			.resize(&self.queue, size.width, size.height);
 	}
 
 	pub(crate) fn rescale(&mut self, scale_factor: f64) {
-		self.rescale = Some(scale_factor);
+		self.gui_renderer.rescale(scale_factor);
 	}
 
 	pub(crate) fn request_redraw(&self) {
@@ -187,71 +191,13 @@ impl Renderer<'_> {
 		}
 	}
 
-	pub(crate) fn prepare_ui(&mut self, output: egui::output::FullOutput) {
-		self.gui_renderer.prepare(&self.device, &self.queue, output);
-	}
-
-	pub(crate) fn prepare_page<'a>(
-		&mut self,
-		font_system: &mut cosmic_text::FontSystem,
-		items: impl Iterator<Item = &'a DisplayItem> + Clone,
-	) -> Result<(), RendererError> {
-		let pixmap_input = items.clone().filter_map(|d| match d {
-			illustrator::DisplayItem {
-				pos,
-				size,
-				content: illustrator::DisplayContent::Pixmap(item),
-			} => Some(pixmap_renderer::PixmapInput {
-				pixmap_rgba: &item.pixmap_rgba,
-				pixmap_width: item.pixmap_width,
-				pixmap_height: item.pixmap_height,
-				targets: vec![pixmap_renderer::PixmapTargetInput {
-					pos: [pos.x, pos.y],
-					dim: [size.width, size.height],
-					tex_pos: [0; 2],
-					tex_dim: [item.pixmap_width, item.pixmap_height],
-				}],
-			}),
-			_ => None,
-		});
-		self.pixmap_renderer
-			.prepare(&self.device, &self.queue, pixmap_input)?;
-
-		let text_areas = items.filter_map(|d| match d {
-			illustrator::DisplayItem {
-				pos,
-				content: illustrator::DisplayContent::Text(item),
-				..
-			} => Some(glyphon::TextArea {
-				buffer: &item.buffer,
-				left: pos.x as f32,
-				top: pos.y as f32,
-				scale: 1.0,
-				bounds: glyphon::TextBounds::default(),
-				default_color: glyphon::Color::rgb(0, 0, 0),
-				custom_glyphs: &[],
-			}),
-			_ => None,
-		});
-		self.glyphon_renderer
-			.prepare(&self.device, &self.queue, font_system, text_areas)?;
-		Ok(())
-	}
-
 	pub(crate) fn render(&mut self) -> Result<(), RendererError> {
 		let surface_state = self
 			.surface_state
 			.as_mut()
 			.ok_or(RendererError::SurfaceNotAvailable)?;
-		if let Some(size) = self.resized.take() {
-			self.gui_renderer.resize(size.width, size.height);
-			self.pixmap_renderer.resize(size.width, size.height);
-			self.glyphon_renderer
-				.resize(&self.queue, size.width, size.height);
+		if let Some(size) = self.resized {
 			surface_state.setup_swapchain(&self.device, size.width, size.height);
-		}
-		if let Some(scale_factor) = self.rescale.take() {
-			self.gui_renderer.rescale(scale_factor);
 		}
 
 		match surface_state.surface.get_current_texture() {
@@ -308,6 +254,17 @@ impl Renderer<'_> {
 				Ok(())
 			}
 		}
+	}
+
+	pub(crate) fn painter<'a>(&'a mut self, ui_input: &'a mut UiInput) -> Painter<'a> {
+		Painter::new(
+			&self.device,
+			&self.queue,
+			ui_input,
+			&mut self.gui_renderer,
+			&mut self.pixmap_renderer,
+			&mut self.glyphon_renderer,
+		)
 	}
 }
 

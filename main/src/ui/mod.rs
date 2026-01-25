@@ -1,16 +1,12 @@
-use std::array;
-use std::sync::Arc;
+pub(crate) mod theme;
+
 use std::time::Instant;
 
-use chrono::DateTime;
-use chrono::Utc;
 use egui::Color32;
 use egui::Context;
 use egui::FontFamily;
 use egui::FontId;
-use egui::ImageSource;
 use egui::Layout;
-use egui::Rect;
 use egui::RichText;
 use egui::Stroke;
 use egui::TextFormat;
@@ -19,44 +15,10 @@ use egui::TextWrapMode;
 use egui::Vec2;
 use egui::ViewportId;
 use egui::epaint::text::FontInsert;
-use egui::load::Bytes;
 use egui::text::LayoutJob;
-use illustrator::IllustratorHandle;
 use lucide_icons::Icon;
-use scribe::ScribeAssistant;
-use scribe::ScribeState;
-
-use scribe::library;
-use scribe::library::BookId;
-use scribe::library::Location;
 
 use crate::gestures;
-
-pub mod theme {
-	use egui::Color32;
-	use egui::FontFamily;
-	use egui::FontId;
-	use egui::TextStyle;
-	use lazy_static::lazy_static;
-
-	pub const DEFAULT_SIZE: f32 = 14.0;
-	pub const S_SIZE: f32 = 12.0;
-	pub const M_SIZE: f32 = 18.0;
-	pub const L_SIZE: f32 = 24.0;
-	pub const XL_SIZE: f32 = 48.0;
-	pub const ACCENT_COLOR: Color32 = Color32::DARK_RED;
-
-	lazy_static! {
-		pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());
-		pub static ref ICON_FONT: FontId = FontId::new(DEFAULT_SIZE, ICON_FONT_FAMILY.clone());
-		pub static ref ICON_L_FONT: FontId = FontId::new(L_SIZE, ICON_FONT_FAMILY.clone());
-		pub static ref ICON_XL_FONT: FontId = FontId::new(XL_SIZE, ICON_FONT_FAMILY.clone());
-		pub static ref ICON_STYLE: TextStyle = TextStyle::Name("ICON_STYLE".into());
-		pub static ref ICON_L_STYLE: TextStyle = TextStyle::Name("ICON_L_STYLE".into());
-		pub static ref ICON_XL_STYLE: TextStyle = TextStyle::Name("ICON_XL_STYLE".into());
-		pub static ref HEADING2: TextStyle = TextStyle::Name("HEADING2".into());
-	}
-}
 
 pub fn create_egui_ctx() -> Context {
 	let egui_ctx = Context::default();
@@ -138,23 +100,19 @@ pub fn create_egui_ctx() -> Context {
 }
 
 pub struct UiInput {
-	start_time: Instant,
-	pixels_per_point: f32,
+	pub(crate) start_time: Instant,
+	pub(crate) pixels_per_point: f32,
+	egui_ctx: Context,
 	egui_input: egui::RawInput,
 }
 
-impl Default for UiInput {
-	fn default() -> Self {
-		Self::new()
-	}
-}
-
 impl UiInput {
-	pub fn new() -> Self {
+	pub fn new(egui_ctx: egui::Context) -> Self {
 		Self {
 			start_time: Instant::now(),
-			egui_input: egui::RawInput::default(),
 			pixels_per_point: 1.0,
+			egui_ctx,
+			egui_input: egui::RawInput::default(),
 		}
 	}
 
@@ -207,609 +165,22 @@ impl UiInput {
 			.native_pixels_per_point = Some(scale_factor);
 	}
 
+	pub fn translate_pos(&self, loc: gestures::Location) -> egui::Pos2 {
+		egui::pos2(loc.x as f32, loc.y as f32) / self.pixels_per_point
+	}
+
 	pub fn tick(&mut self) -> egui::RawInput {
 		self.egui_input.time = Some(Instant::now().duration_since(self.start_time).as_secs_f64());
 		self.egui_input.take()
 	}
 
-	pub fn translate_pos(&self, loc: gestures::Location) -> egui::Pos2 {
-		egui::pos2(loc.x as f32, loc.y as f32) / self.pixels_per_point
+	pub fn run(&mut self, run_ui: impl FnMut(&egui::Context)) -> egui::FullOutput {
+		let input = self.tick();
+		self.egui_ctx.run(input, run_ui)
 	}
 }
 
-pub trait GuiView {
-	fn draw(&mut self, ctx: &Context, poke_stick: &impl Bell);
-}
-
-pub(crate) struct Thumbnail {
-	pub(crate) bytes: Arc<[u8]>,
-}
-
-pub(crate) struct BookCard {
-	pub(crate) id: BookId,
-	pub(crate) title: Option<Arc<String>>,
-	pub(crate) author: Option<Arc<String>>,
-	pub(crate) modified_at: DateTime<Utc>,
-	pub(crate) thumbnail: Option<Thumbnail>,
-}
-
-impl BookCard {
-	fn new(entry: (library::Book, Option<library::Thumbnail>)) -> Self {
-		let (b, tn) = entry;
-		BookCard {
-			id: b.id,
-			title: b.title,
-			author: b.author,
-			modified_at: b.modified_at,
-			thumbnail: tn.and_then(|tn| match tn {
-				library::Thumbnail::Bytes { bytes } => Some(Thumbnail { bytes }),
-				library::Thumbnail::None => None,
-			}),
-		}
-	}
-}
-
-struct BookCardUi<'a> {
-	card: &'a BookCard,
-}
-
-impl egui::Widget for BookCardUi<'_> {
-	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-		let card = self.card;
-		ui.group(|ui| {
-			ui.set_min_size(ui.available_size());
-			let height = ui.available_height();
-			let width = ui.available_width();
-			ui.horizontal(|ui| {
-				ui.set_width(width);
-				let cover_width = height * 0.75;
-				ui.allocate_ui([cover_width, height].into(), |ui| {
-					ui.set_width(cover_width);
-					ui.centered_and_justified(|ui| match &card.thumbnail {
-						Some(Thumbnail { bytes }) => ui.add(egui::Image::new(ImageSource::Bytes {
-							uri: format!("bytes://thumbnail_{}.png", card.id.value()).into(),
-							bytes: Bytes::Shared(bytes.clone()),
-						})),
-						None => ui.label(
-							UiIcon::new(Icon::Book)
-								.size(cover_width)
-								.color(Color32::GRAY)
-								.build(),
-						),
-					});
-				});
-				ui.separator();
-				ui.vertical(|ui| {
-					let author = card
-						.author
-						.as_ref()
-						.map(|t| t.as_str())
-						.unwrap_or("Unknown");
-					ui.label(author);
-					let title = card.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
-					ui.label(RichText::new(title).text_style(TextStyle::Heading));
-					ui.label(format!("{}", card.modified_at.format("%Y-%m-%d %H:%M")));
-				});
-			});
-			ui.interact(
-				ui.min_rect(),
-				ui.id().with(card.id.value()),
-				egui::Sense::click(),
-			)
-		})
-		.inner
-	}
-}
-
-impl BookCard {
-	fn ui<'a>(&'a self) -> BookCardUi<'a> {
-		BookCardUi { card: self }
-	}
-}
-
-pub const LIBRARY_LIST_SIZE: u32 = 5;
-
-pub(crate) struct ListView {
-	pub(crate) page: u32,
-	pub(crate) cards: [Option<BookCard>; LIBRARY_LIST_SIZE as usize],
-}
-
-impl ListView {
-	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl Bell) {
-		let height =
-			ui.available_height() - (LIBRARY_LIST_SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
-		let card_height = height / LIBRARY_LIST_SIZE as f32;
-
-		ui.vertical(|ui| {
-			for card in self.cards.iter().flatten() {
-				ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
-					if ui.add(card.ui()).clicked() {
-						poke_stick.open_book(card.id);
-					}
-				});
-			}
-		});
-	}
-}
-
-#[derive(Debug)]
-pub(crate) struct ToCCard {
-	pub(crate) location: Location,
-	pub(crate) title: Arc<String>,
-}
-
-struct ChapterCardUi<'a> {
-	card: &'a ToCCard,
-}
-
-impl egui::Widget for ChapterCardUi<'_> {
-	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-		let card = self.card;
-		ui.group(|ui| {
-			ui.set_min_size(ui.available_size());
-			let title = card.title.as_ref();
-			ui.label(RichText::new(title).text_style(theme::HEADING2.clone()));
-			ui.interact(
-				ui.min_rect(),
-				ui.id().with(card.location.spine),
-				egui::Sense::click(),
-			)
-		})
-		.inner
-	}
-}
-
-impl ToCCard {
-	fn ui<'a>(&'a self) -> ChapterCardUi<'a> {
-		ChapterCardUi { card: self }
-	}
-}
-
-pub const TOC_LIST_SIZE: u32 = 12;
-
-#[derive(Default, Debug)]
-pub(crate) struct ToCView {
-	pub(crate) page: u32,
-	pub(crate) cards: [Option<ToCCard>; TOC_LIST_SIZE as usize],
-}
-
-impl ToCView {
-	fn draw(&self, ui: &mut egui::Ui, poke_stick: &impl Bell) {
-		let height =
-			ui.available_height() - (TOC_LIST_SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
-		let card_height = height / TOC_LIST_SIZE as f32;
-
-		ui.vertical(|ui| {
-			for card in self.cards.iter().flatten() {
-				ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
-					if ui.add(card.ui()).clicked() {
-						poke_stick.goto_location(card.location);
-					}
-				});
-			}
-		});
-	}
-}
-
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum IllustratorInnerView {
-	Book,
-	ToC(ToCView),
-}
-
-pub(crate) struct IllustratorView {
-	view: IllustratorInnerView,
-	handle: IllustratorHandle,
-}
-
-pub trait Bell {
-	fn scan_library(&self);
-
-	fn next_page(&self);
-
-	fn previous_page(&self);
-
-	fn goto_location(&self, loc: Location);
-
-	fn open_book(&self, id: BookId);
-
-	fn open_library(&self);
-
-	fn toggle_chapters(&self);
-}
-
-pub enum FeatureView {
-	Illustrator(IllustratorView),
-	List(ListView),
-}
-
-impl Default for FeatureView {
-	fn default() -> Self {
-		FeatureView::List(ListView {
-			page: 0,
-			cards: Default::default(),
-		})
-	}
-}
-
-#[derive(Default)]
-pub struct MainView {
-	pub invisible: bool,
-	pub working: ScribeState,
-	pub menu_open: bool,
-	pub feature: FeatureView,
-	pub rects: Vec<Rect>,
-}
-
-impl MainView {
-	pub fn is_inside_ui_element(&self, pos: egui::Pos2) -> bool {
-		self.rects.iter().any(|r| r.contains(pos))
-	}
-
-	pub(crate) fn open_library(&mut self) {
-		self.invisible = false;
-		self.feature = FeatureView::List(ListView {
-			cards: Default::default(),
-			page: 0,
-		});
-	}
-
-	pub(crate) fn library_loaded(&mut self, scribe: &mut scribe::Scribe) {
-		match &mut self.feature {
-			FeatureView::Illustrator(_) => {}
-			FeatureView::List(list) => {
-				let books = scribe.library().books(0..LIBRARY_LIST_SIZE);
-				self.working = scribe.poke_list(&books);
-				let mut books_iter = books.into_iter().map(|b| {
-					let id = b.id;
-					(b, scribe.library().thumbnail(id))
-				});
-				list.cards = array::from_fn(|_| books_iter.next().map(BookCard::new));
-				list.page = 0;
-			}
-		}
-	}
-
-	pub(crate) fn book_updated(&mut self, scribe: &scribe::Scribe, id: BookId) {
-		match &mut self.feature {
-			FeatureView::Illustrator(_) => {}
-			FeatureView::List(list) => {
-				let card = list.cards.iter_mut().flatten().find(|c| c.id == id);
-				if let Some(card) = card
-					&& let Some(book) = scribe.library().book(id)
-				{
-					log::trace!("Update book {id:?}");
-					*card = BookCard::new((book, scribe.library().thumbnail(id)));
-				}
-			}
-		}
-	}
-
-	pub(crate) fn open_book(&mut self, handle: IllustratorHandle) {
-		self.invisible = true;
-		self.feature = FeatureView::Illustrator(IllustratorView {
-			view: IllustratorInnerView::Book,
-			handle,
-		});
-	}
-
-	pub(crate) fn next_page(&mut self, scribe: &mut scribe::Scribe) {
-		match &mut self.feature {
-			FeatureView::Illustrator(IllustratorView {
-				view: IllustratorInnerView::Book,
-				handle,
-			}) => {
-				if let Err(e) = handle.next_page() {
-					log::error!("Illustrator error: {e}");
-				}
-			}
-			FeatureView::Illustrator(IllustratorView {
-				view: IllustratorInnerView::ToC(toc_view),
-				handle,
-			}) => {
-				let page = toc_view.page + 1;
-				let offset = (page * TOC_LIST_SIZE) as usize;
-				let toc = handle.toc.read().unwrap();
-				if toc.items.len() > offset {
-					let mut item_iter = toc.items.iter().skip(offset);
-					for card in toc_view.cards.as_mut() {
-						if let Some(item) = item_iter.next() {
-							*card = Some(ToCCard {
-								location: item.location,
-								title: item.title.clone(),
-							});
-						} else {
-							*card = None;
-						}
-					}
-					toc_view.page = page;
-				}
-			}
-			FeatureView::List(list) => {
-				let page = list.page + 1;
-				let r = (page * LIBRARY_LIST_SIZE)..(page * LIBRARY_LIST_SIZE + LIBRARY_LIST_SIZE);
-				let books = scribe.library().books(r);
-				if !books.is_empty() {
-					self.working = scribe.poke_list(&books);
-					let mut books_iter = books.into_iter().map(|b| {
-						let id = b.id;
-						(b, scribe.library().thumbnail(id))
-					});
-					list.cards = std::array::from_fn(|_| books_iter.next().map(BookCard::new));
-					list.page = page;
-				}
-			}
-		}
-	}
-
-	pub(crate) fn previous_page(&mut self, scribe: &mut scribe::Scribe) {
-		match &mut self.feature {
-			FeatureView::Illustrator(IllustratorView {
-				view: IllustratorInnerView::Book,
-				handle,
-			}) => {
-				if let Err(e) = handle.previous_page() {
-					log::error!("Illustrator error: {e}");
-				}
-			}
-			FeatureView::Illustrator(IllustratorView {
-				view: IllustratorInnerView::ToC(toc_view),
-				handle,
-			}) => {
-				toc_view.page = toc_view.page.saturating_sub(1);
-				let offset = toc_view.page * TOC_LIST_SIZE;
-				let toc = handle.toc.read().unwrap();
-				let mut item_iter = toc.items.iter().skip(offset as usize);
-				for card in toc_view.cards.as_mut() {
-					if let Some(item) = item_iter.next() {
-						*card = Some(ToCCard {
-							location: item.location,
-							title: item.title.clone(),
-						});
-					} else {
-						*card = None;
-					}
-				}
-			}
-			FeatureView::List(list) => {
-				let page = list.page.saturating_sub(1);
-				let r = (page * LIBRARY_LIST_SIZE)..(page * LIBRARY_LIST_SIZE + LIBRARY_LIST_SIZE);
-				let books = scribe.library().books(r);
-				self.working = scribe.poke_list(&books);
-				let mut books_iter = books.into_iter().map(|b| {
-					let id = b.id;
-					(b, scribe.library().thumbnail(id))
-				});
-				list.cards = std::array::from_fn(|_| books_iter.next().map(BookCard::new));
-				list.page = page;
-			}
-		}
-	}
-
-	pub(crate) fn goto(&mut self, location: Location) {
-		match &mut self.feature {
-			FeatureView::Illustrator(illustrator) => {
-				if let Err(e) = illustrator.handle.goto(location) {
-					log::error!("Illustrator error: {e}");
-				}
-				illustrator.view = IllustratorInnerView::Book;
-			}
-			FeatureView::List(_) => {}
-		}
-	}
-
-	pub(crate) fn toggle_toc(&mut self) {
-		if let FeatureView::Illustrator(IllustratorView { view, handle }) = &mut self.feature {
-			match view {
-				IllustratorInnerView::Book => {
-					let loc = *handle.location.read().unwrap();
-					let mut toc_view = ToCView::default();
-					let toc = handle.toc.read().unwrap();
-					let index = toc.items.iter().position(|i| i.location.spine == loc.spine);
-					let page = index.map(|index| index as u32 / TOC_LIST_SIZE).unwrap_or(0);
-					let offset = page * TOC_LIST_SIZE;
-
-					let mut item_iter = toc.items.iter().skip(offset as usize);
-					for card in toc_view.cards.as_mut() {
-						if let Some(item) = item_iter.next() {
-							*card = Some(ToCCard {
-								location: item.location,
-								title: item.title.clone(),
-							});
-						} else {
-							*card = None;
-						}
-					}
-					toc_view.page = page;
-					*view = IllustratorInnerView::ToC(toc_view);
-				}
-				IllustratorInnerView::ToC(_) => {
-					*view = IllustratorInnerView::Book;
-				}
-			}
-		}
-	}
-
-	pub(crate) fn toggle_ui(&mut self) {
-		self.invisible = !self.invisible;
-	}
-}
-
-impl GuiView for MainView {
-	fn draw(&mut self, ctx: &Context, poke_stick: &impl Bell) {
-		self.rects.clear();
-		self.menu_open = false;
-
-		if self.invisible {
-			return;
-		}
-
-		let top_panel = egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-			egui::MenuBar::new().ui(ui, |ui| {
-				let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
-					if ui
-						.button(UiIcon::new(Icon::Library).text("Library").large().build())
-						.clicked()
-					{
-						poke_stick.open_library();
-					}
-					if ui
-						.button(
-							UiIcon::new(Icon::RefreshCw)
-								.text("Rescan library")
-								.large()
-								.build(),
-						)
-						.clicked()
-					{
-						poke_stick.scan_library();
-					}
-					if ui
-						.button(UiIcon::new(Icon::DoorOpen).text("Quit").large().build())
-						.clicked()
-					{
-						ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-					}
-				});
-				if menu.response.context_menu_opened() {
-					self.rects.push(ctx.screen_rect());
-					self.menu_open = true;
-				}
-
-				ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
-
-				ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-					if matches!(self.working, ScribeState::Working) {
-						ui.label(
-							UiIcon::new(Icon::RefreshCw)
-								.color(Color32::GRAY)
-								.large()
-								.build(),
-						);
-					}
-				});
-			});
-		});
-		self.rects.push(top_panel.response.interact_rect);
-
-		let bottom_panel = egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
-			if self.menu_open {
-				ui.disable();
-			}
-			ui.vertical(|ui| {
-				ui.add_space(5.0);
-				ui.horizontal(|ui| {
-					ui.columns(8, |columns| {
-						columns[1].with_layout(
-							Layout::centered_and_justified(egui::Direction::LeftToRight),
-							|ui| {
-								let width = ui.available_width();
-								ui.set_height(width * 0.5);
-								if ui
-									.button(UiIcon::new(Icon::MoveLeft).xlarge().build())
-									.clicked()
-								{
-									poke_stick.previous_page();
-								}
-							},
-						);
-						if let FeatureView::Illustrator(ref illustrator) = self.feature {
-							let toc_open =
-								matches!(illustrator.view, IllustratorInnerView::ToC(..));
-							let settings_open = false;
-							columns[3].with_layout(
-								Layout::centered_and_justified(egui::Direction::RightToLeft),
-								|ui| {
-									ui.set_height(ui.available_width() * 0.5);
-									if ui
-										.button(
-											UiIcon::new(Icon::ListTree)
-												.xlarge()
-												.color(if toc_open {
-													theme::ACCENT_COLOR
-												} else {
-													Color32::BLACK
-												})
-												.build(),
-										)
-										.clicked()
-									{
-										poke_stick.toggle_chapters();
-									}
-								},
-							);
-							columns[4].with_layout(
-								Layout::centered_and_justified(egui::Direction::RightToLeft),
-								|ui| {
-									ui.set_height(ui.available_width() * 0.5);
-									if ui
-										.button(
-											UiIcon::new(Icon::Cog)
-												.xlarge()
-												.color(if settings_open {
-													theme::ACCENT_COLOR
-												} else {
-													Color32::BLACK
-												})
-												.build(),
-										)
-										.clicked()
-									{
-										// poke_stick.settings();
-									}
-								},
-							);
-						}
-						columns[6].with_layout(
-							Layout::centered_and_justified(egui::Direction::RightToLeft),
-							|ui| {
-								ui.set_height(ui.available_width() * 0.5);
-								if ui
-									.button(UiIcon::new(Icon::MoveRight).xlarge().build())
-									.clicked()
-								{
-									poke_stick.next_page();
-								}
-							},
-						);
-					});
-				});
-				ui.add_space(3.0);
-			});
-		});
-		self.rects.push(bottom_panel.response.interact_rect);
-
-		match &self.feature {
-			FeatureView::Illustrator(IllustratorView {
-				view: IllustratorInnerView::Book,
-				..
-			}) => {}
-			FeatureView::Illustrator(IllustratorView {
-				view: IllustratorInnerView::ToC(chapters),
-				..
-			}) => {
-				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
-					if self.menu_open {
-						ui.disable();
-					}
-					chapters.draw(ui, poke_stick)
-				});
-				self.rects.push(central_panel.response.interact_rect);
-			}
-			FeatureView::List(list) => {
-				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
-					if self.menu_open {
-						ui.disable();
-					}
-					list.draw(ui, poke_stick)
-				});
-				self.rects.push(central_panel.response.interact_rect);
-			}
-		}
-	}
-}
-
-struct UiIcon<'a> {
+pub(crate) struct UiIcon<'a> {
 	color: Color32,
 	icon_font: FontId,
 	icon: Icon,
@@ -818,7 +189,7 @@ struct UiIcon<'a> {
 }
 
 impl UiIcon<'_> {
-	fn new(icon: Icon) -> Self {
+	pub(crate) fn new(icon: Icon) -> Self {
 		UiIcon {
 			color: Color32::BLACK,
 			icon_font: theme::ICON_FONT.clone(),
@@ -828,18 +199,18 @@ impl UiIcon<'_> {
 		}
 	}
 
-	fn color(self, color: Color32) -> Self {
+	pub(crate) fn color(self, color: Color32) -> Self {
 		Self { color, ..self }
 	}
 
-	fn text<'a>(self, text: &'a str) -> UiIcon<'a> {
+	pub(crate) fn text<'a>(self, text: &'a str) -> UiIcon<'a> {
 		UiIcon {
 			text: Some(text),
 			..self
 		}
 	}
 
-	fn size(self, size: f32) -> Self {
+	pub(crate) fn size(self, size: f32) -> Self {
 		Self {
 			icon_font: FontId::new(size, theme::ICON_FONT_FAMILY.clone()),
 			text_font: FontId::new(size, FontFamily::Proportional),
@@ -847,7 +218,7 @@ impl UiIcon<'_> {
 		}
 	}
 
-	fn large(self) -> Self {
+	pub(crate) fn large(self) -> Self {
 		Self {
 			icon_font: theme::ICON_L_FONT.clone(),
 			text_font: FontId::new(theme::L_SIZE, FontFamily::Proportional),
@@ -855,7 +226,7 @@ impl UiIcon<'_> {
 		}
 	}
 
-	fn xlarge(self) -> Self {
+	pub(crate) fn xlarge(self) -> Self {
 		Self {
 			icon_font: theme::ICON_XL_FONT.clone(),
 			text_font: FontId::new(theme::XL_SIZE, FontFamily::Proportional),
@@ -863,7 +234,7 @@ impl UiIcon<'_> {
 		}
 	}
 
-	fn build(self) -> egui::text::LayoutJob {
+	pub(crate) fn build(self) -> egui::text::LayoutJob {
 		let mut job = LayoutJob::default();
 		let mut char_buf = [0; 4];
 		job.append(
@@ -887,5 +258,140 @@ impl UiIcon<'_> {
 			);
 		}
 		job
+	}
+}
+
+pub(crate) trait OnAction<A> {
+	fn on_action(&mut self, action: A);
+}
+
+pub(crate) struct MenuItem<'a, A> {
+	pub(crate) icon: Icon,
+	pub(crate) description: &'a str,
+	pub(crate) active: bool,
+	pub(crate) action: A,
+}
+
+pub(crate) struct MainMenuBar<'a, A, H: OnAction<A>> {
+	handler: &'a mut H,
+	items: &'a [MenuItem<'a, A>],
+	loading: bool,
+}
+
+impl<'a, A, H: OnAction<A>> MainMenuBar<'a, A, H> {
+	pub(crate) fn new(handler: &'a mut H, items: &'a [MenuItem<A>], loading: bool) -> Self {
+		Self {
+			handler,
+			items,
+			loading,
+		}
+	}
+}
+
+impl<A: Copy, H: OnAction<A>> MainMenuBar<'_, A, H> {
+	pub(crate) fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		egui::MenuBar::new()
+			.ui(ui, |ui| {
+				let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
+					for item in self.items {
+						let color = if item.active {
+							theme::ACCENT_COLOR
+						} else {
+							Color32::BLACK
+						};
+						let button = ui.button(
+							UiIcon::new(item.icon)
+								.large()
+								.text(item.description)
+								.color(color)
+								.build(),
+						);
+						if button.clicked() {
+							self.handler.on_action(item.action);
+						}
+					}
+				});
+
+				ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
+
+				ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+					if self.loading {
+						ui.label(
+							UiIcon::new(Icon::RefreshCw)
+								.color(Color32::GRAY)
+								.large()
+								.build(),
+						);
+					}
+				});
+				menu.response
+			})
+			.inner
+	}
+}
+
+pub(crate) struct ToolItem<'a, A> {
+	pub(crate) icon: Icon,
+	#[allow(unused)]
+	pub(crate) description: &'a str,
+	pub(crate) active: bool,
+	pub(crate) action: A,
+}
+
+pub(crate) struct ToolBar<'a, A, H: OnAction<A>> {
+	handler: &'a mut H,
+	items: &'a [Option<ToolItem<'a, A>>],
+	disabled: bool,
+}
+
+impl<'a, A, H: OnAction<A>> ToolBar<'a, A, H> {
+	pub(crate) fn new(
+		handler: &'a mut H,
+		items: &'a [Option<ToolItem<A>>],
+		disabled: bool,
+	) -> Self {
+		Self {
+			handler,
+			items,
+			disabled,
+		}
+	}
+}
+
+impl<A: Copy, H: OnAction<A>> ToolBar<'_, A, H> {
+	pub(crate) fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		if self.disabled {
+			ui.disable();
+		}
+		ui.vertical(|ui| {
+			ui.add_space(5.0);
+			ui.horizontal(|ui| {
+				ui.columns(self.items.len(), |columns| {
+					for (item, ui) in self.items.iter().zip(columns.iter_mut()) {
+						if let Some(item) = item {
+							ui.with_layout(
+								Layout::centered_and_justified(egui::Direction::LeftToRight),
+								|ui| {
+									ui.set_height(ui.available_width() * 0.5);
+									let color = if item.active {
+										theme::ACCENT_COLOR
+									} else {
+										Color32::BLACK
+									};
+									let button = ui.button(
+										UiIcon::new(item.icon).xlarge().color(color).build(),
+									);
+									if button.clicked() {
+										self.handler.on_action(item.action);
+									}
+								},
+							);
+						}
+					}
+				});
+			});
+			ui.add_space(3.0);
+		})
+		.response
 	}
 }

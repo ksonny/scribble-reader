@@ -8,9 +8,6 @@ use wgpu::TextureFormat;
 use wgpu::util::DeviceExt;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PrepareError {}
-
-#[derive(Debug, thiserror::Error)]
 pub(crate) enum RenderError {}
 
 #[repr(C)]
@@ -205,7 +202,7 @@ impl Renderer {
 		device: &Device,
 		queue: &Queue,
 		inputs: impl Iterator<Item = PixmapInput<'a>>,
-	) -> Result<(), PrepareError> {
+	) {
 		if let Some(params) = self.params {
 			queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 		}
@@ -277,8 +274,6 @@ impl Renderer {
 				instances,
 			});
 		}
-
-		Ok(())
 	}
 
 	pub(crate) fn render(

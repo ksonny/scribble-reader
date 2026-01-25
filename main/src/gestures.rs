@@ -125,7 +125,7 @@ pub struct GestureTracker<const F: usize> {
 	states: [Option<GestureState>; F],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
 	Tap,
 	Swipe(Direction, u8),
@@ -164,12 +164,12 @@ pub struct GestureEvent {
 }
 
 #[derive(Clone)]
-pub struct GestureIter<'a, const F: usize> {
+pub struct GestureIter<'a> {
 	idx: usize,
-	states: &'a [Option<GestureState>; F],
+	states: &'a [Option<GestureState>],
 }
 
-impl<'a, const F: usize> Iterator for GestureIter<'a, F> {
+impl<'a> Iterator for GestureIter<'a> {
 	type Item = GestureEvent;
 
 	fn next(&mut self) -> Option<Self::Item> {
@@ -219,7 +219,7 @@ impl<const F: usize> GestureTracker<F> {
 		}
 	}
 
-	pub fn events<'a>(&'a self) -> GestureIter<'a, F> {
+	pub fn events<'a>(&'a self) -> GestureIter<'a> {
 		GestureIter {
 			idx: 0,
 			states: &self.states,

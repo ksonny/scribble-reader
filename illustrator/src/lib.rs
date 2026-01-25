@@ -1,5 +1,3 @@
-#![feature(new_range_api)]
-#![feature(mapped_lock_guards)]
 mod error;
 mod html_parser;
 
@@ -11,9 +9,9 @@ use std::fs;
 use std::io;
 use std::io::Cursor;
 use std::io::Read;
+use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
-use std::range::Range;
 use std::sync::Arc;
 use std::sync::LockResult;
 use std::sync::Mutex;
@@ -174,7 +172,7 @@ impl PageContentCache {
 
 		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
 			spine: spine_item.index,
-			elements: spine_item.elements,
+			elements: spine_item.elements.clone(),
 			pages,
 		});
 		self.index += 1;
@@ -190,10 +188,20 @@ pub struct IllustratorHandle {
 	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorError>>,
 	pub toc: Arc<RwLock<IllustratorToC>>,
-	pub location: Arc<RwLock<Location>>,
+	location: Arc<RwLock<Location>>,
+	pub font_system: Arc<Mutex<FontSystem>>,
+	cache: Arc<RwLock<PageContentCache>>,
 }
 
 impl IllustratorHandle {
+	pub fn location(&self) -> Location {
+		*self.location.read().unwrap()
+	}
+
+	pub fn cache<'a>(&'a self) -> RwLockReadGuard<'a, PageContentCache> {
+		self.cache.read().unwrap()
+	}
+
 	pub fn goto(&mut self, loc: Location) -> Result<(), IllustratorRequestError> {
 		self.req_tx
 			.send(Request::Goto(loc))
@@ -470,7 +478,7 @@ impl BookMeta {
 				items.push(BookSpineItem {
 					index: index as u32,
 					idref: item.idref,
-					elements: Range::from(0..node_count),
+					elements: 0..node_count,
 				});
 				builder = tree.into_builder();
 			}
@@ -853,11 +861,15 @@ pub fn spawn_illustrator(
 		Ok(())
 	});
 
+	let font_system = illustrator.font_system.clone();
+	let cache = illustrator.cache.clone();
 	Ok(IllustratorHandle {
 		req_tx,
 		handle,
 		toc: handle_toc,
 		location: handle_loc,
+		font_system,
+		cache,
 	})
 }
 
@@ -1116,7 +1128,7 @@ fn render_resource<R: io::Seek + io::Read + Sync + Send>(
 	let mut page = PageContent {
 		position: PagePosition::First,
 		index: 0,
-		elements: Range::from(0..0),
+		elements: 0..0,
 		items: Vec::new(),
 	};
 	for edge in TaffyTreeIter::new(tree, body) {
@@ -1142,7 +1154,7 @@ fn render_resource<R: io::Seek + io::Read + Sync + Send>(
 							page = PageContent {
 								position: PagePosition::empty(),
 								index,
-								elements: Range::from(elements_end..elements_end),
+								elements: elements_end..elements_end,
 								items: Vec::new(),
 							};
 							page_end = offset.y;

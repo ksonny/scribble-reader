@@ -3,8 +3,8 @@ use crate::gestures;
 #[derive(Debug, Clone, Copy)]
 pub enum ActiveAreaAction {
 	ToggleUi,
-	NextPage,
 	PreviousPage,
+	NextPage,
 }
 
 #[derive(Debug)]
