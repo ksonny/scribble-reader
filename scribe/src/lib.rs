@@ -3,9 +3,7 @@ pub mod record_keeper;
 mod secret_storage;
 pub mod settings;
 
-use std::cell::Cell;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::BinaryHeap;
 use std::fs;
 use std::io;
@@ -59,15 +57,7 @@ pub enum ScribeError {
 pub struct ScribeTicket(usize);
 
 pub trait Bell {
-	fn library_loaded(&self);
-
-	fn library_sorted(&self);
-
-	fn book_updated(&self, id: BookId);
-
-	fn fail(&self, ticket: ScribeTicket, error: String);
-
-	fn complete(&self, ticket: ScribeTicket);
+	fn library_updated(&self, book_id: Option<BookId>);
 }
 
 #[derive(Debug)]
@@ -120,10 +110,29 @@ impl ScribeConfig {
 
 pub struct Scribe {
 	lib: library::Library,
-	order_tx: Sender<(ScribeTicket, ScribeRequest)>,
+	order_tx: Sender<ScribeRequest>,
 	handle: JoinHandle<Result<(), ScribeError>>,
-	ticket_set: BTreeSet<ScribeTicket>,
-	ticket_cnt: Cell<usize>,
+}
+
+pub struct ScribeAssistant {
+	lib: library::Library,
+	order_tx: Sender<ScribeRequest>,
+}
+
+impl ScribeAssistant {
+	pub fn send(&self, order: ScribeRequest) -> ScribeState {
+		match self.order_tx.send(order) {
+			Ok(_) => ScribeState::Working,
+			Err(e) => {
+				log::info!("Error sending to scribe: {e}");
+				todo!();
+			}
+		}
+	}
+
+	pub fn library(&self) -> &library::Library {
+		&self.lib
+	}
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -176,44 +185,13 @@ impl Scribe {
 			lib,
 			order_tx,
 			handle,
-			ticket_set: BTreeSet::new(),
-			ticket_cnt: Cell::new(0),
 		})
 	}
 
-	pub fn library(&self) -> &library::Library {
-		&self.lib
-	}
-
-	pub fn complete_ticket(&mut self, ticket: ScribeTicket) -> ScribeState {
-		let set = &mut self.ticket_set;
-		set.remove(&ticket);
-		log::trace!("Completed ticket {ticket:?}, set has {} tickets", set.len());
-		if set.is_empty() {
-			ScribeState::Idle
-		} else {
-			ScribeState::Working
-		}
-	}
-
-	fn new_ticket(&self) -> ScribeTicket {
-		let ticket_id = self.ticket_cnt.get();
-		self.ticket_cnt.set(ticket_id + 1);
-		ScribeTicket(ticket_id)
-	}
-
-	fn send(&mut self, order: ScribeRequest) -> ScribeState {
-		let ticket = self.new_ticket();
-		match self.order_tx.send((ticket, order)) {
-			Ok(_) => {
-				self.ticket_set.insert(ticket);
-				// TODO: Do something with ticket
-				ScribeState::Working
-			}
-			Err(e) => {
-				log::info!("Error sending to scribe: {e}");
-				todo!();
-			}
+	pub fn assistant(&self) -> ScribeAssistant {
+		ScribeAssistant {
+			lib: self.lib.clone(),
+			order_tx: self.order_tx.clone(),
 		}
 	}
 
@@ -230,7 +208,7 @@ fn spawn_scribe(
 	worker_lib: library::Library,
 	mut records: record_keeper::RecordKeeper,
 	storage: secret_storage::SecretStorage,
-	order_rx: std::sync::mpsc::Receiver<(ScribeTicket, ScribeRequest)>,
+	order_rx: std::sync::mpsc::Receiver<ScribeRequest>,
 ) -> JoinHandle<Result<(), ScribeError>> {
 	thread::spawn(move || -> Result<(), ScribeError> {
 		let lib = worker_lib;
@@ -249,19 +227,18 @@ fn spawn_scribe(
 			lib.sorted = sorted;
 		}
 		log::info!("Library loaded with {books_len} books");
-		bell.library_loaded();
+		bell.library_updated(None);
 
 		loop {
 			let request = order_rx.recv();
 			log::trace!("Request received: {request:?}");
 			match request {
-				Ok((ticket, ScribeRequest::Scan)) => {
+				Ok(ScribeRequest::Scan) => {
 					log::info!("Scan library at {}", lib_path.display());
 					match storage.scan(&mut records, &lib_path) {
 						Ok(_) => {}
 						Err(e) => {
 							log::error!("Failed to scan library: {e}");
-							bell.fail(ticket, format!("Failed to scan library: {e}"));
 						}
 					}
 					match records.fetch_books() {
@@ -278,16 +255,14 @@ fn spawn_scribe(
 								lib.sorted = sorted;
 							}
 							log::info!("Library loaded with {books_len} books");
-							bell.library_loaded();
-							bell.complete(ticket);
+							bell.library_updated(None);
 						}
 						Err(e) => {
 							log::error!("Failed to load library: {e}");
-							bell.fail(ticket, format!("Failed to load library: {e}"));
 						}
 					};
 				}
-				Ok((ticket, ScribeRequest::Show(id))) => {
+				Ok(ScribeRequest::Show(id)) => {
 					let has_thumbnail = lib.read().unwrap().thumbnails.contains_key(&id);
 					if !has_thumbnail {
 						match storage.load_thumbnail(&mut records, id) {
@@ -303,22 +278,15 @@ fn spawn_scribe(
 								};
 								let mut lib = lib.write().unwrap();
 								lib.thumbnails.insert(id, tn);
-								bell.book_updated(id);
-								bell.complete(ticket);
+								bell.library_updated(Some(id));
 							}
 							Err(e) => {
 								log::error!("Failed to get thumbnail for {id:?}: {e}");
-								bell.fail(
-									ticket,
-									format!("Failed to get thumbnail for {id:?}: {e}"),
-								);
 							}
 						};
-					} else {
-						bell.complete(ticket);
 					}
 				}
-				Ok((ticket, ScribeRequest::Sort(order))) => {
+				Ok(ScribeRequest::Sort(order)) => {
 					let SortOrder(field, dir) = order;
 					let sorted = {
 						let lib = lib.read().unwrap();
@@ -329,8 +297,7 @@ fn spawn_scribe(
 						lib.order = order;
 						lib.sorted = sorted;
 					}
-					bell.library_sorted();
-					bell.complete(ticket);
+					bell.library_updated(None);
 				}
 				Err(RecvError) => {
 					log::info!("Scribe worker terminated");
@@ -373,23 +340,4 @@ fn sort_books(
 		sorted.reverse();
 	}
 	sorted
-}
-
-pub trait ScribeAssistant {
-	fn poke_scan(&mut self) -> ScribeState;
-	fn poke_list(&mut self, books: &[library::Book]) -> ScribeState;
-}
-
-impl ScribeAssistant for Scribe {
-	fn poke_scan(&mut self) -> ScribeState {
-		self.send(ScribeRequest::Scan)
-	}
-
-	fn poke_list(&mut self, books: &[library::Book]) -> ScribeState {
-		let ids = books.iter().map(|b| b.id).collect::<Vec<_>>();
-		for id in ids {
-			self.send(ScribeRequest::Show(id));
-		}
-		ScribeState::Working
-	}
 }

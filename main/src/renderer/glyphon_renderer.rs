@@ -45,7 +45,7 @@ impl Renderer {
 		device: &Device,
 		queue: &Queue,
 		font_system: &mut FontSystem,
-		text_areas: impl IntoIterator<Item = TextArea<'a>>,
+		items: impl Iterator<Item = TextArea<'a>> + Clone,
 	) -> Result<(), PrepareError> {
 		self.text_renderer.prepare(
 			device,
@@ -53,7 +53,7 @@ impl Renderer {
 			font_system,
 			&mut self.atlas,
 			&self.viewport,
-			text_areas,
+			items,
 			&mut self.swash_cache,
 		)?;
 		Ok(())

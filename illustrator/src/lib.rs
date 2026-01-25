@@ -188,10 +188,20 @@ pub struct IllustratorHandle {
 	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorError>>,
 	pub toc: Arc<RwLock<IllustratorToC>>,
-	pub location: Arc<RwLock<Location>>,
+	location: Arc<RwLock<Location>>,
+	pub font_system: Arc<Mutex<FontSystem>>,
+	cache: Arc<RwLock<PageContentCache>>,
 }
 
 impl IllustratorHandle {
+	pub fn location(&self) -> Location {
+		*self.location.read().unwrap()
+	}
+
+	pub fn cache<'a>(&'a self) -> RwLockReadGuard<'a, PageContentCache> {
+		self.cache.read().unwrap()
+	}
+
 	pub fn goto(&mut self, loc: Location) -> Result<(), IllustratorRequestError> {
 		self.req_tx
 			.send(Request::Goto(loc))
@@ -851,11 +861,15 @@ pub fn spawn_illustrator(
 		Ok(())
 	});
 
+	let font_system = illustrator.font_system.clone();
+	let cache = illustrator.cache.clone();
 	Ok(IllustratorHandle {
 		req_tx,
 		handle,
 		toc: handle_toc,
 		location: handle_loc,
+		font_system,
+		cache,
 	})
 }
 

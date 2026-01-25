@@ -1,11 +1,11 @@
 #![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
 
-mod active_areas;
+mod fps_calculator;
 mod gestures;
 mod renderer;
 mod ui;
+mod views;
 
-use std::iter;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -17,69 +17,34 @@ use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
-use winit::event_loop::EventLoopProxy;
 #[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 use winit::window::Window;
 
-use crate::active_areas::ActiveAreaAction;
-use crate::active_areas::ActiveAreas;
-use crate::gestures::Direction;
+use crate::fps_calculator::FpsCalculator;
 use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
 use crate::renderer::Renderer;
 use crate::renderer::RendererError;
-use crate::ui::GuiView as _;
-use crate::ui::MainView;
 use crate::ui::UiInput;
+use crate::views::AppView;
+use crate::views::EventResult;
+use crate::views::ViewHandle;
 use scribe::Scribe;
-use scribe::ScribeAssistant;
 use scribe::library;
 use scribe::library::BookId;
-
-struct FpsCalculator {
-	last_frame: Instant,
-	total_ms: u64,
-}
-
-impl FpsCalculator {
-	const DIVIDER_2: u64 = 3;
-
-	fn new() -> Self {
-		Self {
-			last_frame: Instant::now(),
-			total_ms: 0,
-		}
-	}
-
-	fn tick(&mut self) {
-		let instant = Instant::now();
-		let frame = instant.duration_since(self.last_frame).as_millis() as u64;
-		let avg = self.total_ms >> Self::DIVIDER_2;
-		self.total_ms = self.total_ms + frame - avg;
-		self.last_frame = instant;
-	}
-
-	#[allow(unused)]
-	fn fps(&self) -> u64 {
-		(1000_u64 << Self::DIVIDER_2)
-			.checked_div(self.total_ms)
-			.unwrap_or(0)
-	}
-}
 
 struct App<'window> {
 	input: UiInput,
 	renderer: Option<Renderer<'window>>,
 	scribe: Scribe,
-	view: MainView,
-	bell: EventLoopBell,
+	view: AppView,
+	bell: AppBell,
 	egui_ctx: egui::Context,
 	fps: FpsCalculator,
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
 	illustrator: Illustrator,
-	areas: ActiveAreas,
 }
 
 impl App<'_> {
@@ -92,7 +57,7 @@ impl App<'_> {
 	}
 }
 
-impl<'window> ApplicationHandler<AppPoke> for App<'window> {
+impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 	fn new_events(
 		&mut self,
 		event_loop: &winit::event_loop::ActiveEventLoop,
@@ -156,7 +121,8 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 			.set_min_distance_by_screen(size.width, size.height);
 		self.illustrator.resize(size.width, size.height);
 		self.illustrator.rescale(scale_factor);
-		self.areas = ActiveAreas::new(size.width, size.height);
+		self.view.resize(size.width, size.height);
+		self.view.rescale(scale_factor);
 
 		if let Some(renderer) = self.renderer.as_mut() {
 			match renderer.resume(window) {
@@ -184,86 +150,37 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		}
 	}
 
-	fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppPoke) {
-		log::trace!("user event: {event:?}");
+	fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
 		match event {
-			AppPoke::ScanLibrary => {
-				self.view.working = self.scribe.poke_scan();
+			AppEvent::OpenLibrary => {
+				log::debug!("Open library");
+				self.view.library(self.scribe.assistant());
 			}
-			AppPoke::LibraryLoad | AppPoke::LibrarySorted => {
-				self.view.library_loaded(&mut self.scribe);
-				self.request_redraw();
-			}
-			AppPoke::LibraryOpen => {
-				self.view.open_library();
-				self.view.library_loaded(&mut self.scribe);
-				self.request_redraw();
-			}
-			AppPoke::LibraryUpdated(id) => {
-				self.view.book_updated(&self.scribe, id);
-				self.request_redraw();
-			}
-			AppPoke::NextPage => {
-				self.view.next_page(&mut self.scribe);
-				self.request_redraw();
-			}
-			AppPoke::PreviousPage => {
-				self.view.previous_page(&mut self.scribe);
-				self.request_redraw();
-			}
-			AppPoke::Goto(location) => {
-				self.view.goto(location);
-				self.request_redraw();
-			}
-			AppPoke::OpenBook(book_id) => {
+			AppEvent::OpenReader(book_id) => {
 				log::debug!("Open book {book_id:?}");
 				match spawn_illustrator(&mut self.illustrator, self.bell.clone(), book_id) {
 					Ok(handle) => {
-						self.view.open_book(handle);
-						self.request_redraw();
+						self.view.reader(handle);
 					}
 					Err(e) => {
 						log::error!("Error spawning illustrator: {e}");
 					}
 				};
-				if let Some(renderer) = &mut self.renderer {
-					match renderer
-						.prepare_page(&mut self.illustrator.font_system().unwrap(), iter::empty())
-					{
-						Ok(_) => {}
-						Err(e) => {
-							log::error!("Prepare failed: {e}");
-						}
-					};
+			}
+			AppEvent::OpenExperiments => {
+				log::debug!("Open experiments");
+				self.view.experiments();
+			}
+			AppEvent::Exit => {
+				log::debug!("Exit");
+				event_loop.exit();
+			}
+			event => {
+				log::trace!("Forward user event: {event:?}");
+				let result = self.view.event(&event);
+				if matches!(result, EventResult::RequestRedraw) {
+					self.request_redraw();
 				}
-			}
-			AppPoke::ToggleToC => {
-				self.view.toggle_toc();
-				self.request_redraw();
-			}
-			AppPoke::BookContentReady(book_id, loc) => {
-				log::debug!("Book content ready {book_id:?} {loc}");
-				if let Some(renderer) = &mut self.renderer {
-					let state = self.illustrator.state().unwrap();
-					if let Some(page) = state.page(loc) {
-						log::trace!("Found page, render {} items", page.items.len());
-						match renderer.prepare_page(
-							&mut self.illustrator.font_system().unwrap(),
-							page.items.iter(),
-						) {
-							Ok(_) => {}
-							Err(e) => {
-								log::error!("Prepare failed: {e}");
-							}
-						};
-					} else {
-						log::trace!("No page found");
-					}
-				}
-				self.request_redraw();
-			}
-			AppPoke::Completed(ticket) => {
-				self.view.working = self.scribe.complete_ticket(ticket);
 			}
 		}
 	}
@@ -293,27 +210,15 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 		if result.frame_ended {
 			for event in self.gestures.events() {
 				match event.gesture {
-					Gesture::Swipe(Direction::Right, _) => {
-						self.view.previous_page(&mut self.scribe);
-					}
-					Gesture::Swipe(Direction::Left, _) => {
-						self.view.next_page(&mut self.scribe);
-					}
-					Gesture::Tap => {
-						let pos = self.input.translate_pos(event.loc);
-						if self.view.is_inside_ui_element(pos) {
+					Gesture::Tap => match self.view.gesture(&event) {
+						views::GestureResult::Consumed => {}
+						views::GestureResult::Unhandled => {
 							self.input.handle_gesture(&event);
-						} else if let Some(action) = self.areas.action(event.loc) {
-							match action {
-								ActiveAreaAction::ToggleUi => self.view.toggle_ui(),
-								ActiveAreaAction::NextPage => self.view.next_page(&mut self.scribe),
-								ActiveAreaAction::PreviousPage => {
-									self.view.previous_page(&mut self.scribe)
-								}
-							}
 						}
+					},
+					_ => {
+						self.view.gesture(&event);
 					}
-					_ => {}
 				}
 			}
 			self.gestures.reset();
@@ -330,7 +235,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					.set_min_distance_by_screen(size.width, size.height);
 				self.input.resize(size);
 				self.illustrator.resize(size.width, size.height);
-				self.areas = ActiveAreas::new(size.width, size.height);
+				self.view.resize(size.width, size.height);
 				self.request_redraw();
 			}
 			WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -339,6 +244,7 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 				}
 				self.input.rescale(scale_factor as f32);
 				self.illustrator.rescale(scale_factor as f32);
+				self.view.rescale(scale_factor as f32);
 				self.request_redraw();
 			}
 			WindowEvent::RedrawRequested => {
@@ -346,14 +252,14 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 					log::warn!("Renderer not initialized, abort event {event:?}");
 					return;
 				};
-				self.fps.tick();
-				let input = self.input.tick();
-				let output = self
-					.egui_ctx
-					.run(input, |ctx| self.view.draw(ctx, &self.bell));
-				renderer.prepare_ui(output);
+
+				let painter = renderer.painter(&mut self.input);
+				self.view.draw(painter);
+
 				match renderer.render() {
-					Ok(_) => {}
+					Ok(()) => {
+						self.fps.tick();
+					}
 					Err(e @ RendererError::SurfaceNotAvailable) => {
 						log::warn!("Failure render: {e}");
 					}
@@ -368,97 +274,45 @@ impl<'window> ApplicationHandler<AppPoke> for App<'window> {
 	}
 }
 
-#[derive(Debug)]
-pub enum AppPoke {
-	LibraryLoad,
-	LibrarySorted,
-	LibraryUpdated(BookId),
-	NextPage,
-	PreviousPage,
-	Goto(Location),
-	OpenBook(BookId),
-	ToggleToC,
-	LibraryOpen,
-	ScanLibrary,
+#[derive(Debug, Clone, Copy)]
+pub enum AppEvent {
+	OpenLibrary,
+	OpenExperiments,
+	OpenReader(BookId),
+	LibraryUpdated,
+	LibraryBookUpdated(BookId),
 	BookContentReady(BookId, Location),
-	Completed(scribe::ScribeTicket),
+	Exit,
 }
 
 #[derive(Clone)]
-struct EventLoopBell(EventLoopProxy<AppPoke>);
+struct AppBell {
+	proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+}
 
-impl ui::Bell for EventLoopBell {
-	fn scan_library(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::ScanLibrary).unwrap();
+impl AppBell {
+	fn new(proxy: winit::event_loop::EventLoopProxy<AppEvent>) -> Self {
+		Self { proxy }
 	}
 
-	fn next_page(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::NextPage).unwrap();
-	}
-
-	fn previous_page(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::PreviousPage).unwrap();
-	}
-
-	fn goto_location(&self, loc: Location) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::Goto(loc)).unwrap();
-	}
-
-	fn open_book(&self, id: BookId) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::OpenBook(id)).unwrap();
-	}
-
-	fn open_library(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::LibraryOpen).unwrap();
-	}
-
-	fn toggle_chapters(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::ToggleToC).unwrap();
+	fn send_event(&self, event: AppEvent) {
+		self.proxy.send_event(event).unwrap();
 	}
 }
 
-impl illustrator::Bell for EventLoopBell {
+impl illustrator::Bell for AppBell {
 	fn content_ready(&self, id: library::BookId, loc: Location) {
-		let EventLoopBell(proxy) = self;
-		proxy
-			.send_event(AppPoke::BookContentReady(id, loc))
-			.unwrap();
+		self.send_event(AppEvent::BookContentReady(id, loc))
 	}
 }
 
-impl scribe::Bell for EventLoopBell {
-	fn library_loaded(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::LibraryLoad).unwrap();
-	}
-
-	fn library_sorted(&self) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::LibrarySorted).unwrap();
-	}
-
-	fn book_updated(&self, id: BookId) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::LibraryUpdated(id)).unwrap();
-	}
-
-	fn fail(&self, ticket: scribe::ScribeTicket, error: String) {
-		log::error!("Error in scribe: {error}");
-		let EventLoopBell(proxy) = self;
-		// TODO: Maybe other event?
-		proxy.send_event(AppPoke::Completed(ticket)).unwrap();
-	}
-
-	fn complete(&self, ticket: scribe::ScribeTicket) {
-		let EventLoopBell(proxy) = self;
-		proxy.send_event(AppPoke::Completed(ticket)).unwrap();
+impl scribe::Bell for AppBell {
+	fn library_updated(&self, book_id: Option<BookId>) {
+		if let Some(book_id) = book_id {
+			self.send_event(AppEvent::LibraryBookUpdated(book_id));
+		} else {
+			self.send_event(AppEvent::LibraryUpdated);
+		}
 	}
 }
 
@@ -472,18 +326,17 @@ pub enum Error {
 	Scribe(#[from] scribe::ScribeError),
 }
 
-pub fn start(event_loop: EventLoop<AppPoke>, config: ScribeConfig) -> Result<(), Error> {
-	let bell = EventLoopBell(event_loop.create_proxy());
-	let scribe = Scribe::create(bell.clone(), config.clone())?;
-	let view = MainView::default();
+pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<(), Error> {
+	let bell = AppBell::new(event_loop.create_proxy());
+	let view = AppView::new(bell.clone());
 
 	let egui_ctx = ui::create_egui_ctx();
-	let input = UiInput::new();
+	let input = UiInput::new(egui_ctx.clone());
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
 
+	let scribe = Scribe::create(bell.clone(), config.clone())?;
 	let illustrator = Illustrator::create(config);
-	let areas = ActiveAreas::default();
 
 	let mut app = App {
 		input,
@@ -496,7 +349,6 @@ pub fn start(event_loop: EventLoop<AppPoke>, config: ScribeConfig) -> Result<(),
 		request_redraw: Instant::now(),
 		gestures,
 		illustrator,
-		areas,
 	};
 
 	event_loop.run_app(&mut app)?;
