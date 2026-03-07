@@ -7,7 +7,7 @@ edition = "2024"
 bitflags = "2.9.4"
 config.workspace = true
 epub.workspace = true
-html5ever = "0.35.0"
+html5ever = "0.38.0"
 image.workspace = true
 imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 log.workspace = true
@@ -20,7 +20,7 @@ serde.workspace = true
 sculpter.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror.workspace = true
-zip = "5.1.1"
+zip = "8.2.0"
 ttf-parser.workspace = true
 
 [dev-dependencies]

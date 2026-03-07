@@ -94,6 +94,7 @@ impl Renderer<'_> {
 				required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
 				memory_hints: wgpu::MemoryHints::MemoryUsage,
 				trace: wgpu::Trace::Off,
+				experimental_features: wgpu::ExperimentalFeatures::disabled(),
 			})
 			.await?;
 
@@ -205,6 +206,7 @@ impl Renderer<'_> {
 						label: Some("main render pass"),
 						color_attachments: &[Some(wgpu::RenderPassColorAttachment {
 							view: &view,
+							depth_slice: None,
 							resolve_target: None,
 							ops: wgpu::Operations {
 								load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),

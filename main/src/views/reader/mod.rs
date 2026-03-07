@@ -342,7 +342,7 @@ impl ViewHandle for ReaderView {
 			if !is_open {
 				self.rects.push(top_panel.response.interact_rect);
 			} else {
-				self.rects.push(ctx.screen_rect())
+				self.rects.push(ctx.content_rect())
 			}
 
 			let bottom_panel = egui::TopBottomPanel::bottom("bottom")

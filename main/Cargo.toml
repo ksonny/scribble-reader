@@ -11,10 +11,10 @@ bytemuck = { version = "1.24.0", features = ["derive"] }
 chrono.workspace = true
 config.workspace = true
 dotenv = "0.15.0"
-egui = "0.32.3"
-egui-wgpu = "0.32.3"
-egui-winit = "0.32.3"
-egui_extras = { version = "0.32.3", features = ["image"] }
+egui = "0.33.3"
+egui-wgpu = "0.33.3"
+egui-winit = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["image"] }
 env_logger.workspace = true
 illustrator.workspace = true
 image.workspace = true
@@ -30,7 +30,7 @@ sculpter.workspace = true
 serde.workspace = true
 serde_rusqlite = "0.40.0"
 thiserror.workspace = true
-wgpu = "25.0.2"
+wgpu = "27.0.1"
 xdg = "3.0.0"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
