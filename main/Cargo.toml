@@ -21,7 +21,7 @@ image.workspace = true
 integer-sqrt = "0.1.5"
 lazy_static = "1.5.0"
 log.workspace = true
-lucide-icons = "0.545.0"
+lucide-icons = "0.575.0"
 pollster = "0.4.0"
 rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
