@@ -4,16 +4,16 @@ use std::sync::Arc;
 use egui::TopBottomPanel;
 use image::ImageBuffer;
 use lucide_icons::Icon;
+use sculpter::AtlasImage;
 use sculpter::Axis;
 use sculpter::DisplayGlyph;
 use sculpter::Fixed;
 use sculpter::FontOptions;
 use sculpter::FontStyle;
+use sculpter::SculpterFonts;
 use sculpter::SculpterInput;
 use sculpter::SculpterOptions;
 use sculpter::create_sculpter;
-use sculpter::fonts::SculpterFonts;
-use sculpter::printer::AtlasImage;
 
 use crate::AppBell;
 use crate::AppEvent;

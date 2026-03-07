@@ -21,9 +21,9 @@ use bitflags::bitflags;
 use scribe::ScribeConfig;
 use scribe::library;
 use scribe::library::Location;
+use sculpter::SculpterFonts;
 use sculpter::SculpterOptions;
 use sculpter::TextBlock;
-use sculpter::fonts::SculpterFonts;
 use zip::ZipArchive;
 
 use crate::cache::PageContentCache;

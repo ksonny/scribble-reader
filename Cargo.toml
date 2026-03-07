@@ -9,10 +9,13 @@ config = { version = "0.15.18", default-features = false, features = ["toml"] }
 env_logger = "0.11.8"
 epub = "2.1.4"
 illustrator = { version = "0.1.0", path = "./illustrator" }
+illustrator = { version = "0.1.0", path = "./illustrator" }
 image = { version = "0.25.8", features = ["png", "jpeg", "ico"] }
 log = "0.4.28"
 rayon = "1.11.0"
 scribe = { version = "0.1.0", path = "./scribe" }
+scribe = { version = "0.1.0", path = "./scribe" }
+sculpter = { version = "0.1.0", path = "./sculpter" }
 sculpter = { version = "0.1.0", path = "./sculpter" }
 serde = { version = "1.0.226", features = ["derive"] }
 thiserror = "2.0.17"
