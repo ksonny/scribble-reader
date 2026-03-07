@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use ab_glyph::VariableFont;
 use fixed::types::I26F6;
-pub use ttf_parser::Tag;
+use ttf_parser::Tag;
 
 use crate::fonts::FontEntry;
 pub use crate::fonts::SculpterFontErrors;
