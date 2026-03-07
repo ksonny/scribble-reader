@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
+use egui::CentralPanel;
 use egui::Color32;
 use egui::RichText;
 use egui::TextStyle;
+use egui::TopBottomPanel;
 use egui::load::Bytes;
 use lucide_icons::Icon;
 use scribe::ScribeAssistant;
@@ -103,6 +105,7 @@ fn read_cards(scribe: &ScribeAssistant, page: u32) -> [Option<BookCard>; LIBRARY
 enum MenuAction {
 	Exit,
 	Refresh,
+	OpenExperiment,
 }
 
 #[derive(Clone, Copy)]
@@ -114,11 +117,14 @@ enum ToolAction {
 impl OnAction<MenuAction> for LibraryView {
 	fn on_action(&mut self, action: MenuAction) {
 		match action {
+			MenuAction::Exit => {
+				self.bell.send_event(AppEvent::Exit);
+			}
 			MenuAction::Refresh => {
 				self.scribe.send(ScribeRequest::Scan);
 			}
-			MenuAction::Exit => {
-				self.bell.send_event(AppEvent::Exit);
+			MenuAction::OpenExperiment => {
+				self.bell.send_event(AppEvent::OpenExperiments);
 			}
 		}
 	}
@@ -138,13 +144,19 @@ impl ViewHandle for LibraryView {
 		painter.draw_ui(|ctx| {
 			let menu_items = &[
 				MenuItem {
-					icon: lucide_icons::Icon::RefreshCw,
+					icon: Icon::RefreshCw,
 					description: "Refresh",
 					active: false,
 					action: MenuAction::Refresh,
 				},
 				MenuItem {
-					icon: lucide_icons::Icon::LogOut,
+					icon: Icon::RefreshCw,
+					description: "Experiment",
+					active: false,
+					action: MenuAction::OpenExperiment,
+				},
+				MenuItem {
+					icon: Icon::LogOut,
 					description: "Exit",
 					active: false,
 					action: MenuAction::Exit,
@@ -171,14 +183,14 @@ impl ViewHandle for LibraryView {
 				None,
 			];
 
-			let top_panel = egui::TopBottomPanel::top("top")
+			let top_panel = TopBottomPanel::top("top")
 				.show(ctx, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 
-			egui::TopBottomPanel::bottom("bottom")
+			TopBottomPanel::bottom("bottom")
 				.show(ctx, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 
-			egui::CentralPanel::default().show(ctx, |ui| {
+			CentralPanel::default().show(ctx, |ui| {
 				if is_open {
 					ui.disable();
 				}

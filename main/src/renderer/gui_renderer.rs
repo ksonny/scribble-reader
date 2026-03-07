@@ -21,7 +21,8 @@ impl Renderer {
 		format: wgpu::TextureFormat,
 		ctx: egui::Context,
 	) -> Self {
-		let gui_renderer = egui_wgpu::Renderer::new(device, format, None, 1, false);
+		let gui_renderer =
+			egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default());
 		let screen = egui_wgpu::ScreenDescriptor {
 			size_in_pixels: [0, 0],
 			pixels_per_point: 1.0,

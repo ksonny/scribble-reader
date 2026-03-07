@@ -1,0 +1,151 @@
+use std::ops::Range;
+
+use scribe::library::Location;
+use sculpter::AtlasImage;
+
+use crate::PageContent;
+use crate::PagePosition;
+use crate::meta::BookMeta;
+use crate::meta::BookSpineItem;
+
+const CACHE_CHAPTERS: usize = 5;
+
+#[derive(Debug, Default)]
+struct PageCacheEntry {
+	spine: u32,
+	elements: Range<u32>,
+	pages: Vec<PageContent>,
+}
+
+#[derive(Debug)]
+pub struct PageContentCache {
+	index: usize,
+	entries: [Option<PageCacheEntry>; CACHE_CHAPTERS],
+	atlas: AtlasImage,
+}
+
+impl Default for PageContentCache {
+	fn default() -> Self {
+		Self {
+			index: 0,
+			entries: [const { None }; CACHE_CHAPTERS],
+			atlas: AtlasImage::default(),
+		}
+	}
+}
+
+impl PageContentCache {
+	pub fn atlas(&self) -> &AtlasImage {
+		&self.atlas
+	}
+
+	pub(crate) fn atlas_mut(&mut self) -> &mut AtlasImage {
+		&mut self.atlas
+	}
+
+	pub fn page(&self, loc: Location) -> Option<&PageContent> {
+		self.entry(loc).map(|(_, page)| page)
+	}
+
+	pub(crate) fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
+		self.entry(loc)
+			.map(|(entry, page)| {
+				if page.position.contains(PagePosition::Last) {
+					book_meta
+						.spine
+						.get(entry.spine as usize + 1)
+						.map(|item| Location {
+							spine: item.index,
+							element: item.elements.start,
+						})
+						// End of book
+						.unwrap_or(loc)
+				} else {
+					entry
+						.pages
+						.iter()
+						.find(|p| p.elements.start > page.elements.start)
+						.or(entry.pages.last())
+						.map(|p| Location {
+							spine: entry.spine,
+							element: p.elements.start,
+						})
+						.expect("Programmer error, not last page but nothing after")
+				}
+			})
+			.unwrap_or(loc)
+	}
+
+	pub(crate) fn previous_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
+		self.entry(loc)
+			.map(|(entry, page)| {
+				if page.position.contains(PagePosition::First) {
+					book_meta
+						.spine
+						.get(entry.spine.saturating_sub(1) as usize)
+						.map(|item| Location {
+							spine: item.index,
+							element: item.elements.end,
+						})
+						// Start of book
+						.unwrap_or(loc)
+				} else {
+					entry
+						.pages
+						.iter()
+						.rfind(|p| p.elements.start < page.elements.start)
+						.map(|p| Location {
+							spine: entry.spine,
+							element: p.elements.start,
+						})
+						.expect("Programmer error, not first page but nothing before")
+				}
+			})
+			.unwrap_or(loc)
+	}
+
+	pub(crate) fn is_cached(&self, spine_item: &BookSpineItem) -> bool {
+		self.entries
+			.iter()
+			.flatten()
+			.any(|e| e.spine == spine_item.index)
+	}
+
+	pub(crate) fn insert(&mut self, spine_item: &BookSpineItem, pages: Vec<PageContent>) {
+		debug_assert!(
+			pages.iter().is_sorted_by_key(|p| p.elements.start),
+			"Pages not sorted"
+		);
+
+		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
+			spine: spine_item.index,
+			elements: spine_item.elements.clone(),
+			pages,
+		});
+		self.index += 1;
+	}
+
+	pub(crate) fn clear(&mut self) {
+		self.entries = [const { None }; CACHE_CHAPTERS];
+	}
+
+	fn entry(&self, loc: Location) -> Option<(&PageCacheEntry, &PageContent)> {
+		let entry = self
+			.entries
+			.iter()
+			.flatten()
+			.find(|e| e.spine == loc.spine)?;
+
+		if loc.element == entry.elements.start {
+			Some((entry, entry.pages.first()?))
+		} else if loc.element >= entry.elements.end {
+			Some((entry, entry.pages.last()?))
+		} else {
+			let page = entry
+				.pages
+				.iter()
+				.find(|p| p.elements.contains(&loc.element))?;
+			Some((entry, page))
+		}
+	}
+}

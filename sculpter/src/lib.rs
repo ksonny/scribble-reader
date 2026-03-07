@@ -1,0 +1,437 @@
+use std::fmt::Display;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::marker::PhantomData;
+use std::ops::Range;
+
+use ab_glyph::VariableFont;
+use fixed::types::I26F6;
+pub use ttf_parser::Tag;
+
+use crate::fonts::FontEntry;
+pub use crate::fonts::SculpterFonts;
+use crate::lines::ShapeLines;
+pub use crate::printer::AtlasImage;
+use crate::printer::SculpturePrinter;
+use crate::shaper::GlyphPlan;
+use crate::shaper::SculptureShaper;
+use crate::shaper::ShapeFaceRef;
+
+pub mod fonts;
+mod lines;
+pub mod printer;
+pub mod shaper;
+
+pub type Fixed = I26F6;
+
+#[derive(Debug, Default, Hash)]
+pub enum Family<'a> {
+	Name(&'a str),
+	#[default]
+	Serif,
+	SansSerif,
+}
+
+impl Display for Family<'_> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Family::Name(family) => write!(f, "{}", family),
+			Family::Serif => write!(f, "serif"),
+			Family::SansSerif => write!(f, "sans-serif"),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, Hash)]
+pub enum Axis {
+	Wght,
+	Wdth,
+	Ital,
+	Slnt,
+	Opzs,
+}
+
+impl Axis {
+	fn as_bytes(&self) -> &'static [u8; 4] {
+		match self {
+			Axis::Wght => b"wght",
+			Axis::Wdth => b"wdth",
+			Axis::Ital => b"ital",
+			Axis::Slnt => b"slnt",
+			Axis::Opzs => b"opzs",
+		}
+	}
+}
+
+impl From<Axis> for Tag {
+	fn from(value: Axis) -> Self {
+		Tag::from_bytes(value.as_bytes())
+	}
+}
+
+impl Display for Axis {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Axis::Wght => write!(f, "wght"),
+			Axis::Wdth => write!(f, "wdth"),
+			Axis::Ital => write!(f, "ital"),
+			Axis::Slnt => write!(f, "slnt"),
+			Axis::Opzs => write!(f, "opzs"),
+		}
+	}
+}
+
+#[derive(Debug, Hash)]
+pub struct Variation {
+	pub axis: Axis,
+	pub value: Fixed,
+}
+
+impl Variation {
+	pub fn new(axis: Axis, value: Fixed) -> Self {
+		Self { axis, value }
+	}
+}
+
+#[derive(Debug)]
+pub struct FontOptions<'a> {
+	pub family: Family<'a>,
+	pub variations: Vec<Variation>,
+}
+
+impl<'a> FontOptions<'a> {
+	pub fn new(family: Family<'a>, variations: Vec<Variation>) -> Self {
+		Self { family, variations }
+	}
+}
+
+impl Hash for FontOptions<'_> {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.family.hash(state);
+		for v in &self.variations {
+			v.axis.hash(state);
+			v.value.hash(state);
+		}
+	}
+}
+
+impl Display for FontOptions<'_> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "[{}", self.family)?;
+		if !self.variations.is_empty() {
+			write!(f, " v:")?;
+			let mut iter = self.variations.iter().peekable();
+			while let Some(v) = iter.next() {
+				write!(f, "{}={}", v.axis, v.value)?;
+				if iter.peek().is_some() {
+					write!(f, ",")?;
+				}
+			}
+		}
+		write!(f, "]")?;
+		Ok(())
+	}
+}
+
+#[derive(Debug)]
+pub struct FontStyle<'a> {
+	pub font_opts: &'a FontOptions<'a>,
+	pub font_size: Fixed,
+	pub line_height_em: Fixed,
+}
+
+pub struct SculpterOptions {
+	pub min_raster_px: I26F6,
+}
+
+impl Default for SculpterOptions {
+	fn default() -> Self {
+		Self {
+			min_raster_px: I26F6::lit("40.0"),
+		}
+	}
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SculpterCreateError {
+	#[error(transparent)]
+	FaceParsing(#[from] ttf_parser::FaceParsingError),
+	#[error("No font found with family name {0}")]
+	NoFontFound(String),
+	#[error(transparent)]
+	InvalidFont(#[from] ab_glyph::InvalidFont),
+}
+
+pub fn create_sculpter<'a>(
+	fonts: &'a SculpterFonts,
+	font_options: &[&FontOptions<'_>],
+	options: SculpterOptions,
+) -> Result<Sculpter<'a>, SculpterCreateError> {
+	let mut shaper = SculptureShaper::new();
+	let mut printer = SculpturePrinter::new([8192; 2]);
+
+	let mut faces = Vec::with_capacity(font_options.len());
+	for option in font_options {
+		let font = fonts
+			.find_font(option)
+			.ok_or(SculpterCreateError::NoFontFound(option.family.to_string()))?;
+		let mut shaper_face =
+			rustybuzz::Face::from_face(ttf_parser::Face::parse(&font.data, font.font_index)?);
+		let mut printer_font =
+			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
+
+		for v in &option.variations {
+			if shaper_face
+				.set_variation(v.axis.into(), v.value.to_num())
+				.is_none()
+			{
+				log::warn!(
+					"Font {} does not have variable axis {}",
+					option.family,
+					v.axis
+				);
+			}
+			printer_font.set_variation(v.axis.as_bytes(), v.value.to_num());
+		}
+
+		let shaper_ref = shaper.add(shaper_face, false);
+		let printer_ref = printer.add(printer_font);
+		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
+		let fo_hash = {
+			let mut s = DefaultHasher::new();
+			option.hash(&mut s);
+			s.finish()
+		};
+		faces.push((fo_hash, shaper_ref, font));
+	}
+
+	for font in fonts.font_fallbacks() {
+		let shaper_face =
+			rustybuzz::Face::from_face(ttf_parser::Face::parse(&font.data, font.font_index)?);
+		let printer_font =
+			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
+
+		let shaper_ref = shaper.add(shaper_face, true);
+		let printer_ref = printer.add(printer_font);
+		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
+	}
+
+	Ok(Sculpter {
+		faces,
+		shaper,
+		printer,
+		glyphs: Vec::new(),
+		styles: Vec::new(),
+		options,
+	})
+}
+
+#[derive(Debug)]
+pub struct SculpterInput<'a> {
+	pub style: FontStyle<'a>,
+	pub input: &'a str,
+}
+
+#[derive(Debug)]
+pub struct SculpterHandle<'handle> {
+	glyphs_start: usize,
+	glyphs_end: usize,
+	phantom: PhantomData<&'handle Self>,
+}
+
+impl SculpterHandle<'_> {
+	fn glyph_range(&self) -> Range<usize> {
+		self.glyphs_start..self.glyphs_end
+	}
+}
+
+#[derive(Debug)]
+struct Style {
+	font_size: I26F6,
+	font_scale: I26F6,
+	line_height_em: I26F6,
+	end_index: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SculpterShapeError {
+	#[error(transparent)]
+	FaceParsing(#[from] ttf_parser::FaceParsingError),
+	#[error("Face not found")]
+	FaceNotFound,
+}
+
+pub struct Sculpter<'a> {
+	faces: Vec<(u64, ShapeFaceRef, &'a FontEntry)>,
+	shaper: SculptureShaper<'a>,
+	printer: SculpturePrinter<'a>,
+	glyphs: Vec<GlyphPlan>,
+	styles: Vec<Style>,
+	options: SculpterOptions,
+}
+
+impl<'a> Sculpter<'a> {
+	pub fn shape<'input, 'handle>(
+		&mut self,
+		inputs: impl Iterator<Item = SculpterInput<'input>>,
+	) -> Result<SculpterHandle<'handle>, SculpterShapeError> {
+		let glyphs_start = self.glyphs.len();
+		for SculpterInput { style, input } in inputs {
+			let font_opts = style.font_opts;
+			let font_size = style.font_size;
+			let line_height_em = style.line_height_em;
+
+			let font_opts_h = {
+				let mut s = DefaultHasher::new();
+				font_opts.hash(&mut s);
+				s.finish()
+			};
+			let (face_ref, units_per_em) = self
+				.faces
+				.iter()
+				.find_map(|(h, face_ref, font)| {
+					(*h == font_opts_h).then_some((*face_ref, font.units_per_em))
+				})
+				.ok_or(SculpterShapeError::FaceNotFound)?;
+
+			self.shaper.shape(face_ref, input, &mut self.glyphs)?;
+
+			self.styles.push(Style {
+				font_size,
+				font_scale: font_size / units_per_em,
+				line_height_em,
+				end_index: self.glyphs.len(),
+			});
+		}
+		let glyphs_end = self.glyphs.len();
+
+		Ok(SculpterHandle {
+			glyphs_start,
+			glyphs_end,
+			phantom: PhantomData,
+		})
+	}
+}
+
+#[derive(Debug)]
+pub struct MeasureResult {
+	pub height: u32,
+	pub lines: u32,
+}
+
+impl<'a> Sculpter<'a> {
+	pub fn measure(&self, handle: &SculpterHandle<'_>, width_px: u32) -> MeasureResult {
+		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
+
+		let lines_iter = ShapeLines::new(
+			handle.glyphs_start,
+			&self.glyphs[handle.glyph_range()],
+			&self.styles,
+			I26F6::from_num(width_px),
+		);
+
+		let mut height = I26F6::ZERO;
+		let mut lines = 0;
+		for line in lines_iter {
+			let line_style = line
+				.height_decider_style()
+				.expect("Should never happen, no style for line with glyphs");
+
+			let font_height = line_style.font_size * px_per_pt;
+			height += font_height * line_style.line_height_em;
+			lines += 1;
+		}
+		let height = height.ceil().to_num();
+
+		MeasureResult { height, lines }
+	}
+}
+
+#[derive(Debug)]
+pub struct DisplayGlyph {
+	pub pos: [f32; 2],
+	pub size: [f32; 2],
+	pub uv_pos: [u32; 2],
+	pub uv_size: [u32; 2],
+}
+
+#[derive(Debug)]
+pub struct TextBlock {
+	pub block_height: I26F6,
+	pub glyphs: Vec<DisplayGlyph>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SculpterPrinterError {
+	#[error(transparent)]
+	FaceParsing(#[from] ttf_parser::FaceParsingError),
+	#[error("Face not found")]
+	FaceNotFound,
+	#[error("Font size outside range: {0}")]
+	FontSizeOutsideRange(f32),
+	#[error("Failed to grow atlas")]
+	GrowAtlasFailed,
+	#[error("Failed to resize atlas texture")]
+	ResizeAtlasTextureFailed,
+}
+
+impl<'a> Sculpter<'a> {
+	pub fn render_block(
+		&mut self,
+		handle: &mut SculpterHandle<'_>,
+		width_px: u32,
+		height_px: u32,
+		empty_line_height_px: u32,
+	) -> Result<TextBlock, SculpterPrinterError> {
+		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
+		let empty_line_height = I26F6::from_num(empty_line_height_px);
+
+		let mut output = Vec::new();
+		let mut block_height = I26F6::ZERO;
+		let lines_iter = ShapeLines::new(
+			handle.glyphs_start,
+			&self.glyphs[handle.glyph_range()],
+			&self.styles,
+			I26F6::from_num(width_px),
+		);
+		for line in lines_iter {
+			if line.glyphs.is_empty() {
+				block_height += empty_line_height;
+				continue;
+			}
+
+			let line_style = line
+				.clone()
+				.height_decider_style()
+				.expect("Should never happen, no style for line with glyphs");
+
+			let font_height = line_style.font_size * px_per_pt;
+			if block_height + font_height > height_px {
+				break;
+			}
+			let x_origin = I26F6::ZERO;
+			let y_origin = block_height + font_height;
+
+			block_height += font_height * line_style.line_height_em;
+
+			handle.glyphs_start += line.len();
+			self.printer.print_line(
+				x_origin,
+				y_origin,
+				line,
+				self.options.min_raster_px,
+				&mut output,
+			)?;
+		}
+
+		Ok(TextBlock {
+			block_height,
+			glyphs: output,
+		})
+	}
+
+	pub fn write_glyph_atlas(&self, atlas: &mut AtlasImage) -> Result<(), SculpterPrinterError> {
+		self.printer.write_glyph_atlas(atlas)
+	}
+}

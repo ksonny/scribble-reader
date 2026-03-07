@@ -2,6 +2,8 @@ mod experiments;
 mod library;
 mod reader;
 
+use std::sync::Arc;
+
 use illustrator::IllustratorHandle;
 use scribe::ScribeAssistant;
 
@@ -53,7 +55,7 @@ pub(crate) struct AppView {
 
 impl AppView {
 	pub(crate) fn new(bell: AppBell) -> Self {
-		bell.send_event(AppEvent::OpenLibrary);
+		bell.send_event(AppEvent::OpenExperiments);
 		Self {
 			bell,
 			scale_factor: 1.0,
@@ -68,6 +70,9 @@ impl AppView {
 	}
 
 	pub(crate) fn reader(&mut self, illustrator: IllustratorHandle) {
+		let _ = illustrator.rescale(self.scale_factor);
+		let _ = illustrator.resize(self.screen_width, self.screen_height);
+
 		self.view = Views::Reader(reader::ReaderView::create(
 			self.bell.clone(),
 			illustrator,
@@ -77,8 +82,14 @@ impl AppView {
 		))
 	}
 
-	pub(crate) fn experiments(&mut self) {
-		self.view = Views::Experiments(experiments::ExperimentsView::create())
+	pub(crate) fn experiments(&mut self, fonts: Arc<sculpter::SculpterFonts>) {
+		self.view = Views::Experiments(experiments::ExperimentsView::create(
+			self.bell.clone(),
+			fonts,
+			self.screen_width,
+			self.screen_height,
+			self.scale_factor,
+		))
 	}
 }
 

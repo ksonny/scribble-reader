@@ -15,6 +15,7 @@ use crate::gestures::Gesture;
 use crate::gestures::GestureEvent;
 use crate::renderer::Painter;
 use crate::renderer::pixmap_renderer;
+use crate::renderer::pixmap_renderer::PixmapTargetInput;
 use crate::ui::MainMenuBar;
 use crate::ui::MenuItem;
 use crate::ui::OnAction;
@@ -229,31 +230,44 @@ impl ViewHandle for ReaderView {
 			let cache = self.illustrator.cache();
 			let content = cache.page(loc);
 			if let Some(content) = content {
-				let text_areas = content.items.iter().filter_map(|it| match it {
-					illustrator::DisplayItem {
+				let mut glyph_targets = Vec::new();
+				for item in &content.items {
+					if let illustrator::DisplayItem {
 						pos,
-						content: illustrator::DisplayContent::Text(item),
+						content: illustrator::DisplayContent::Text(block),
 						..
-					} => Some(glyphon::TextArea {
-						buffer: &item.buffer,
-						left: pos.x as f32,
-						top: pos.y as f32,
-						scale: 1.0,
-						bounds: glyphon::TextBounds::default(),
-						default_color: glyphon::Color::rgb(0, 0, 0),
-						custom_glyphs: &[],
-					}),
-					_ => None,
-				});
+					} = item
+					{
+						glyph_targets.extend(block.glyphs.iter().map(|g| PixmapTargetInput {
+							pos: [pos.x + g.pos[0], pos.y + g.pos[1]],
+							dim: g.size,
+							tex_pos: g.uv_pos,
+							tex_dim: g.uv_size,
+						}));
+					}
+				}
+				let atlas_pixmap = if !glyph_targets.is_empty() {
+					// TODO: Allow texture reuse in pixmap renderer
+					let atlas = cache.atlas();
+					Some(pixmap_renderer::PixmapInput {
+						pixmap: pixmap_renderer::Pixmap::Luma(atlas.as_raw()),
+						pixmap_dim: [atlas.width(), atlas.height()],
+						offset_pos: [0; 2],
+						targets: glyph_targets,
+					})
+				} else {
+					None
+				};
+
 				let pixmaps = content.items.iter().filter_map(|it| match it {
 					illustrator::DisplayItem {
 						pos,
 						size,
 						content: illustrator::DisplayContent::Pixmap(item),
 					} => Some(pixmap_renderer::PixmapInput {
-						pixmap_rgba: &item.pixmap_rgba,
-						pixmap_width: item.pixmap_width,
-						pixmap_height: item.pixmap_height,
+						pixmap: pixmap_renderer::Pixmap::RgbA(&item.pixmap_rgba),
+						pixmap_dim: [item.pixmap_width, item.pixmap_height],
+						offset_pos: [0; 2],
 						targets: vec![pixmap_renderer::PixmapTargetInput {
 							pos: [pos.x, pos.y],
 							dim: [size.width, size.height],
@@ -264,21 +278,12 @@ impl ViewHandle for ReaderView {
 					_ => None,
 				});
 
-				let mut font_system = self.illustrator.font_system.lock().unwrap();
-				painter
-					.draw_glyphon(&mut font_system, text_areas)
-					.draw_pixmap(pixmaps)
+				painter.draw_pixmap(pixmaps.chain(atlas_pixmap))
 			} else {
-				let mut font_system = self.illustrator.font_system.lock().unwrap();
-				painter
-					.draw_glyphon(&mut font_system, [].into_iter())
-					.draw_pixmap([].into_iter())
+				painter.draw_pixmap([].into_iter())
 			}
 		} else {
-			let mut font_system = self.illustrator.font_system.lock().unwrap();
-			painter
-				.draw_glyphon(&mut font_system, [].into_iter())
-				.draw_pixmap([].into_iter())
+			painter.draw_pixmap([].into_iter())
 		};
 
 		painter.draw_ui(|ctx| {
@@ -288,13 +293,13 @@ impl ViewHandle for ReaderView {
 
 			let menu_items = &[
 				MenuItem {
-					icon: lucide_icons::Icon::Library,
+					icon: Icon::Library,
 					description: "Library",
 					active: false,
 					action: MenuAction::Library,
 				},
 				MenuItem {
-					icon: lucide_icons::Icon::LogOut,
+					icon: Icon::LogOut,
 					description: "Exit",
 					active: false,
 					action: MenuAction::Exit,
@@ -337,7 +342,7 @@ impl ViewHandle for ReaderView {
 			if !is_open {
 				self.rects.push(top_panel.response.interact_rect);
 			} else {
-				self.rects.push(ctx.screen_rect())
+				self.rects.push(ctx.content_rect())
 			}
 
 			let bottom_panel = egui::TopBottomPanel::bottom("bottom")
@@ -383,7 +388,7 @@ impl ViewHandle for ReaderView {
 						ui.disable();
 					}
 
-					// TODO
+					// TODO: Settings
 				});
 				if !is_open {
 					self.rects.push(central_panel.response.interact_rect);
@@ -434,11 +439,13 @@ impl ViewHandle for ReaderView {
 
 	fn rescale(&mut self, scale_factor: f32) {
 		self.scale_factor = scale_factor;
+		let _ = self.illustrator.rescale(scale_factor);
 	}
 
 	fn resize(&mut self, width: u32, height: u32) {
 		self.screen_width = width;
 		self.screen_height = height;
+		let _ = self.illustrator.resize(width, height);
 	}
 }
 
