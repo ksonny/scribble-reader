@@ -18,6 +18,7 @@ use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 
 use bitflags::bitflags;
+use fixed::types::U26F6;
 use scribe::ScribeConfig;
 use scribe::library;
 use scribe::library::Location;
@@ -172,7 +173,7 @@ bitflags! {
 #[derive(Debug)]
 pub struct PageContent {
 	pub flags: PageFlags,
-	pub elements: Range<u32>,
+	pub elements: Range<U26F6>,
 	pub items: Vec<DisplayItem>,
 }
 
@@ -266,7 +267,7 @@ impl Worker {
 			log::warn!("Invalid book location {book_loc:?}, reset to first page");
 			Location {
 				spine: 0,
-				element: 0,
+				element: U26F6::ZERO,
 			}
 		};
 

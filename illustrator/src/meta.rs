@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use epub::doc::EpubDoc;
+use fixed::types::U26F6;
 use scribe::library::Location;
 use serde::Deserialize;
 use zip::ZipArchive;
@@ -107,7 +108,7 @@ impl Navigation {
 					title: Arc::new(nav_point.nav_label.text.clone()),
 					location: Location {
 						spine: *spine as u32,
-						element: 0,
+						element: U26F6::ZERO,
 					},
 				});
 			} else {
@@ -126,7 +127,7 @@ impl Navigation {
 pub(crate) struct BookSpineItem {
 	pub(crate) index: u32,
 	pub(crate) idref: String,
-	pub(crate) elements: Range<u32>,
+	pub(crate) elements: Range<U26F6>,
 }
 
 #[allow(unused)]
@@ -175,7 +176,7 @@ impl BookMeta {
 				items.push(BookSpineItem {
 					index: index as u32,
 					idref: item.idref,
-					elements: 0..node_count,
+					elements: U26F6::ZERO..U26F6::from_num(node_count),
 				});
 				builder = tree.into_builder();
 			}

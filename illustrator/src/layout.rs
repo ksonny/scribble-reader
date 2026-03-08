@@ -4,6 +4,7 @@ use std::mem;
 use std::path::Path;
 use std::sync::Mutex;
 
+use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
@@ -555,7 +556,7 @@ impl PageBreaker {
 			page_offset: 0.,
 			page: PageContent {
 				flags: PageFlags::First,
-				elements: 0..0,
+				elements: U26F6::ZERO..U26F6::ZERO,
 				items: Vec::new(),
 			},
 			pages: Vec::new(),
@@ -568,7 +569,7 @@ impl PageBreaker {
 
 	fn add_content<TContent: Into<DisplayContent>>(
 		&mut self,
-		el: u32,
+		el: U26F6,
 		pos: taffy::Point<f32>,
 		size: taffy::Size<f32>,
 		content: TContent,
@@ -669,6 +670,9 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 								.remove(&id)
 								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
 
+							// TODO: Calculate partial element
+							let element = U26F6::from_num(ctx.element);
+
 							let mut offset = 0.;
 							while !text.is_empty() {
 								debug_assert!(
@@ -693,7 +697,7 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 									);
 
 									breaker.add_content(
-										ctx.element,
+										element,
 										pos,
 										taffy::Size {
 											width: l.size.width,
@@ -725,7 +729,7 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 							resvg::render(&svg, transform, &mut pixmap.as_mut());
 
 							breaker.add_content(
-								ctx.element,
+								U26F6::from_num(ctx.element),
 								cursor,
 								l.size,
 								DisplayPixmap {
