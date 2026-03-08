@@ -182,14 +182,16 @@ impl<'a> StyleSettings<'a> {
 	}
 
 	fn page_height_padded(&self) -> f32 {
-		self.page_height as f32
+		(self.page_height as f32
 			- self.config.padding.top_em * self.font_size()
-			- self.config.padding.bottom_em * self.font_size()
+			- self.config.padding.bottom_em * self.font_size())
+		.floor()
 	}
 	fn page_width_padded(&self) -> f32 {
-		self.page_width as f32
+		(self.page_width as f32
 			- self.config.padding.left_em * self.font_size()
-			- self.config.padding.right_em * self.font_size()
+			- self.config.padding.right_em * self.font_size())
+		.floor()
 	}
 
 	fn padding_top(&self) -> f32 {
@@ -573,7 +575,10 @@ impl PageBreaker {
 	) {
 		debug_assert!(
 			self.page_height >= size.height,
-			"Tried adding content larger than page height"
+			"Tried adding content larger than page height s{} p{} t{}",
+			size.height,
+			self.page_height,
+			std::any::type_name::<TContent>()
 		);
 		let page_rem = self.page_remaining(pos.y);
 		if page_rem < size.height {
