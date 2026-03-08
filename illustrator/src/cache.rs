@@ -4,7 +4,7 @@ use scribe::library::Location;
 use sculpter::AtlasImage;
 
 use crate::PageContent;
-use crate::PagePosition;
+use crate::PageFlags;
 use crate::meta::BookMeta;
 use crate::meta::BookSpineItem;
 
@@ -50,7 +50,7 @@ impl PageContentCache {
 	pub(crate) fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
 		self.entry(loc)
 			.map(|(entry, page)| {
-				if page.position.contains(PagePosition::Last) {
+				if page.flags.contains(PageFlags::Last) {
 					book_meta
 						.spine
 						.get(entry.spine as usize + 1)
@@ -79,7 +79,7 @@ impl PageContentCache {
 	pub(crate) fn previous_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
 		self.entry(loc)
 			.map(|(entry, page)| {
-				if page.position.contains(PagePosition::First) {
+				if page.flags.contains(PageFlags::First) {
 					book_meta
 						.spine
 						.get(entry.spine.saturating_sub(1) as usize)

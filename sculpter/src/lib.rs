@@ -2,7 +2,6 @@ use std::fmt::Display;
 use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::marker::PhantomData;
 use std::ops::Range;
 
 use ab_glyph::VariableFont;
@@ -224,6 +223,8 @@ pub fn create_sculpter<'a>(
 		shaper,
 		printer,
 		glyphs: Vec::new(),
+		#[cfg(debug_assertions)]
+		glyph_set_id: 0,
 		styles: Vec::new(),
 		options,
 	})
@@ -236,14 +237,19 @@ pub struct SculpterInput<'a> {
 }
 
 #[derive(Debug)]
-pub struct SculpterHandle<'handle> {
+pub struct SculpterHandle {
 	glyphs_start: usize,
 	glyphs_end: usize,
-	phantom: PhantomData<&'handle Self>,
+	#[cfg(debug_assertions)]
+	glyph_set_id: u32,
 }
 
-impl SculpterHandle<'_> {
-	fn glyph_range(&self) -> Range<usize> {
+impl SculpterHandle {
+	pub fn is_empty(&self) -> bool {
+		self.glyph_range().is_empty()
+	}
+
+	pub fn glyph_range(&self) -> Range<usize> {
 		self.glyphs_start..self.glyphs_end
 	}
 }
@@ -264,20 +270,22 @@ pub enum SculpterShapeError {
 	FaceNotFound,
 }
 
-pub struct Sculpter<'a> {
-	faces: Vec<(u64, ShapeFaceRef, &'a FontEntry)>,
-	shaper: SculptureShaper<'a>,
-	printer: SculpturePrinter<'a>,
+pub struct Sculpter<'font> {
+	faces: Vec<(u64, ShapeFaceRef, &'font FontEntry)>,
+	shaper: SculptureShaper<'font>,
+	printer: SculpturePrinter<'font>,
 	glyphs: Vec<GlyphPlan>,
+	#[cfg(debug_assertions)]
+	glyph_set_id: u32,
 	styles: Vec<Style>,
 	options: SculpterOptions,
 }
 
-impl<'a> Sculpter<'a> {
-	pub fn shape<'input, 'handle>(
+impl Sculpter<'_> {
+	pub fn shape<'input>(
 		&mut self,
 		inputs: impl Iterator<Item = SculpterInput<'input>>,
-	) -> Result<SculpterHandle<'handle>, SculpterShapeError> {
+	) -> Result<SculpterHandle, SculpterShapeError> {
 		let glyphs_start = self.glyphs.len();
 		for SculpterInput { style, input } in inputs {
 			let font_opts = style.font_opts;
@@ -309,9 +317,9 @@ impl<'a> Sculpter<'a> {
 		let glyphs_end = self.glyphs.len();
 
 		Ok(SculpterHandle {
+			glyph_set_id: self.glyph_set_id,
 			glyphs_start,
 			glyphs_end,
-			phantom: PhantomData,
 		})
 	}
 }
@@ -322,8 +330,13 @@ pub struct MeasureResult {
 	pub lines: u32,
 }
 
-impl<'a> Sculpter<'a> {
-	pub fn measure(&self, handle: &SculpterHandle<'_>, width_px: u32) -> MeasureResult {
+impl Sculpter<'_> {
+	pub fn measure(&self, handle: &SculpterHandle, width_px: u32) -> MeasureResult {
+		debug_assert_eq!(
+			self.glyph_set_id, handle.glyph_set_id,
+			"Glyph set missmatch"
+		);
+
 		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
 
 		let lines_iter = ShapeLines::new(
@@ -378,16 +391,20 @@ pub enum SculpterPrinterError {
 	ResizeAtlasTextureFailed,
 }
 
-impl<'a> Sculpter<'a> {
+impl Sculpter<'_> {
 	pub fn render_block(
 		&mut self,
-		handle: &mut SculpterHandle<'_>,
+		handle: &mut SculpterHandle,
 		width_px: u32,
 		height_px: u32,
-		empty_line_height_px: u32,
+		empty_line_height_px: I26F6,
 	) -> Result<TextBlock, SculpterPrinterError> {
+		debug_assert_eq!(
+			self.glyph_set_id, handle.glyph_set_id,
+			"Glyph set missmatch"
+		);
+
 		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
-		let empty_line_height = I26F6::from_num(empty_line_height_px);
 
 		let mut output = Vec::new();
 		let mut block_height = I26F6::ZERO;
@@ -399,7 +416,7 @@ impl<'a> Sculpter<'a> {
 		);
 		for line in lines_iter {
 			if line.glyphs.is_empty() {
-				block_height += empty_line_height;
+				block_height += empty_line_height_px;
 				continue;
 			}
 
@@ -412,10 +429,10 @@ impl<'a> Sculpter<'a> {
 			if block_height + font_height > height_px {
 				break;
 			}
-			let x_origin = I26F6::ZERO;
-			let y_origin = block_height + font_height;
+			block_height += font_height;
 
-			block_height += font_height * line_style.line_height_em;
+			let x_origin = I26F6::ZERO;
+			let y_origin = block_height;
 
 			handle.glyphs_start += line.len();
 			self.printer.print_line(
@@ -425,12 +442,47 @@ impl<'a> Sculpter<'a> {
 				self.options.min_raster_px,
 				&mut output,
 			)?;
+
+			let line_space = font_height * (line_style.line_height_em - I26F6::ONE);
+			if block_height + line_space > height_px {
+				break;
+			}
+			block_height += line_space;
 		}
 
 		Ok(TextBlock {
 			block_height,
 			glyphs: output,
 		})
+	}
+}
+
+impl Sculpter<'_> {
+	pub fn clear_glyphs(self) -> Self {
+		let Self {
+			faces,
+			shaper,
+			printer,
+			mut glyphs,
+			#[cfg(debug_assertions)]
+			glyph_set_id,
+			mut styles,
+			options,
+		} = self;
+
+		glyphs.clear();
+		styles.clear();
+
+		Self {
+			faces,
+			shaper,
+			printer,
+			glyphs,
+			#[cfg(debug_assertions)]
+			glyph_set_id: glyph_set_id + 1,
+			styles,
+			options,
+		}
 	}
 
 	pub fn write_glyph_atlas(&self, atlas: &mut AtlasImage) -> Result<(), SculpterPrinterError> {
