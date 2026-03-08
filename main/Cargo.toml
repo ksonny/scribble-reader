@@ -56,6 +56,7 @@ keystore_password = "password"
 name = "android.permission.MANAGE_EXTERNAL_STORAGE"
 
 [package.metadata.android]
+package = "rust.lotrax.scribblereader"
 build_targets = ["aarch64-linux-android"]
 assets = "assets"
 
