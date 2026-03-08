@@ -671,8 +671,10 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
 
 							// TODO: Calculate partial element
-							let element = U26F6::from_num(ctx.element);
+							let el = U26F6::from_num(ctx.element);
+							let glyph_len = U26F6::from_num(text.glyph_range().len());
 
+							let mut page_added = false;
 							let mut offset = 0.;
 							while !text.is_empty() {
 								debug_assert!(
@@ -680,8 +682,9 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 									"Accumulated block height exceeded measured height"
 								);
 
-								let pos = cursor + taffy::Point { x: 0., y: offset };
+								let glyph_rem = text.glyph_range().len();
 
+								let pos = cursor + taffy::Point { x: 0., y: offset };
 								let page_rem = breaker.page_remaining(pos.y);
 								let render = sculpter.render_block(
 									&mut text,
@@ -696,8 +699,10 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 										"Block exceeds remaining space {block_height} >= {page_rem}"
 									);
 
+									let part_el =
+										U26F6::ONE - (U26F6::from_num(glyph_rem) / glyph_len);
 									breaker.add_content(
-										element,
+										el + part_el,
 										pos,
 										taffy::Size {
 											width: l.size.width,
@@ -706,9 +711,16 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 										render,
 									);
 									offset += block_height;
-								} else {
+									page_added = false;
+								} else if !page_added {
 									// Wasn't enough to fit any lines in, add page
 									breaker.add_page(pos.y);
+									page_added = true;
+								} else {
+									log::warn!(
+										"Failed to fit single line on page, skip section {el}"
+									);
+									break;
 								}
 							}
 						}

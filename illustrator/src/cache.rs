@@ -110,10 +110,14 @@ impl PageContentCache {
 	}
 
 	pub(crate) fn insert(&mut self, spine_item: &BookSpineItem, pages: Vec<PageContent>) {
-		debug_assert!(
-			pages.iter().is_sorted_by_key(|p| p.elements.start),
-			"Pages not sorted"
-		);
+		#[cfg(debug_assertions)]
+		if !pages.iter().is_sorted_by_key(|p| p.elements.start) {
+			let starts = pages
+				.iter()
+				.map(|p| (p.elements.start, p.elements.end))
+				.collect::<Vec<_>>();
+			panic!("Pages in chapter not sorted {starts:?}");
+		}
 
 		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
 			spine: spine_item.index,
