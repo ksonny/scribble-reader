@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::mem;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -7,6 +8,7 @@ use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
 use scribe::settings::FontConfig;
+use sculpter::AtlasImage;
 use sculpter::Axis;
 use sculpter::Family;
 use sculpter::Fixed;
@@ -15,6 +17,7 @@ use sculpter::FontStyle;
 use sculpter::Sculpter;
 use sculpter::SculpterHandle;
 use sculpter::SculpterInput;
+use sculpter::SculpterPrinterError;
 use sculpter::Variation;
 use taffy::prelude::*;
 use zip::ZipArchive;
@@ -23,7 +26,7 @@ use crate::DisplayContent;
 use crate::DisplayItem;
 use crate::DisplayPixmap;
 use crate::PageContent;
-use crate::PagePosition;
+use crate::PageFlags;
 use crate::Params;
 use crate::html_parser::EdgeRef;
 use crate::html_parser::NodeTreeBuilder;
@@ -55,6 +58,10 @@ pub enum IllustratorLayoutError {
 	MissingBody,
 	#[error("Scale svg failed")]
 	ScaleSvgFailed,
+	#[error("Missing content for text node")]
+	MissingTextContent(NodeId),
+	#[error("Missing content for svg node")]
+	MissingSvgContent(NodeId),
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -170,7 +177,7 @@ impl<'a> StyleSettings<'a> {
 		self.config.font_size * self.scale
 	}
 
-	fn line_height(&self) -> f32 {
+	fn min_line_height(&self) -> f32 {
 		self.config.line_height * self.config.font_size * self.scale
 	}
 
@@ -250,6 +257,7 @@ pub(crate) fn into_font_options<'a>(value: &'a FontConfig) -> FontOptions<'a> {
 
 enum Edge {
 	Open(NodeId),
+	#[allow(unused)]
 	Close(NodeId),
 }
 
@@ -329,16 +337,16 @@ impl NodeContext {
 }
 
 pub(crate) struct PageLayouterEmpty;
-pub(crate) struct PageLayouterLoaded<'handle> {
-	content: NodeId,
-	texts: HashMap<NodeId, SculpterHandle<'handle>>,
+pub(crate) struct PageLayouterLoaded {
+	content_id: NodeId,
+	texts: HashMap<NodeId, SculpterHandle>,
 	svgs: HashMap<NodeId, SvgRender>,
 }
 
 pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
 	builder: NodeTreeBuilder,
 	taffy_tree: taffy::TaffyTree<NodeContext>,
-	pub(crate) sculpter: Sculpter<'a>,
+	sculpter: Sculpter<'a>,
 	state: TState,
 }
 
@@ -352,12 +360,12 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 		}
 	}
 
-	pub(crate) fn load<'handle, R: io::Seek + io::Read + Sync + Send>(
+	pub(crate) fn load<R: io::Seek + io::Read + Sync + Send>(
 		self,
 		archive: &mut ZipArchive<R>,
 		path: &Path,
 		settings: &StyleSettings<'a>,
-	) -> Result<PageLayouter<'a, PageLayouterLoaded<'handle>>, IllustratorLayoutError> {
+	) -> Result<PageLayouter<'a, PageLayouterLoaded>, IllustratorLayoutError> {
 		let Self {
 			builder,
 			mut taffy_tree,
@@ -377,7 +385,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 		let page_height = settings.page_height_padded();
 		let page_width = settings.page_width_padded();
 
-		let content: NodeId = taffy_tree.new_leaf(Style {
+		let content_id = taffy_tree.new_leaf(Style {
 			size: taffy::Size {
 				width: length(page_width),
 				height: auto(),
@@ -385,7 +393,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 			..Default::default()
 		})?;
 
-		let mut current = content;
+		let mut current = content_id;
 
 		let mut styles = Vec::new();
 		let mut inputs = Vec::new();
@@ -486,7 +494,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 		let builder = node_tree.into_builder();
 
 		taffy_tree.compute_layout_with_measure(
-			content,
+			content_id,
 			taffy::Size::MAX_CONTENT,
 			|known_dimensions, available_space, node_id, _node_context, _style| match texts
 				.get(&node_id)
@@ -514,7 +522,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 			taffy_tree,
 			sculpter,
 			state: PageLayouterLoaded {
-				content,
+				content_id,
 				texts,
 				svgs,
 			},
@@ -522,143 +530,236 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 	}
 }
 
-impl<'a> PageLayouter<'a, PageLayouterLoaded<'_>> {
-	pub(crate) fn pages(
-		&mut self,
-		settings: &StyleSettings<'a>,
-	) -> Result<Vec<PageContent>, IllustratorLayoutError> {
-		let page_height = settings.page_height_padded();
-		let padding_top = settings.padding_top();
+struct PageBreaker {
+	padding_left: f32,
+	padding_top: f32,
+	page_height: f32,
+
+	page_offset: f32,
+	page: PageContent,
+	pages: Vec<PageContent>,
+}
+
+impl PageBreaker {
+	fn new(settings: &StyleSettings<'_>) -> Self {
 		let padding_left = settings.padding_left();
+		let padding_top = settings.padding_top();
+		let page_height = settings.page_height_padded();
 
-		let mut page_end = 0.;
-		let mut offset = taffy::Point::<f32>::zero();
-		let mut pages = Vec::new();
-		let mut page = PageContent {
-			position: PagePosition::First,
-			index: 0,
-			elements: 0..0,
-			items: Vec::new(),
+		Self {
+			padding_left,
+			padding_top,
+			page_height,
+			page_offset: 0.,
+			page: PageContent {
+				flags: PageFlags::First,
+				elements: 0..0,
+				items: Vec::new(),
+			},
+			pages: Vec::new(),
+		}
+	}
+
+	fn page_remaining(&self, y: f32) -> f32 {
+		self.page_height - (y - self.page_offset)
+	}
+
+	fn add_content<TContent: Into<DisplayContent>>(
+		&mut self,
+		el: u32,
+		pos: taffy::Point<f32>,
+		size: taffy::Size<f32>,
+		content: TContent,
+	) {
+		debug_assert!(
+			self.page_height >= size.height,
+			"Tried adding content larger than page height"
+		);
+		let page_rem = self.page_remaining(pos.y);
+		if page_rem < size.height {
+			log::debug!("Add page {}", self.pages.len());
+			self.add_page(pos.y);
+		}
+
+		let local = crate::Position {
+			x: pos.x + self.padding_left,
+			y: pos.y - self.page_offset + self.padding_top,
 		};
+		self.page.items.push(DisplayItem {
+			pos: local,
+			size: size.into(),
+			content: content.into(),
+		});
+		self.page.elements.end = el;
+	}
 
-		let tree = &self.taffy_tree;
-		for edge in TaffyTreeIter::new(tree, self.state.content) {
+	fn add_page(&mut self, y: f32) {
+		let element = self.page.elements.end;
+		let page = mem::replace(
+			&mut self.page,
+			PageContent {
+				flags: PageFlags::empty(),
+				elements: element..element,
+				items: Vec::new(),
+			},
+		);
+		self.pages.push(page);
+		self.page_offset = y;
+	}
+
+	fn finish(self) -> Vec<PageContent> {
+		let Self {
+			mut page,
+			mut pages,
+			..
+		} = self;
+
+		if !page.items.is_empty() || pages.is_empty() {
+			page.flags.set(PageFlags::Last, true);
+			pages.push(page);
+		} else if let Some(last) = pages.last_mut() {
+			last.flags.set(PageFlags::Last, true);
+		}
+
+		pages
+	}
+}
+
+impl<'a> PageLayouter<'a, PageLayouterLoaded> {
+	pub(crate) fn layout(
+		self,
+		settings: &StyleSettings<'a>,
+	) -> Result<(PageLayouter<'a, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError> {
+		let Self {
+			builder,
+			mut taffy_tree,
+			mut sculpter,
+			state: PageLayouterLoaded {
+				content_id,
+				mut texts,
+				mut svgs,
+			},
+		} = self;
+
+		let min_line_height = Fixed::from_num(settings.min_line_height());
+
+		let mut breaker = PageBreaker::new(settings);
+		let mut cursor = taffy::Point::ZERO;
+
+		for edge in TaffyTreeIter::new(&taffy_tree, content_id) {
 			match edge {
 				Edge::Open(id) => {
-					let l = tree.layout(id)?;
-					offset = taffy::Point {
-						x: offset.x + l.location.x,
-						y: offset.y + l.location.y,
+					let l = taffy_tree.layout(id)?;
+					cursor = taffy::Point {
+						x: cursor.x + l.location.x,
+						y: cursor.y + l.location.y,
 					};
 
-					if let Some(ctx) = tree.get_node_context(id) {
-						page.elements.end = ctx.element;
-						let content = match ctx.content {
-							NodeContent::Text => {
-								if let Some(text) = self.state.texts.get_mut(&id) {
-									// TODO: Break block
-									let render = self.sculpter.render_block(
-										text,
-										l.size.width as u32,
-										l.size.height as u32,
-										settings.line_height() as u32,
-									)?;
-									Some(DisplayContent::Text(render))
+					let Some(ctx) = taffy_tree.get_node_context(id) else {
+						continue;
+					};
+					match ctx.content {
+						NodeContent::Text => {
+							let mut text = texts
+								.remove(&id)
+								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
+
+							let mut offset = 0.;
+							while !text.is_empty() {
+								debug_assert!(
+									offset <= l.size.height,
+									"Accumulated block height exceeded measured height"
+								);
+
+								let pos = cursor + taffy::Point { x: 0., y: offset };
+
+								let page_rem = breaker.page_remaining(pos.y);
+								let render = sculpter.render_block(
+									&mut text,
+									l.size.width as u32,
+									page_rem as u32,
+									min_line_height,
+								)?;
+								if render.block_height > Fixed::ZERO {
+									let block_height = render.block_height.to_num::<f32>();
+									debug_assert!(
+										block_height <= page_rem,
+										"Block exceeds remaining space {block_height} >= {page_rem}"
+									);
+
+									breaker.add_content(
+										ctx.element,
+										pos,
+										taffy::Size {
+											width: l.size.width,
+											height: block_height,
+										},
+										render,
+									);
+									offset += block_height;
 								} else {
-									None
+									// Wasn't enough to fit any lines in, add page
+									breaker.add_page(pos.y);
 								}
 							}
-							NodeContent::Svg => {
-								if let Some(SvgRender { scale, svg }) = self.state.svgs.get(&id) {
-									let pixmap_size = svg
-										.size()
-										.to_int_size()
-										.scale_by(*scale)
-										.ok_or(IllustratorLayoutError::ScaleSvgFailed)?;
-									let transform =
-										tiny_skia::Transform::from_scale(*scale, *scale);
-									let mut pixmap = tiny_skia::Pixmap::new(
-										pixmap_size.width(),
-										pixmap_size.height(),
-									)
-									.unwrap();
-									resvg::render(svg, transform, &mut pixmap.as_mut());
-
-									Some(DisplayContent::Pixmap(DisplayPixmap {
-										pixmap_width: pixmap.width(),
-										pixmap_height: pixmap.height(),
-										pixmap_rgba: pixmap.take(),
-									}))
-								} else {
-									None
-								}
-							}
-							NodeContent::Block => None,
-						};
-
-						if let Some(content) = content {
-							let content_end = offset.y + l.size.height;
-							if content_end - page_end > page_height {
-								log::debug!("Page break at el {}", page.elements.end,);
-
-								let index = page.index + 1;
-								let elements_end = page.elements.end;
-								pages.push(page);
-								page = PageContent {
-									position: PagePosition::empty(),
-									index,
-									elements: elements_end..elements_end,
-									items: Vec::new(),
-								};
-								page_end = offset.y;
-							}
-
-							page.items.push(DisplayItem {
-								pos: taffy::Point {
-									x: padding_left + offset.x,
-									y: padding_top + offset.y - page_end,
-								}
-								.into(),
-								size: l.size.into(),
-								content,
-							});
 						}
-					}
+						NodeContent::Svg => {
+							let SvgRender { scale, svg } = svgs
+								.remove(&id)
+								.ok_or(IllustratorLayoutError::MissingSvgContent(id))?;
+
+							let pixmap_size = svg
+								.size()
+								.to_int_size()
+								.scale_by(scale)
+								.ok_or(IllustratorLayoutError::ScaleSvgFailed)?;
+							let transform = tiny_skia::Transform::from_scale(scale, scale);
+							let mut pixmap =
+								tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height())
+									.unwrap();
+							resvg::render(&svg, transform, &mut pixmap.as_mut());
+
+							breaker.add_content(
+								ctx.element,
+								cursor,
+								l.size,
+								DisplayPixmap {
+									pixmap_width: pixmap.width(),
+									pixmap_height: pixmap.height(),
+									pixmap_rgba: pixmap.take(),
+								},
+							);
+						}
+						NodeContent::Block => {}
+					};
 				}
 				Edge::Close(id) => {
-					let l = tree.layout(id)?;
-					offset = taffy::Point {
-						x: offset.x - l.location.x,
-						y: offset.y - l.location.y,
+					let l = taffy_tree.layout(id)?;
+					cursor = taffy::Point {
+						x: cursor.x - l.location.x,
+						y: cursor.y - l.location.y,
 					};
 				}
 			}
 		}
-		if !page.items.is_empty() || pages.is_empty() {
-			page.position.set(PagePosition::Last, true);
-			pages.push(page);
-		} else if let Some(last) = pages.last_mut() {
-			last.position.set(PagePosition::Last, true);
-		}
-		log::trace!("Generated {} pages", pages.len());
-		debug_assert!(!pages.is_empty(), "Must have at least one page per chapter");
 
-		Ok(pages)
-	}
+		taffy_tree.clear();
+		let sculpter = sculpter.clear_glyphs();
 
-	pub(crate) fn reset(self) -> PageLayouter<'a, PageLayouterEmpty> {
-		let Self {
-			builder,
-			taffy_tree,
-			sculpter,
-			..
-		} = self;
-		PageLayouter {
+		let layouter = PageLayouter {
 			builder,
 			taffy_tree,
 			sculpter,
 			state: PageLayouterEmpty,
-		}
+		};
+
+		Ok((layouter, breaker.finish()))
+	}
+}
+
+impl<TState> PageLayouter<'_, TState> {
+	pub fn write_glyph_atlas(&self, atlas: &mut AtlasImage) -> Result<(), SculpterPrinterError> {
+		self.sculpter.write_glyph_atlas(atlas)
 	}
 }
 

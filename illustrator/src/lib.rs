@@ -99,27 +99,6 @@ impl IllustratorHandle {
 	}
 }
 
-#[derive(Debug, Clone)]
-pub struct Params {
-	page_width: u32,
-	page_height: u32,
-	scale: f32,
-}
-
-pub trait Bell {
-	fn content_ready(&self, id: library::BookId, loc: Location);
-}
-
-#[derive(Clone)]
-struct SharedVec(Arc<Vec<u8>>);
-
-impl AsRef<[u8]> for SharedVec {
-	fn as_ref(&self) -> &[u8] {
-		let Self(data) = self;
-		data
-	}
-}
-
 #[derive(Debug)]
 pub struct Position {
 	pub x: f32,
@@ -163,6 +142,18 @@ pub enum DisplayContent {
 	Pixmap(DisplayPixmap),
 }
 
+impl From<TextBlock> for DisplayContent {
+	fn from(value: TextBlock) -> Self {
+		DisplayContent::Text(value)
+	}
+}
+
+impl From<DisplayPixmap> for DisplayContent {
+	fn from(value: DisplayPixmap) -> Self {
+		DisplayContent::Pixmap(value)
+	}
+}
+
 #[derive(Debug)]
 pub struct DisplayItem {
 	pub pos: Position,
@@ -172,7 +163,7 @@ pub struct DisplayItem {
 
 bitflags! {
 	#[derive(Debug)]
-	pub struct PagePosition: u8 {
+	pub struct PageFlags: u8 {
 		const First = 1;
 		const Last  = 1 << 1;
 	}
@@ -180,10 +171,30 @@ bitflags! {
 
 #[derive(Debug)]
 pub struct PageContent {
-	pub position: PagePosition,
-	pub index: u32,
+	pub flags: PageFlags,
 	pub elements: Range<u32>,
 	pub items: Vec<DisplayItem>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Params {
+	page_width: u32,
+	page_height: u32,
+	scale: f32,
+}
+
+pub trait Bell {
+	fn content_ready(&self, id: library::BookId, loc: Location);
+}
+
+#[derive(Clone)]
+struct SharedVec(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedVec {
+	fn as_ref(&self) -> &[u8] {
+		let Self(data) = self;
+		data
+	}
 }
 
 struct Worker {
@@ -235,9 +246,7 @@ impl Worker {
 			scale: 1.0,
 		};
 
-		let bytes = SharedVec(Arc::new(
-			fs::read(&book.path).inspect_err(|e| log::error!("Error: {e}"))?,
-		));
+		let bytes = SharedVec(Arc::new(fs::read(&book.path)?));
 
 		let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))?;
 		let (book_meta, toc) = read_book_meta(bytes, &mut archive)?;
@@ -284,8 +293,8 @@ impl Worker {
 
 					if clear_cache || !self.cache.lock().unwrap().is_cached(item) {
 						let settings = StyleSettings::new(&illustrator_config, &params);
-						let mut chapter_layout = layouter.load(&mut archive, path, &settings)?;
-						let pages = chapter_layout.pages(&settings)?;
+						let l = layouter.load(&mut archive, path, &settings)?;
+						let (l, pages) = l.layout(&settings)?;
 						{
 							let mut cache = self.cache.lock().unwrap();
 
@@ -295,18 +304,14 @@ impl Worker {
 							}
 
 							cache.insert(item, pages);
-							chapter_layout
-								.sculpter
-								.write_glyph_atlas(cache.atlas_mut())?;
+							l.write_glyph_atlas(cache.atlas_mut())?;
 						}
-						layouter = chapter_layout.reset();
+						layouter = l;
 					}
 
 					log::debug!("Save location {current_loc} in {}", book.id);
 					*self.shared_location.write().unwrap() = current_loc;
-					self.records
-						.record_book_state(book.id, Some(current_loc))
-						.inspect_err(|e| log::error!("Error: {e}"))?;
+					self.records.record_book_state(book.id, Some(current_loc))?;
 					bell.content_ready(book.id, current_loc);
 
 					match req_rx.recv() {

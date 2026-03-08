@@ -55,7 +55,7 @@ pub(crate) struct AppView {
 
 impl AppView {
 	pub(crate) fn new(bell: AppBell) -> Self {
-		bell.send_event(AppEvent::OpenExperiments);
+		bell.send_event(AppEvent::OpenLibrary);
 		Self {
 			bell,
 			scale_factor: 1.0,

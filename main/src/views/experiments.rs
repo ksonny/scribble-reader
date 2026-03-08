@@ -132,7 +132,12 @@ impl OnAction<ToolAction> for ExperimentsView {
 						.unwrap();
 
 					let block = sculpter
-						.render_block(&mut handle, self.screen_width - 200, self.screen_height, 24)
+						.render_block(
+							&mut handle,
+							self.screen_width - 200,
+							self.screen_height,
+							Fixed::lit("24."),
+						)
 						.inspect_err(|err| log::error!("Error: {err}"))
 						.unwrap();
 
