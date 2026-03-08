@@ -52,10 +52,6 @@ crate-type = ["cdylib", "lib"]
 path = "./path/to/KeyStoreFile.jks"
 keystore_password = "password"
 
-[package.metadata.android.signing.dev-opt]
-path = "/home/ksonny/.android/debug.keystore"
-keystore_password = "android"
-
 [[package.metadata.android.uses_permission]]
 name = "android.permission.MANAGE_EXTERNAL_STORAGE"
 
