@@ -141,7 +141,7 @@ impl<'a> SculpturePrinter<'a> {
 					uv_size: [uv_w as u32, uv_h as u32],
 				});
 			}
-			x_pos += x_offset + x_advance;
+			x_pos += x_advance;
 		}
 		Ok(())
 	}
