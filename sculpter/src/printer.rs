@@ -48,13 +48,13 @@ impl AtlasImage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct GlyphIdent {
+struct GlyphKey {
 	face_ref: ShapeFaceRef,
 	glyph_id: GlyphId,
 	font_size: I26F6,
 }
 
-impl GlyphIdent {
+impl GlyphKey {
 	fn new(glyph: &GlyphPlan, font_size: I26F6) -> Self {
 		Self {
 			face_ref: glyph.face_ref,
@@ -72,7 +72,7 @@ struct GlyphMapEntry {
 pub(crate) struct SculpturePrinter<'a> {
 	fonts: Vec<ab_glyph::FontRef<'a>>,
 	allocator: BucketedAtlasAllocator,
-	glyph_map: BTreeMap<GlyphIdent, Option<GlyphMapEntry>>,
+	glyph_map: BTreeMap<GlyphKey, Option<GlyphMapEntry>>,
 	need_texture_refresh: bool,
 	max_texture_2d: Size,
 }
@@ -113,11 +113,11 @@ impl<'a> SculpturePrinter<'a> {
 			let x_offset = glyph.pos.x_offset * style.font_scale * px_per_pt;
 
 			let font_size = (style.font_size * px_per_pt).max(min_render_px);
-			let ident = GlyphIdent::new(glyph, font_size);
-			let entry = if let Some(entry) = self.glyph_map.get(&ident) {
+			let key = GlyphKey::new(glyph, font_size);
+			let entry = if let Some(entry) = self.glyph_map.get(&key) {
 				entry
 			} else {
-				self.alloc_glyph(ident)?
+				self.alloc_glyph(key)?
 			};
 
 			if let Some(GlyphMapEntry { alloc, outline }) = entry {
@@ -148,7 +148,7 @@ impl<'a> SculpturePrinter<'a> {
 
 	fn alloc_glyph(
 		&mut self,
-		ident: GlyphIdent,
+		ident: GlyphKey,
 	) -> Result<&Option<GlyphMapEntry>, SculpterPrinterError> {
 		let font = &self.fonts[ident.face_ref.0 as usize];
 
@@ -203,6 +203,11 @@ impl<'a> SculpturePrinter<'a> {
 				*image = GrayImage::from_raw(atlas_width, atlas_height, data)
 					.ok_or(SculpterPrinterError::ResizeAtlasTextureFailed)?;
 			};
+
+			if log::log_enabled!(log::Level::Debug) {
+				self.log_atlas_stats(log::Level::Debug);
+			}
+
 			for entry in self.glyph_map.values().flatten() {
 				let x0 = entry.alloc.rectangle.min.x as u32;
 				let y0 = entry.alloc.rectangle.min.y as u32;
@@ -214,5 +219,83 @@ impl<'a> SculpturePrinter<'a> {
 			}
 		}
 		Ok(())
+	}
+
+	fn log_atlas_stats(&self, level: log::Level) {
+		let mut cnt = 0;
+		let mut repeat = BTreeMap::new();
+		let mut size_repeat = BTreeMap::new();
+		for k in self.glyph_map.keys() {
+			cnt += 1;
+			let e: &mut usize = repeat.entry((k.face_ref, k.glyph_id)).or_default();
+			*e += 1;
+			let e: &mut usize = size_repeat
+				.entry((k.face_ref, k.glyph_id, k.font_size))
+				.or_default();
+			*e += 1;
+		}
+
+		let atlas_size = self.allocator.size();
+		let atlas_avail = I26F6::from_num(atlas_size.width * atlas_size.height);
+		let atlas_used = I26F6::from_num(self.allocator.allocated_space());
+		let atlas_perc = atlas_used / atlas_avail;
+		log::log!(level, "Atlas entries: {}", cnt);
+		log::log!(
+			level,
+			"Atlas size {}x{}, {} used",
+			atlas_size.width,
+			atlas_size.height,
+			atlas_perc
+		);
+
+		let mut face_rev_glyph = BTreeMap::new();
+		let repeat = {
+			let mut v = repeat.into_iter().collect::<Vec<_>>();
+			v.sort_by_key(|(_, n)| *n);
+			v
+		};
+		log::log!(level, "Glyphs repeated {}:", repeat.len());
+		for (i, ((face_ref, glyph_id), n)) in repeat.into_iter().rev().take(10).enumerate() {
+			let i = i + 1;
+			let rev_glyph = face_rev_glyph.entry(face_ref).or_insert_with(|| {
+				let font = &self.fonts[face_ref.0 as usize];
+				font.codepoint_ids().collect::<BTreeMap<_, _>>()
+			});
+			let c = rev_glyph.get(&glyph_id).unwrap_or(&' ');
+			log::log!(
+				level,
+				"{i}. f{} g{:04} '{}' {}",
+				face_ref.0,
+				glyph_id.0,
+				c,
+				n
+			);
+		}
+
+		let size_repeat = {
+			let mut v = size_repeat.into_iter().collect::<Vec<_>>();
+			v.sort_by_key(|(_, n)| *n);
+			v
+		};
+		log::log!(level, "Glyphs size repeated {}:", size_repeat.len());
+		for (i, ((face_ref, glyph_id, font_size), n)) in
+			size_repeat.into_iter().rev().take(10).enumerate()
+		{
+			let i = i + 1;
+			let rev_glyph = face_rev_glyph.entry(face_ref).or_insert_with(|| {
+				let font = &self.fonts[face_ref.0 as usize];
+				font.codepoint_ids().collect::<BTreeMap<_, _>>()
+			});
+			let c = rev_glyph.get(&glyph_id).unwrap_or(&' ');
+			log::log!(
+				level,
+				"{i}. f{} g{:04} s{} '{}' {}",
+				face_ref.0,
+				glyph_id.0,
+				font_size,
+				c,
+				n
+			);
+		}
 	}
 }
