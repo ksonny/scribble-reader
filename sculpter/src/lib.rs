@@ -144,7 +144,9 @@ pub struct FontStyle<'a> {
 
 // No options yet
 #[derive(Debug, Default)]
-pub struct SculpterOptions {}
+pub struct SculpterOptions {
+	pub round_to_pixel: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterCreateError {
@@ -428,7 +430,7 @@ impl Sculpter<'_> {
 
 			handle.glyphs_start += line.len();
 			self.printer
-				.print_line(x_origin, y_origin, line, &mut output)?;
+				.print_line(x_origin, y_origin, line, &mut output, &self.options)?;
 
 			let line_space = font_height * (line_style.line_height_em - I26F6::ONE);
 			if block_height + line_space > height_px {

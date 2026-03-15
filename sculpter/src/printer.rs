@@ -15,6 +15,7 @@ use image::GrayImage;
 use image::Pixel;
 
 use crate::DisplayGlyph;
+use crate::SculpterOptions;
 use crate::SculpterPrinterError;
 use crate::lines::StyledGlyphs;
 use crate::shaper::GlyphPlan;
@@ -107,6 +108,7 @@ impl<'a> SculpturePrinter<'a> {
 		y_origin: I26F6,
 		styled_glyphs: StyledGlyphs<'_>,
 		glyphs: &mut Vec<DisplayGlyph>,
+		options: &SculpterOptions,
 	) -> Result<(), SculpterPrinterError> {
 		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
 		let mut x_pos = x_origin;
@@ -117,7 +119,15 @@ impl<'a> SculpturePrinter<'a> {
 
 			let font_size = style.font_size * px_per_pt;
 			let sub_pixel = (x_pos + x_offset).frac();
-			let key = GlyphKey::new(glyph, font_size, sub_pixel);
+			let key = GlyphKey::new(
+				glyph,
+				font_size,
+				if !options.round_to_pixel {
+					sub_pixel
+				} else {
+					I26F6::ZERO
+				},
+			);
 			let entry = if let Some(entry) = self.glyph_map.get(&key) {
 				entry
 			} else {
