@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use chrono::serde::ts_seconds;
 use chrono::serde::ts_seconds_option;
+use fixed::types::U26F6;
 use rusqlite_migration::M;
 use rusqlite_migration::Migrations;
 use serde::Deserialize;
@@ -121,7 +122,7 @@ impl From<SecretBook> for library::Book {
 			added_at: value.added_at,
 			opened_at: value.opened_at,
 			spine: value.spine,
-			element: value.element,
+			element: value.element.map(U26F6::from_bits),
 		}
 	}
 }
@@ -313,7 +314,7 @@ impl RecordKeeper {
 			book_id: id.value(),
 			opened_at: Utc::now(),
 			spine: loc.map(|l| l.spine),
-			element: loc.map(|l| l.element),
+			element: loc.map(|l| U26F6::to_bits(l.element)),
 		};
 		stmt.execute(to_params_named(state)?.to_slice().as_slice())?;
 		Ok(())

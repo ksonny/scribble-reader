@@ -108,7 +108,7 @@ impl<'a> Iterator for ShapeLines<'a> {
 				(!matches!(g.br, BreakpointType::No)).then_some((
 					self.cursor + idx,
 					g.br,
-					(g.pos.x_advance + g.pos.x_offset) * s.font_scale * px_per_pt,
+					g.pos.x_advance * s.font_scale * px_per_pt,
 				))
 			})
 			.unwrap_or((glyphs_len, BreakpointType::No, I26F6::ZERO));
@@ -127,7 +127,7 @@ impl<'a> Iterator for ShapeLines<'a> {
 				&glyphs[self.cursor..br_idx],
 				self.styles,
 			)
-			.map(|(s, g)| (g.pos.x_offset + g.pos.x_advance) * s.font_scale * px_per_pt)
+			.map(|(s, g)| g.pos.x_advance * s.font_scale * px_per_pt)
 			.sum::<I26F6>();
 			if line_width + word_width > max_line_width {
 				return Some(StyledGlyphs::new(

@@ -4,6 +4,7 @@ use std::mem;
 use std::path::Path;
 use std::sync::Mutex;
 
+use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
@@ -404,6 +405,9 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 		let mut svg_buf = String::new();
 		let mut svgs = HashMap::new();
 
+		#[cfg(debug_assertions)]
+		let mut max_el_id = 0;
+
 		let mut node_iter = node_tree
 			.body_iter()
 			.ok_or(IllustratorLayoutError::MissingBody)?;
@@ -420,6 +424,14 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 						),
 						..Default::default()
 					};
+
+					#[cfg(debug_assertions)]
+					{
+						let el_id = el.id.value();
+						debug_assert!(max_el_id < el_id, "Non sequential element id in content");
+						max_el_id = el_id;
+					}
+
 					let node =
 						taffy_tree.new_leaf_with_context(style, NodeContext::svg(el.id.value()))?;
 					svgs.insert(node, SvgRender { scale, svg });
@@ -439,17 +451,28 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 					if let Some(text_style) = TextStyle::try_from(el.local_name()) {
 						styles.push((el.id, text_style))
 					}
-					if !inputs.is_empty() {
-						let node = taffy_tree.new_leaf_with_context(
-							Style::default(),
-							NodeContext::text(el.id.value()),
-						)?;
-						let handle = sculpter.shape(inputs.drain(..).map(|(tendril, style)| {
-							SculpterInput {
-								style: settings.text_style(style),
-								input: tendril,
-							}
-						}))?;
+
+					let text_el_id = inputs
+						.first()
+						.map(|(el_id, _, _)| crate::html_parser::NodeId::value(el_id));
+					if let Some(el_id) = text_el_id {
+						#[cfg(debug_assertions)]
+						{
+							debug_assert!(
+								max_el_id < el_id,
+								"Non sequential element id in content"
+							);
+							max_el_id = el_id;
+						}
+						let node = taffy_tree
+							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
+						let handle =
+							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
+								SculpterInput {
+									style: settings.text_style(style),
+									input: tendril,
+								}
+							}))?;
 						texts.insert(node, handle);
 						taffy_tree.add_child(current, node)?;
 					}
@@ -457,6 +480,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 						settings.element_style(el.local_name()),
 						NodeContext::block(el.id.value()),
 					)?;
+
 					taffy_tree.add_child(current, node)?;
 					current = node;
 				}
@@ -464,27 +488,39 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 					if styles.last().is_some_and(|(el_id, _)| *el_id == id) {
 						styles.pop();
 					}
-					if !inputs.is_empty() {
-						let node = taffy_tree.new_leaf_with_context(
-							Style::default(),
-							NodeContext::text(id.value()),
-						)?;
-						let handle = sculpter.shape(inputs.drain(..).map(|(tendril, style)| {
-							SculpterInput {
-								style: settings.text_style(style),
-								input: tendril,
-							}
-						}))?;
+
+					let text_el_id = inputs
+						.first()
+						.map(|(el_id, _, _)| crate::html_parser::NodeId::value(el_id));
+					if let Some(el_id) = text_el_id {
+						#[cfg(debug_assertions)]
+						{
+							debug_assert!(
+								max_el_id < el_id,
+								"Non sequential element id in content"
+							);
+							max_el_id = el_id;
+						}
+						let node = taffy_tree
+							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
+						let handle =
+							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
+								SculpterInput {
+									style: settings.text_style(style),
+									input: tendril,
+								}
+							}))?;
 						texts.insert(node, handle);
 						taffy_tree.add_child(current, node)?;
 					}
+
 					current = taffy_tree
 						.parent(current)
 						.ok_or(IllustratorLayoutError::UnexpectedExtraClose)?;
 				}
-				EdgeRef::Text(TextWrapper { t: Text { t }, .. }) => {
+				EdgeRef::Text(TextWrapper { t: Text { t }, id }) => {
 					let text_style = styles.last().map(|(_, s)| *s).unwrap_or_default();
-					inputs.push((t, text_style));
+					inputs.push((id, t, text_style));
 				}
 			}
 		}
@@ -555,7 +591,7 @@ impl PageBreaker {
 			page_offset: 0.,
 			page: PageContent {
 				flags: PageFlags::First,
-				elements: 0..0,
+				elements: U26F6::ZERO..U26F6::ZERO,
 				items: Vec::new(),
 			},
 			pages: Vec::new(),
@@ -568,7 +604,7 @@ impl PageBreaker {
 
 	fn add_content<TContent: Into<DisplayContent>>(
 		&mut self,
-		el: u32,
+		el: U26F6,
 		pos: taffy::Point<f32>,
 		size: taffy::Size<f32>,
 		content: TContent,
@@ -669,6 +705,10 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 								.remove(&id)
 								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
 
+							let el = U26F6::from_num(ctx.element);
+							let glyph_len = U26F6::from_num(text.glyph_range().len());
+
+							let mut page_added = false;
 							let mut offset = 0.;
 							while !text.is_empty() {
 								debug_assert!(
@@ -676,8 +716,9 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 									"Accumulated block height exceeded measured height"
 								);
 
-								let pos = cursor + taffy::Point { x: 0., y: offset };
+								let glyph_rem = text.glyph_range().len();
 
+								let pos = cursor + taffy::Point { x: 0., y: offset };
 								let page_rem = breaker.page_remaining(pos.y);
 								let render = sculpter.render_block(
 									&mut text,
@@ -692,8 +733,10 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 										"Block exceeds remaining space {block_height} >= {page_rem}"
 									);
 
+									let part_el =
+										U26F6::ONE - (U26F6::from_num(glyph_rem) / glyph_len);
 									breaker.add_content(
-										ctx.element,
+										el + part_el,
 										pos,
 										taffy::Size {
 											width: l.size.width,
@@ -702,9 +745,16 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 										render,
 									);
 									offset += block_height;
-								} else {
+									page_added = false;
+								} else if !page_added {
 									// Wasn't enough to fit any lines in, add page
 									breaker.add_page(pos.y);
+									page_added = true;
+								} else {
+									log::warn!(
+										"Failed to fit single line on page, skip section {el}"
+									);
+									break;
 								}
 							}
 						}
@@ -725,7 +775,7 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 							resvg::render(&svg, transform, &mut pixmap.as_mut());
 
 							breaker.add_content(
-								ctx.element,
+								U26F6::from_num(ctx.element),
 								cursor,
 								l.size,
 								DisplayPixmap {

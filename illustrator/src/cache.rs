@@ -1,5 +1,4 @@
-use std::ops::Range;
-
+use fixed::types::I26F6;
 use scribe::library::Location;
 use sculpter::AtlasImage;
 
@@ -13,7 +12,6 @@ const CACHE_CHAPTERS: usize = 5;
 #[derive(Debug, Default)]
 struct PageCacheEntry {
 	spine: u32,
-	elements: Range<u32>,
 	pages: Vec<PageContent>,
 }
 
@@ -112,14 +110,17 @@ impl PageContentCache {
 	}
 
 	pub(crate) fn insert(&mut self, spine_item: &BookSpineItem, pages: Vec<PageContent>) {
-		debug_assert!(
-			pages.iter().is_sorted_by_key(|p| p.elements.start),
-			"Pages not sorted"
-		);
+		#[cfg(debug_assertions)]
+		if !pages.iter().is_sorted_by_key(|p| p.elements.start) {
+			let starts = pages
+				.iter()
+				.map(|p| (p.elements.start, p.elements.end))
+				.collect::<Vec<_>>();
+			panic!("Pages in chapter not sorted {starts:?}");
+		}
 
 		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
 			spine: spine_item.index,
-			elements: spine_item.elements.clone(),
 			pages,
 		});
 		self.index += 1;
@@ -136,16 +137,15 @@ impl PageContentCache {
 			.flatten()
 			.find(|e| e.spine == loc.spine)?;
 
-		if loc.element == entry.elements.start {
-			Some((entry, entry.pages.first()?))
-		} else if loc.element >= entry.elements.end {
-			Some((entry, entry.pages.last()?))
+		let page = if loc.element == I26F6::ZERO {
+			entry.pages.first()?
 		} else {
-			let page = entry
+			entry
 				.pages
 				.iter()
-				.find(|p| p.elements.contains(&loc.element))?;
-			Some((entry, page))
-		}
+				.find(|p| p.elements.contains(&loc.element))
+				.or_else(|| entry.pages.last())?
+		};
+		Some((entry, page))
 	}
 }

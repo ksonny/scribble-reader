@@ -351,6 +351,8 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 			.add_font(fonts::OPEN_SANS_VF_TTF)?
 			.add_font(fonts::OPEN_SANS_ITALIC_VF_TTF)?
 			.add_fallback(fonts::NOTO_EMOJI_VF_TTF)?
+			.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
+			.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
 			.build();
 		Arc::new(fonts)
 	};

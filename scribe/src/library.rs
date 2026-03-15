@@ -6,6 +6,7 @@ use std::sync::RwLock;
 
 use chrono::DateTime;
 use chrono::Utc;
+use fixed::types::U26F6;
 
 #[allow(dead_code)]
 #[derive(Debug, Default, Clone, Copy)]
@@ -46,7 +47,7 @@ impl BookId {
 #[derive(Debug, Clone, Copy)]
 pub struct Location {
 	pub spine: u32,
-	pub element: u32,
+	pub element: U26F6,
 }
 
 impl Display for Location {
@@ -67,14 +68,14 @@ pub struct Book {
 	pub added_at: DateTime<Utc>,
 	pub opened_at: Option<DateTime<Utc>>,
 	pub spine: Option<u32>,
-	pub element: Option<u32>,
+	pub element: Option<U26F6>,
 }
 
 impl Book {
 	pub fn location(&self) -> Location {
 		Location {
 			spine: self.spine.unwrap_or(0),
-			element: self.element.unwrap_or(0),
+			element: self.element.unwrap_or(U26F6::ZERO),
 		}
 	}
 }
