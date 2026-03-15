@@ -90,6 +90,9 @@ impl<'a> SculptureShaper<'a> {
 		glyphs: &mut Vec<GlyphPlan>,
 	) -> Result<usize, SculpterShapeError> {
 		let mut buffer = self.buffer.take().unwrap_or_default();
+		buffer.set_flags(
+			rustybuzz::BufferFlags::BEGINNING_OF_TEXT & rustybuzz::BufferFlags::END_OF_TEXT,
+		);
 		buffer.push_str(input);
 		buffer.set_direction(rustybuzz::Direction::LeftToRight);
 		buffer.guess_segment_properties();
@@ -171,7 +174,6 @@ impl<'a> SculptureShaper<'a> {
 					.chars()
 					.next()
 					.expect("Failed to get original char");
-				log::info!("Find fallback for {}", c);
 				buffer.add(c, *cluster);
 			}
 
@@ -199,8 +201,18 @@ impl<'a> SculptureShaper<'a> {
 
 		self.buffer.replace(buffer);
 
-		if !invalid.is_empty() {
-			log::info!("Failed to shape {} glyphs", invalid.len());
+		if !invalid.is_empty() && log::log_enabled!(log::Level::Debug) {
+			let s = invalid
+				.keys()
+				.map(|cluster| {
+					let c_idx = input.floor_char_boundary(*cluster as usize);
+					input[c_idx..]
+						.chars()
+						.next()
+						.expect("Failed to get original char")
+				})
+				.collect::<String>();
+			log::debug!("Failed to shape {} glyphs: '{}'", invalid.len(), s);
 		}
 
 		Ok(())
