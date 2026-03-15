@@ -8,7 +8,7 @@ bitflags = "2.9.4"
 config.workspace = true
 epub.workspace = true
 fixed.workspace = true
-html5ever = "0.38.0"
+html5ever = "0.39.0"
 image.workspace = true
 imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 log.workspace = true
