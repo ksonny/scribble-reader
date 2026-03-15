@@ -440,17 +440,20 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 					if let Some(text_style) = TextStyle::try_from(el.local_name()) {
 						styles.push((el.id, text_style))
 					}
-					if !inputs.is_empty() {
-						let node = taffy_tree.new_leaf_with_context(
-							Style::default(),
-							NodeContext::text(el.id.value()),
-						)?;
-						let handle = sculpter.shape(inputs.drain(..).map(|(tendril, style)| {
-							SculpterInput {
-								style: settings.text_style(style),
-								input: tendril,
-							}
-						}))?;
+
+					let text_id = inputs
+						.first()
+						.map(|(el_id, _, _)| crate::html_parser::NodeId::value(el_id));
+					if let Some(text_id) = text_id {
+						let node = taffy_tree
+							.new_leaf_with_context(Style::default(), NodeContext::text(text_id))?;
+						let handle =
+							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
+								SculpterInput {
+									style: settings.text_style(style),
+									input: tendril,
+								}
+							}))?;
 						texts.insert(node, handle);
 						taffy_tree.add_child(current, node)?;
 					}
@@ -458,6 +461,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 						settings.element_style(el.local_name()),
 						NodeContext::block(el.id.value()),
 					)?;
+
 					taffy_tree.add_child(current, node)?;
 					current = node;
 				}
@@ -465,27 +469,31 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 					if styles.last().is_some_and(|(el_id, _)| *el_id == id) {
 						styles.pop();
 					}
-					if !inputs.is_empty() {
-						let node = taffy_tree.new_leaf_with_context(
-							Style::default(),
-							NodeContext::text(id.value()),
-						)?;
-						let handle = sculpter.shape(inputs.drain(..).map(|(tendril, style)| {
-							SculpterInput {
-								style: settings.text_style(style),
-								input: tendril,
-							}
-						}))?;
+
+					let text_id = inputs
+						.first()
+						.map(|(el_id, _, _)| crate::html_parser::NodeId::value(el_id));
+					if let Some(text_id) = text_id {
+						let node = taffy_tree
+							.new_leaf_with_context(Style::default(), NodeContext::text(text_id))?;
+						let handle =
+							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
+								SculpterInput {
+									style: settings.text_style(style),
+									input: tendril,
+								}
+							}))?;
 						texts.insert(node, handle);
 						taffy_tree.add_child(current, node)?;
 					}
+
 					current = taffy_tree
 						.parent(current)
 						.ok_or(IllustratorLayoutError::UnexpectedExtraClose)?;
 				}
-				EdgeRef::Text(TextWrapper { t: Text { t }, .. }) => {
+				EdgeRef::Text(TextWrapper { t: Text { t }, id }) => {
 					let text_style = styles.last().map(|(_, s)| *s).unwrap_or_default();
-					inputs.push((t, text_style));
+					inputs.push((id, t, text_style));
 				}
 			}
 		}
@@ -670,7 +678,6 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 								.remove(&id)
 								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
 
-							// TODO: Calculate partial element
 							let el = U26F6::from_num(ctx.element);
 							let glyph_len = U26F6::from_num(text.glyph_range().len());
 
