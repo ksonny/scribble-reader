@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use ab_glyph::Font;
 use ab_glyph::GlyphId;
 use ab_glyph::OutlinedGlyph;
+use ab_glyph::Point;
 use ab_glyph::PxScale;
 use etagere::Allocation;
 use etagere::BucketedAtlasAllocator;
@@ -48,18 +49,20 @@ impl AtlasImage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct GlyphIdent {
+struct GlyphKey {
 	face_ref: ShapeFaceRef,
 	glyph_id: GlyphId,
 	font_size: I26F6,
+	sub_pixel: I26F6,
 }
 
-impl GlyphIdent {
-	fn new(glyph: &GlyphPlan, font_size: I26F6) -> Self {
+impl GlyphKey {
+	fn new(glyph: &GlyphPlan, font_size: I26F6, sub_pixel: I26F6) -> Self {
 		Self {
 			face_ref: glyph.face_ref,
 			glyph_id: GlyphId(glyph.glyph_id),
 			font_size,
+			sub_pixel,
 		}
 	}
 }
@@ -72,7 +75,7 @@ struct GlyphMapEntry {
 pub(crate) struct SculpturePrinter<'a> {
 	fonts: Vec<ab_glyph::FontRef<'a>>,
 	allocator: BucketedAtlasAllocator,
-	glyph_map: BTreeMap<GlyphIdent, Option<GlyphMapEntry>>,
+	glyph_map: BTreeMap<GlyphKey, Option<GlyphMapEntry>>,
 	need_texture_refresh: bool,
 	max_texture_2d: Size,
 }
@@ -103,7 +106,6 @@ impl<'a> SculpturePrinter<'a> {
 		x_origin: I26F6,
 		y_origin: I26F6,
 		styled_glyphs: StyledGlyphs<'_>,
-		min_render_px: I26F6,
 		glyphs: &mut Vec<DisplayGlyph>,
 	) -> Result<(), SculpterPrinterError> {
 		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
@@ -111,23 +113,24 @@ impl<'a> SculpturePrinter<'a> {
 		for (style, glyph) in styled_glyphs {
 			let x_advance = glyph.pos.x_advance * style.font_scale * px_per_pt;
 			let x_offset = glyph.pos.x_offset * style.font_scale * px_per_pt;
+			let y_offset = glyph.pos.y_offset * style.font_scale * px_per_pt;
 
-			let font_size = (style.font_size * px_per_pt).max(min_render_px);
-			let ident = GlyphIdent::new(glyph, font_size);
-			let entry = if let Some(entry) = self.glyph_map.get(&ident) {
+			let font_size = style.font_size * px_per_pt;
+			let sub_pixel = (x_pos + x_offset).frac();
+			let key = GlyphKey::new(glyph, font_size, sub_pixel);
+			let entry = if let Some(entry) = self.glyph_map.get(&key) {
 				entry
 			} else {
-				self.alloc_glyph(ident)?
+				self.alloc_glyph(key)?
 			};
 
 			if let Some(GlyphMapEntry { alloc, outline }) = entry {
 				let bounds = outline.px_bounds();
-				let scale = ((style.font_size * px_per_pt) / font_size).to_num::<f32>();
 
-				let x = x_pos + x_offset + I26F6::from_num(bounds.min.x * scale);
-				let y = y_origin + I26F6::from_num(bounds.min.y * scale);
-				let w = bounds.width() * scale;
-				let h = bounds.height() * scale;
+				let x = x_pos + x_offset - sub_pixel + I26F6::from_num(bounds.min.x);
+				let y = y_origin + y_offset + I26F6::from_num(bounds.min.y);
+				let w = bounds.width();
+				let h = bounds.height();
 
 				let u = alloc.rectangle.min.x;
 				let v = alloc.rectangle.min.y;
@@ -148,15 +151,21 @@ impl<'a> SculpturePrinter<'a> {
 
 	fn alloc_glyph(
 		&mut self,
-		ident: GlyphIdent,
+		key: GlyphKey,
 	) -> Result<&Option<GlyphMapEntry>, SculpterPrinterError> {
-		let font = &self.fonts[ident.face_ref.0 as usize];
+		let font = &self.fonts[key.face_ref.0 as usize];
 
 		let units_per_em = font.units_per_em().unwrap();
 		let height = font.height_unscaled();
-		let scale = PxScale::from(ident.font_size.to_num::<f32>() * height / units_per_em);
+		let scale = PxScale::from(key.font_size.to_num::<f32>() * height / units_per_em);
 
-		if let Some(outline) = font.outline_glyph(ident.glyph_id.with_scale(scale)) {
+		let pos = Point {
+			x: key.sub_pixel.to_num(),
+			y: 0.,
+		};
+
+		if let Some(outline) = font.outline_glyph(key.glyph_id.with_scale_and_position(scale, pos))
+		{
 			let bounds = outline.px_bounds();
 			let margin = Self::ATLAS_MARGIN;
 			let size = size2(
@@ -175,14 +184,14 @@ impl<'a> SculpturePrinter<'a> {
 			};
 			self.need_texture_refresh = true;
 			self.glyph_map
-				.insert(ident.clone(), Some(GlyphMapEntry { alloc, outline }));
+				.insert(key.clone(), Some(GlyphMapEntry { alloc, outline }));
 			let entry = self
 				.glyph_map
-				.get(&ident)
+				.get(&key)
 				.expect("Missing entry after insert");
 			Ok(entry)
 		} else {
-			self.glyph_map.insert(ident.clone(), None);
+			self.glyph_map.insert(key, None);
 			Ok(&None)
 		}
 	}
@@ -203,6 +212,11 @@ impl<'a> SculpturePrinter<'a> {
 				*image = GrayImage::from_raw(atlas_width, atlas_height, data)
 					.ok_or(SculpterPrinterError::ResizeAtlasTextureFailed)?;
 			};
+
+			if log::log_enabled!(log::Level::Debug) {
+				self.log_atlas_stats(log::Level::Debug);
+			}
+
 			for entry in self.glyph_map.values().flatten() {
 				let x0 = entry.alloc.rectangle.min.x as u32;
 				let y0 = entry.alloc.rectangle.min.y as u32;
@@ -214,5 +228,83 @@ impl<'a> SculpturePrinter<'a> {
 			}
 		}
 		Ok(())
+	}
+
+	fn log_atlas_stats(&self, level: log::Level) {
+		let mut cnt = 0;
+		let mut repeat = BTreeMap::new();
+		let mut size_repeat = BTreeMap::new();
+		for k in self.glyph_map.keys() {
+			cnt += 1;
+			let e: &mut usize = repeat.entry((k.face_ref, k.glyph_id)).or_default();
+			*e += 1;
+			let e: &mut usize = size_repeat
+				.entry((k.face_ref, k.glyph_id, k.font_size))
+				.or_default();
+			*e += 1;
+		}
+
+		let atlas_size = self.allocator.size();
+		let atlas_avail = I26F6::from_num(atlas_size.width * atlas_size.height);
+		let atlas_used = I26F6::from_num(self.allocator.allocated_space());
+		let atlas_perc = atlas_used / atlas_avail;
+		log::log!(level, "Atlas entries: {}", cnt);
+		log::log!(
+			level,
+			"Atlas size {}x{}, {} used",
+			atlas_size.width,
+			atlas_size.height,
+			atlas_perc
+		);
+
+		let mut face_rev_glyph = BTreeMap::new();
+		let repeat = {
+			let mut v = repeat.into_iter().collect::<Vec<_>>();
+			v.sort_by_key(|(_, n)| *n);
+			v
+		};
+		log::log!(level, "Glyphs repeated {}:", repeat.len());
+		for (i, ((face_ref, glyph_id), n)) in repeat.into_iter().rev().take(10).enumerate() {
+			let i = i + 1;
+			let rev_glyph = face_rev_glyph.entry(face_ref).or_insert_with(|| {
+				let font = &self.fonts[face_ref.0 as usize];
+				font.codepoint_ids().collect::<BTreeMap<_, _>>()
+			});
+			let c = rev_glyph.get(&glyph_id).unwrap_or(&' ');
+			log::log!(
+				level,
+				"{i}. f{} g{:04} '{}' {}",
+				face_ref.0,
+				glyph_id.0,
+				c,
+				n
+			);
+		}
+
+		let size_repeat = {
+			let mut v = size_repeat.into_iter().collect::<Vec<_>>();
+			v.sort_by_key(|(_, n)| *n);
+			v
+		};
+		log::log!(level, "Glyphs size repeated {}:", size_repeat.len());
+		for (i, ((face_ref, glyph_id, font_size), n)) in
+			size_repeat.into_iter().rev().take(10).enumerate()
+		{
+			let i = i + 1;
+			let rev_glyph = face_rev_glyph.entry(face_ref).or_insert_with(|| {
+				let font = &self.fonts[face_ref.0 as usize];
+				font.codepoint_ids().collect::<BTreeMap<_, _>>()
+			});
+			let c = rev_glyph.get(&glyph_id).unwrap_or(&' ');
+			log::log!(
+				level,
+				"{i}. f{} g{:04} s{} '{}' {}",
+				face_ref.0,
+				glyph_id.0,
+				font_size,
+				c,
+				n
+			);
+		}
 	}
 }

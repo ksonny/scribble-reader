@@ -142,17 +142,9 @@ pub struct FontStyle<'a> {
 	pub line_height_em: Fixed,
 }
 
-pub struct SculpterOptions {
-	pub min_raster_px: I26F6,
-}
-
-impl Default for SculpterOptions {
-	fn default() -> Self {
-		Self {
-			min_raster_px: I26F6::lit("40.0"),
-		}
-	}
-}
+// No options yet
+#[derive(Debug, Default)]
+pub struct SculpterOptions {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterCreateError {
@@ -416,7 +408,7 @@ impl Sculpter<'_> {
 		);
 		for line in lines_iter {
 			if line.glyphs.is_empty() {
-				block_height += empty_line_height_px;
+				block_height += empty_line_height_px.round();
 				continue;
 			}
 
@@ -435,19 +427,15 @@ impl Sculpter<'_> {
 			let y_origin = block_height;
 
 			handle.glyphs_start += line.len();
-			self.printer.print_line(
-				x_origin,
-				y_origin,
-				line,
-				self.options.min_raster_px,
-				&mut output,
-			)?;
+			self.printer
+				.print_line(x_origin, y_origin, line, &mut output)?;
 
 			let line_space = font_height * (line_style.line_height_em - I26F6::ONE);
 			if block_height + line_space > height_px {
 				break;
 			}
-			block_height += line_space;
+			// Round to nearest pixel
+			block_height = (block_height + line_space).round();
 		}
 
 		Ok(TextBlock {
