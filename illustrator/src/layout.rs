@@ -405,6 +405,9 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 		let mut svg_buf = String::new();
 		let mut svgs = HashMap::new();
 
+		#[cfg(debug_assertions)]
+		let mut max_el_id = 0;
+
 		let mut node_iter = node_tree
 			.body_iter()
 			.ok_or(IllustratorLayoutError::MissingBody)?;
@@ -421,6 +424,14 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 						),
 						..Default::default()
 					};
+
+					#[cfg(debug_assertions)]
+					{
+						let el_id = el.id.value();
+						debug_assert!(max_el_id < el_id, "Non sequential element id in content");
+						max_el_id = el_id;
+					}
+
 					let node =
 						taffy_tree.new_leaf_with_context(style, NodeContext::svg(el.id.value()))?;
 					svgs.insert(node, SvgRender { scale, svg });
@@ -441,12 +452,20 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 						styles.push((el.id, text_style))
 					}
 
-					let text_id = inputs
+					let text_el_id = inputs
 						.first()
 						.map(|(el_id, _, _)| crate::html_parser::NodeId::value(el_id));
-					if let Some(text_id) = text_id {
+					if let Some(el_id) = text_el_id {
+						#[cfg(debug_assertions)]
+						{
+							debug_assert!(
+								max_el_id < el_id,
+								"Non sequential element id in content"
+							);
+							max_el_id = el_id;
+						}
 						let node = taffy_tree
-							.new_leaf_with_context(Style::default(), NodeContext::text(text_id))?;
+							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
 						let handle =
 							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
 								SculpterInput {
@@ -470,12 +489,20 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 						styles.pop();
 					}
 
-					let text_id = inputs
+					let text_el_id = inputs
 						.first()
 						.map(|(el_id, _, _)| crate::html_parser::NodeId::value(el_id));
-					if let Some(text_id) = text_id {
+					if let Some(el_id) = text_el_id {
+						#[cfg(debug_assertions)]
+						{
+							debug_assert!(
+								max_el_id < el_id,
+								"Non sequential element id in content"
+							);
+							max_el_id = el_id;
+						}
 						let node = taffy_tree
-							.new_leaf_with_context(Style::default(), NodeContext::text(text_id))?;
+							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
 						let handle =
 							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
 								SculpterInput {
