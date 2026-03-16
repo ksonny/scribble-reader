@@ -64,11 +64,7 @@ impl GlyphKey {
 		sub_pixel: I26F6,
 		options: &SculpterOptions,
 	) -> Self {
-		let sub_pixel = if !options.round_to_pixel {
-			sub_pixel
-		} else {
-			I26F6::ZERO
-		};
+		let sub_pixel = sub_pixel & options.atlas_sub_pixel_mask;
 
 		Self {
 			face_ref: glyph.face_ref,

@@ -18,6 +18,7 @@ use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 
 use bitflags::bitflags;
+use fixed::types::I26F6;
 use fixed::types::U26F6;
 use scribe::ScribeConfig;
 use scribe::library;
@@ -279,7 +280,9 @@ impl Worker {
 				&into_font_options(&illustrator_config.font_bold),
 				&into_font_options(&illustrator_config.font_italic),
 			],
-			SculpterOptions::default(),
+			SculpterOptions {
+				atlas_sub_pixel_mask: I26F6::from_bits(!0b1),
+			},
 		)?;
 		let mut layouter = PageLayouter::new(sculpter);
 		let mut clear_cache = false;

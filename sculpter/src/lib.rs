@@ -142,10 +142,20 @@ pub struct FontStyle<'a> {
 	pub line_height_em: Fixed,
 }
 
-// No options yet
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SculpterOptions {
-	pub round_to_pixel: bool,
+	/// Optimize atlas usage by masking out sub pixel bits
+	///
+	/// Only fraction bits are used.
+	pub atlas_sub_pixel_mask: I26F6,
+}
+
+impl Default for SculpterOptions {
+	fn default() -> Self {
+		Self {
+			atlas_sub_pixel_mask: I26F6::from_bits(!0),
+		}
+	}
 }
 
 #[derive(Debug, thiserror::Error)]
