@@ -295,7 +295,7 @@ impl Worker {
 					if clear_cache || !self.cache.lock().unwrap().is_cached(item) {
 						let settings = StyleSettings::new(&illustrator_config, &params);
 						let l = layouter.load(&mut archive, path, &settings)?;
-						let (l, pages) = l.layout(&settings)?;
+						let (mut l, pages) = l.layout(&settings)?;
 						{
 							let mut cache = self.cache.lock().unwrap();
 

@@ -475,7 +475,10 @@ impl Sculpter<'_> {
 		}
 	}
 
-	pub fn write_glyph_atlas(&self, atlas: &mut AtlasImage) -> Result<(), SculpterPrinterError> {
+	pub fn write_glyph_atlas(
+		&mut self,
+		atlas: &mut AtlasImage,
+	) -> Result<(), SculpterPrinterError> {
 		self.printer.write_glyph_atlas(atlas)
 	}
 }
