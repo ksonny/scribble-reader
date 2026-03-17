@@ -41,8 +41,18 @@ jobs:
           name: apks
           path: apks/*
 
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
+      - uses: hudsonm62/toml-action@v1
         with:
+          file: main/Cargo.toml
+          field: package.version
+        id: cargo_version
+
+
+      - uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v${{ steps.cargo_version.outputs.value }}
+          name: Scribble Reader v${{ steps.cargo_version.outputs.value }}
+          draft: true
           files: |
             apks/*.apk
