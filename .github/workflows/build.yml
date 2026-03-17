@@ -16,6 +16,7 @@ jobs:
           java-version: '25'
 
       - uses: android-actions/setup-android@v3
+        if: false
         with:
           cmdline-tools-version: 13114758
           packages: build-tools;35.0.1 ndk;29.0.14033849 platforms;android-35
