@@ -813,7 +813,10 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 }
 
 impl<TState> PageLayouter<'_, TState> {
-	pub fn write_glyph_atlas(&self, atlas: &mut AtlasImage) -> Result<(), SculpterPrinterError> {
+	pub fn write_glyph_atlas(
+		&mut self,
+		atlas: &mut AtlasImage,
+	) -> Result<(), SculpterPrinterError> {
 		self.sculpter.write_glyph_atlas(atlas)
 	}
 }

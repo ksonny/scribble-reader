@@ -58,7 +58,14 @@ struct GlyphKey {
 }
 
 impl GlyphKey {
-	fn new(glyph: &GlyphPlan, font_size: I26F6, sub_pixel: I26F6) -> Self {
+	fn new(
+		glyph: &GlyphPlan,
+		font_size: I26F6,
+		sub_pixel: I26F6,
+		options: &SculpterOptions,
+	) -> Self {
+		let sub_pixel = sub_pixel & options.atlas_sub_pixel_mask;
+
 		Self {
 			face_ref: glyph.face_ref,
 			glyph_id: GlyphId(glyph.glyph_id),
@@ -77,7 +84,7 @@ pub(crate) struct SculpturePrinter<'a> {
 	fonts: Vec<ab_glyph::FontRef<'a>>,
 	allocator: BucketedAtlasAllocator,
 	glyph_map: BTreeMap<GlyphKey, Option<GlyphMapEntry>>,
-	need_texture_refresh: bool,
+	write_queue: Vec<GlyphKey>,
 	max_texture_2d: Size,
 }
 
@@ -91,7 +98,7 @@ impl<'a> SculpturePrinter<'a> {
 			fonts: Vec::new(),
 			allocator: BucketedAtlasAllocator::new(size),
 			glyph_map: BTreeMap::new(),
-			need_texture_refresh: false,
+			write_queue: Vec::new(),
 			max_texture_2d,
 		}
 	}
@@ -119,15 +126,7 @@ impl<'a> SculpturePrinter<'a> {
 
 			let font_size = style.font_size * px_per_pt;
 			let sub_pixel = (x_pos + x_offset).frac();
-			let key = GlyphKey::new(
-				glyph,
-				font_size,
-				if !options.round_to_pixel {
-					sub_pixel
-				} else {
-					I26F6::ZERO
-				},
-			);
+			let key = GlyphKey::new(glyph, font_size, sub_pixel, options);
 			let entry = if let Some(entry) = self.glyph_map.get(&key) {
 				entry
 			} else {
@@ -192,13 +191,13 @@ impl<'a> SculpturePrinter<'a> {
 					.allocate(size)
 					.ok_or(SculpterPrinterError::GrowAtlasFailed)?
 			};
-			self.need_texture_refresh = true;
 			self.glyph_map
 				.insert(key.clone(), Some(GlyphMapEntry { alloc, outline }));
 			let entry = self
 				.glyph_map
 				.get(&key)
 				.expect("Missing entry after insert");
+			self.write_queue.push(key);
 			Ok(entry)
 		} else {
 			self.glyph_map.insert(key, None);
@@ -206,9 +205,17 @@ impl<'a> SculpturePrinter<'a> {
 		}
 	}
 
-	pub fn write_glyph_atlas(&self, image: &mut AtlasImage) -> Result<(), SculpterPrinterError> {
-		let AtlasImage(image) = image;
-		if self.need_texture_refresh {
+	pub fn write_glyph_atlas(
+		&mut self,
+		image: &mut AtlasImage,
+	) -> Result<(), SculpterPrinterError> {
+		if !self.write_queue.is_empty() {
+			let AtlasImage(image) = image;
+
+			if log::log_enabled!(log::Level::Debug) {
+				self.log_atlas_stats(log::Level::Debug);
+			}
+
 			let atlas_size = self.allocator.size();
 			let atlas_width = atlas_size.width as u32;
 			let atlas_height = atlas_size.height as u32;
@@ -221,20 +228,32 @@ impl<'a> SculpturePrinter<'a> {
 				data.resize(new_len, 0u8);
 				*image = GrayImage::from_raw(atlas_width, atlas_height, data)
 					.ok_or(SculpterPrinterError::ResizeAtlasTextureFailed)?;
-			};
 
-			if log::log_enabled!(log::Level::Debug) {
-				self.log_atlas_stats(log::Level::Debug);
-			}
+				// Glyph resize, refresh all glyphs
+				for entry in self.glyph_map.values().flatten() {
+					let x0 = entry.alloc.rectangle.min.x as u32;
+					let y0 = entry.alloc.rectangle.min.y as u32;
+					entry.outline.draw(|x, y, c| {
+						let c = U0F8::saturating_from_num(c);
+						let c = image::Luma([c.to_bits()]);
+						image.put_pixel(x0 + x, y0 + y, c);
+					});
+				}
+				self.write_queue.clear();
+			} else {
+				for key in self.write_queue.drain(..) {
+					let Some(Some(entry)) = self.glyph_map.get(&key) else {
+						continue;
+					};
 
-			for entry in self.glyph_map.values().flatten() {
-				let x0 = entry.alloc.rectangle.min.x as u32;
-				let y0 = entry.alloc.rectangle.min.y as u32;
-				entry.outline.draw(|x, y, c| {
-					let c = U0F8::saturating_from_num(c);
-					let c = image::Luma([c.to_bits()]);
-					image.put_pixel(x0 + x, y0 + y, c);
-				});
+					let x0 = entry.alloc.rectangle.min.x as u32;
+					let y0 = entry.alloc.rectangle.min.y as u32;
+					entry.outline.draw(|x, y, c| {
+						let c = U0F8::saturating_from_num(c);
+						let c = image::Luma([c.to_bits()]);
+						image.put_pixel(x0 + x, y0 + y, c);
+					});
+				}
 			}
 		}
 		Ok(())
