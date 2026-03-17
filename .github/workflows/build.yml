@@ -16,6 +16,7 @@ jobs:
           java-version: '25'
 
       - uses: android-actions/setup-android@v3
+        if: false
         with:
           cmdline-tools-version: 13114758
           packages: build-tools;35.0.1 ndk;29.0.14033849 platforms;android-35
@@ -41,8 +42,18 @@ jobs:
           name: apks
           path: apks/*
 
-      - uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
+      - uses: hudsonm62/toml-action@v1
         with:
+          file: main/Cargo.toml
+          field: package.version
+        id: cargo_version
+
+
+      - uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v${{ steps.cargo_version.outputs.value }}
+          name: Scribble Reader v${{ steps.cargo_version.outputs.value }}
+          draft: true
           files: |
             apks/*.apk
