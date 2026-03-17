@@ -1,7 +1,9 @@
 [package]
 name = "illustrator"
-version = "0.1.0"
+version = "0.1.1"
+authors = ["ksonny <ksonny@lotrax.org>"]
 edition = "2024"
+publish = false
 
 [dependencies]
 bitflags = "2.9.4"

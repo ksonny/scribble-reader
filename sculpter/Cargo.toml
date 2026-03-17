@@ -1,7 +1,9 @@
 [package]
 name = "sculpter"
-version = "0.1.0"
+version = "0.1.1"
+authors = ["ksonny <ksonny@lotrax.org>"]
 edition = "2024"
+publish = false
 
 [dependencies]
 ab_glyph = "0.2.32"

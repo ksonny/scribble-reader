@@ -1664,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "illustrator"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bitflags 2.11.0",
  "config",
@@ -3351,7 +3351,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scribble-reader"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "android_logger",
  "bitflags 2.11.0",
@@ -3385,7 +3385,7 @@ dependencies = [
 
 [[package]]
 name = "scribe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "config",
@@ -3416,7 +3416,7 @@ dependencies = [
 
 [[package]]
 name = "sculpter"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ab_glyph",
  "etagere",

@@ -1,7 +1,10 @@
 [package]
 name = "scribe"
-version = "0.1.0"
+version = "0.1.1"
+authors = ["ksonny <ksonny@lotrax.org>"]
 edition = "2024"
+publish = false
+
 
 [dependencies]
 chrono.workspace = true
