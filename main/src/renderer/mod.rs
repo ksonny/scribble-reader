@@ -87,12 +87,8 @@ impl Renderer<'_> {
 			.request_device(&wgpu::DeviceDescriptor {
 				label: None,
 				required_features: wgpu::Features::empty(),
-				#[cfg(target_os = "android")]
-				required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-					.using_resolution(adapter.limits()),
-				#[cfg(not(target_os = "android"))]
 				required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
-				memory_hints: wgpu::MemoryHints::MemoryUsage,
+				memory_hints: wgpu::MemoryHints::default(),
 				trace: wgpu::Trace::Off,
 				experimental_features: wgpu::ExperimentalFeatures::disabled(),
 			})
@@ -260,7 +256,7 @@ fn surface_format(
 	let format = cap
 		.formats
 		.iter()
-		.find(|f| matches!(*f, wgpu::TextureFormat::Rgba8Unorm))
+		.find(|f| !f.is_srgb())
 		.or_else(|| cap.formats.first())
 		.cloned()
 		.ok_or(RendererError::NoTextureFormat)?;

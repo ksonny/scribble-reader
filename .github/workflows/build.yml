@@ -14,12 +14,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '25'
-
-      - uses: android-actions/setup-android@v3
-        if: false
-        with:
-          cmdline-tools-version: 13114758
-          packages: build-tools;35.0.1 ndk;29.0.14033849 platforms;android-35
+          cache: 'gradle'
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -29,18 +24,37 @@ jobs:
 
       - uses: baptiste0928/cargo-install@v3
         with:
-          crate: cargo-apk
+          crate: cargo-ndk
 
-      - name: build apk
+      - env:
+          KEYSTORE_PROPERTIES: ${{ github.workspace }}/app-android/keystore.properties
+          SIGNING_STORE_FILE: ${{ github.workspace }}/scribblereader.keystore
+          SIGNING_STORE_PASSWD: ${{ secrets.SIGNING_STORE_PASSWD }}
+          SIGNING_KEY_ALIAS: scribblereader
+          SIGNING_KEY_PASSWD: ${{ secrets.SIGNING_KEY_PASSWD }}
+          SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
         run: |
-          cargo apk build --package scribble-reader --lib
-          mkdir -p apks
-          mv target/debug/apk/scribble-reader.apk apks/scribble-reader_debug.apk
+          cat << EOF > $KEYSTORE_PROPERTIES
+          storeFile=$SIGNING_STORE_FILE
+          storePassword=$SIGNING_STORE_PASSWD
+          keyAlias=$SIGNING_KEY_ALIAS
+          keyPassword=$SIGNING_KEY_PASSWD
+          EOF
+          echo "$SIGNING_KEYSTORE" | base64 -di > "$SIGNING_STORE_FILE"
+
+      - name: build app
+        run: |
+          cd app-android/
+          cargo ndk -t aarch64-linux-android -t x86_64-linux-android -o app/src/main/jniLibs/ build
+          ./gradlew build
+          cd ..
+          mkdir -p apk
+          mv app-android/app/build/outputs/apk/release/app-release.apk apk/scribblereader.apk
 
       - uses: actions/upload-artifact@v6
         with:
-          name: apks
-          path: apks/*
+          name: scribblereader
+          path: apk/*
 
       - uses: hudsonm62/toml-action@v1
         with:
@@ -56,4 +70,4 @@ jobs:
           name: Scribble Reader v${{ steps.cargo_version.outputs.value }}
           draft: true
           files: |
-            apks/*.apk
+            apk/*.apk

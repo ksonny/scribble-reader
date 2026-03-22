@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["main", "illustrator", "scribe", "sculpter"]
+members = ["main", "illustrator", "scribe", "sculpter", "app-android"]
 default-members = ["main"]
 
 [workspace.dependencies]
@@ -13,11 +13,13 @@ illustrator = { version = "0.1.0", path = "./illustrator" }
 image = { version = "0.25.10", features = ["png", "jpeg", "ico"] }
 log = "0.4.28"
 rayon = "1.11.0"
+scribble-reader = { version = "0.1.1", path = "./main" }
 scribe = { version = "0.1.0", path = "./scribe" }
 sculpter = { version = "0.1.0", path = "./sculpter" }
 serde = { version = "1.0.226", features = ["derive"] }
 thiserror = "2.0.17"
 ttf-parser = "0.25.1"
+winit = "0.30.13"
 
 [profile.dev-opt]
 inherits = "dev"
@@ -27,3 +29,9 @@ overflow-checks = false
 [profile.release]
 lto = "thin"
 
+[patch.crates-io]
+winit = { git = "https://github.com/ksonny/winit", rev = "e7cda559cd05923ad03fda1ca788ea4b8c62867c" }
+egui = { git = "https://github.com/ksonny/egui", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
+egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
+egui-winit = { git = "https://github.com/ksonny/egui", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
+egui_extras = { git = "https://github.com/ksonny/egui", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }

@@ -1,4 +1,4 @@
-#![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 mod fonts;
 mod fps_calculator;
@@ -21,8 +21,6 @@ use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
-#[cfg(target_os = "android")]
-use winit::platform::android::activity::AndroidApp;
 use winit::window::Window;
 
 use crate::fps_calculator::FpsCalculator;
@@ -112,7 +110,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 		};
 	}
 
-	fn resumed(&mut self, event_loop: &egui_winit::winit::event_loop::ActiveEventLoop) {
+	fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
 		log::info!("resumed");
 		let window = event_loop
 			.create_window(Window::default_attributes())
@@ -376,35 +374,4 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 	app.scribe.quit()?;
 
 	Ok(())
-}
-
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: AndroidApp) {
-	use android_logger::Config;
-	use scribe::settings::Paths;
-	use winit::platform::android::EventLoopBuilderExtAndroid;
-
-	android_logger::init_once(
-		Config::default()
-			.with_tag("scribble-reader")
-			.with_max_level(log::LevelFilter::Info),
-	);
-
-	let ext_data_path = app.external_data_path().unwrap();
-	let paths = Paths {
-		cache_path: ext_data_path.parent().unwrap().join("cache"),
-		config_path: ext_data_path.join("config"),
-		data_path: ext_data_path.join("data"),
-	};
-	let config = ScribeConfig::new(paths);
-
-	let event_loop = EventLoop::with_user_event()
-		.with_android_app(app)
-		.build()
-		.unwrap();
-	match start(event_loop, config) {
-		Ok(_) => {}
-		Err(e) => log::error!("Error: {e}"),
-	}
 }
