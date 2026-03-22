@@ -8,7 +8,7 @@ chrono = { version = "0.4.44", default-features = false, features = ["alloc", "c
 config = { version = "0.15.21", default-features = false, features = ["toml"] }
 env_logger = "0.11.8"
 epub = "2.1.4"
-fixed = "1.30.0"
+fixed = "1.31.0"
 illustrator = { version = "0.1.0", path = "./illustrator" }
 image = { version = "0.25.10", features = ["png", "jpeg", "ico"] }
 log = "0.4.28"
