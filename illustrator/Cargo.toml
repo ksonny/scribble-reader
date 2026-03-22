@@ -24,7 +24,7 @@ serde.workspace = true
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror.workspace = true
 ttf-parser.workspace = true
-zip = "8.2.0"
+zip = "8.3.1"
 
 
 [dev-dependencies]
