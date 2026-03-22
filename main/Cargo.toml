@@ -53,14 +53,14 @@ path = "./path/to/KeyStoreFile.jks"
 keystore_password = "password"
 
 [[package.metadata.android.uses_permission]]
-name = "android.permission.MANAGE_EXTERNAL_STORAGE"
+name = "android.permission.READ_EXTERNAL_STORAGE"
 
 [package.metadata.android]
 package = "rust.lotrax.scribblereader"
 build_targets = ["aarch64-linux-android"]
 
 [package.metadata.android.sdk]
-min_sdk_version = 23
+min_sdk_version = 33
 target_sdk_version = 35
 
 [[package.metadata.android.uses_feature]]
