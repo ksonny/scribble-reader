@@ -30,7 +30,7 @@ sculpter.workspace = true
 serde.workspace = true
 serde_rusqlite = "0.40.0"
 thiserror.workspace = true
-wgpu = "27.0.1"
+wgpu = "29.0.0"
 xdg = "3.0.0"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
