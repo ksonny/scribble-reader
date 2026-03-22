@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 ab_glyph = "0.2.32"
-etagere = "0.2.15"
+etagere = "0.3.0"
 fixed.workspace = true
 image.workspace = true
 log.workspace = true
