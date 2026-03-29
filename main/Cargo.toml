@@ -13,7 +13,7 @@ config.workspace = true
 dotenv = "0.15.0"
 egui = "0.33.3"
 egui-wgpu = "0.33.3"
-egui-winit = "0.33.3"
+egui-winit = "0.34.1"
 egui_extras = { version = "0.33.3", features = ["image"] }
 env_logger.workspace = true
 illustrator.workspace = true
