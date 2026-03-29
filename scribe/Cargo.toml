@@ -9,14 +9,14 @@ publish = false
 [dependencies]
 chrono.workspace = true
 config.workspace = true
-epub.workspace = true
-expand-tilde = "0.6.1"
 fixed.workspace = true
 image.workspace = true
 log.workspace = true
 quick-xml.workspace = true
-rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
-rusqlite_migration = "2.3.0"
+rusqlite.workspace = true
+rusqlite_migration.workspace = true
 serde.workspace = true
-serde_rusqlite = "0.40.0"
+serde_rusqlite.workspace = true
 thiserror.workspace = true
+wrangler.workspace = true
+zip.workspace = true

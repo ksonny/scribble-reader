@@ -6,26 +6,23 @@ edition = "2024"
 publish = false
 
 [dependencies]
-bitflags = "2.9.4"
+bitflags.workspace = true
 config.workspace = true
-epub.workspace = true
 fixed.workspace = true
-html5ever = "0.39.0"
-image.workspace = true
-imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+html5ever.workspace = true
+imagesize.workspace = true
 log.workspace = true
-mime = "0.3.17"
-quick-xml.workspace = true
-rayon.workspace = true
-resvg = { version = "0.47.0", default-features = false, features = ["raster-images"] }
+resvg.workspace = true
 scribe.workspace = true
 sculpter.workspace = true
-serde.workspace = true
-taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
+taffy.workspace = true
 thiserror.workspace = true
-ttf-parser.workspace = true
-zip = "8.3.1"
+zip.workspace = true
 
+mime = "0.3.17"
+epub = "2.1.5"
+serde.workspace = true
+quick-xml.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true

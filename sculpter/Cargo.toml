@@ -6,11 +6,11 @@ edition = "2024"
 publish = false
 
 [dependencies]
-ab_glyph = "0.2.32"
-etagere = "0.3.0"
+ab_glyph.workspace = true
+etagere.workspace = true
 fixed.workspace = true
 image.workspace = true
 log.workspace = true
-rustybuzz = "0.20.1"
+rustybuzz.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true

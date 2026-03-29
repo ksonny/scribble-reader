@@ -1,26 +1,53 @@
 [workspace]
 resolver = "3"
-members = ["main", "illustrator", "scribe", "sculpter", "app-android"]
+members = ["main", "illustrator", "scribe", "sculpter", "app-android", "wrangler"]
 default-members = ["main"]
 
 [workspace.dependencies]
+ab_glyph = "0.2.32"
+android_logger = "0.15.1"
+bitflags = { version = "2.10.0", features = ["bytemuck"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
 chrono = { version = "0.4.44", default-features = false, features = ["alloc", "clock", "now", "std", "serde"] }
 config = { version = "0.15.22", default-features = false, features = ["toml"] }
+dotenv = "0.15.0"
+egui = "0.33.3"
+egui-wgpu = "0.33.3"
+egui-winit = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["image"] }
 env_logger = "0.11.8"
-epub = "2.1.4"
+etagere = "0.3.0"
+expand-tilde = "0.6.1"
 fixed = "1.31.0"
-illustrator = { version = "0.1.0", path = "./illustrator" }
+html5ever = "0.39.0"
 image = { version = "0.25.10", features = ["png", "jpeg", "ico"] }
+imagesize = { version = "0.14.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+integer-sqrt = "0.1.5"
+jni = "0.22.4"
+lazy_static = "1.5.0"
 log = "0.4.28"
+lucide-icons = "0.575.0"
+pollster = "0.4.0"
 quick-xml = { version = "0.39.2", features = ["serialize"] }
-rayon = "1.11.0"
-scribble-reader = { version = "0.1.1", path = "./main" }
-scribe = { version = "0.1.0", path = "./scribe" }
-sculpter = { version = "0.1.0", path = "./sculpter" }
-serde = { version = "1.0.226", features = ["derive"] }
+resvg = { version = "0.47.0", default-features = false, features = ["raster-images"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
+rusqlite_migration = "2.3.0"
+rustybuzz = "0.20.1"
+serde = { version = "1.0.226", features = ["derive", "rc"] }
+serde_rusqlite = "0.42.0"
+taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror = "2.0.17"
 ttf-parser = "0.25.1"
+wgpu = "27.0.1"
 winit = "0.30.13"
+xdg = "3.0.0"
+zip = "8.4.0"
+
+illustrator = { path = "./illustrator" }
+scribble-reader = { path = "./main" }
+scribe = {  path = "./scribe" }
+sculpter = {  path = "./sculpter" }
+wrangler = { path = "./wrangler" }
 
 [profile.dev-opt]
 inherits = "dev"
