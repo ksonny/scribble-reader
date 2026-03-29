@@ -11,7 +11,7 @@ bytemuck = { version = "1.24.0", features = ["derive"] }
 chrono.workspace = true
 config.workspace = true
 dotenv = "0.15.0"
-egui = "0.33.3"
+egui = "0.34.1"
 egui-wgpu = "0.33.3"
 egui-winit = "0.33.3"
 egui_extras = { version = "0.33.3", features = ["image"] }
