@@ -12,6 +12,7 @@ fixed = "1.31.0"
 illustrator = { version = "0.1.0", path = "./illustrator" }
 image = { version = "0.25.10", features = ["png", "jpeg", "ico"] }
 log = "0.4.28"
+quick-xml = { version = "0.39.2", features = ["serialize"] }
 rayon = "1.11.0"
 scribble-reader = { version = "0.1.1", path = "./main" }
 scribe = { version = "0.1.0", path = "./scribe" }

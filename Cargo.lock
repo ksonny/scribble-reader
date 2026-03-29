@@ -3422,6 +3422,7 @@ dependencies = [
  "fixed",
  "image",
  "log",
+ "quick-xml",
  "rusqlite",
  "rusqlite_migration",
  "serde",

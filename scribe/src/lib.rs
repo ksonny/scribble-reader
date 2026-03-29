@@ -1,3 +1,4 @@
+pub mod epub;
 pub mod library;
 pub mod record_keeper;
 mod secret_storage;

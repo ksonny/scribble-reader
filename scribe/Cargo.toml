@@ -14,6 +14,7 @@ expand-tilde = "0.6.1"
 fixed.workspace = true
 image.workspace = true
 log.workspace = true
+quick-xml.workspace = true
 rusqlite = { version = "0.37.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
 serde.workspace = true
