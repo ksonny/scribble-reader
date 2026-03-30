@@ -18,5 +18,8 @@ rusqlite_migration.workspace = true
 serde.workspace = true
 serde_rusqlite.workspace = true
 thiserror.workspace = true
-wrangler.workspace = true
 zip.workspace = true
+
+mime = "0.3.17"
+epub = "2.1.5"
+expand-tilde = "0.6.1"

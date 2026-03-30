@@ -19,10 +19,5 @@ taffy.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 
-mime = "0.3.17"
-epub = "2.1.5"
-serde.workspace = true
-quick-xml.workspace = true
-
 [dev-dependencies]
 env_logger.workspace = true

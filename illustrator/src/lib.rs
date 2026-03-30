@@ -1,10 +1,10 @@
 mod cache;
 mod html_parser;
 mod layout;
-mod meta;
 mod svg;
 
 use std::fs;
+use std::io;
 use std::io::Cursor;
 use std::ops::Range;
 use std::sync::Arc;
@@ -16,11 +16,13 @@ use std::sync::mpsc::Sender;
 use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use bitflags::bitflags;
 use fixed::types::I26F6;
 use fixed::types::U26F6;
 use scribe::ScribeConfig;
+use scribe::epub;
 use scribe::library;
 use scribe::library::Location;
 use sculpter::SculpterFonts;
@@ -29,13 +31,12 @@ use sculpter::TextBlock;
 use zip::ZipArchive;
 
 use crate::cache::PageContentCache;
+use crate::html_parser::NodeTreeBuilder;
+use crate::html_parser::TreeBuilderError;
 use crate::layout::IllustratorLayoutError;
 use crate::layout::PageLayouter;
 use crate::layout::StyleSettings;
 use crate::layout::into_font_options;
-use crate::meta::IllustratorBookMetaError;
-use crate::meta::IllustratorToC;
-use crate::meta::read_book_meta;
 
 #[derive(Debug)]
 pub enum Request {
@@ -50,7 +51,7 @@ pub struct IllustratorHandle {
 	req_tx: Sender<Request>,
 	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
-	pub toc: Arc<RwLock<IllustratorToC>>,
+	navigation: Arc<RwLock<Arc<epub::Navigation>>>,
 	location: Arc<RwLock<Location>>,
 	cache: Arc<Mutex<PageContentCache>>,
 }
@@ -64,6 +65,10 @@ pub enum IllustratorRequestError {
 impl IllustratorHandle {
 	pub fn location(&self) -> Location {
 		*self.location.read().unwrap()
+	}
+
+	pub fn navigation(&self) -> Arc<epub::Navigation> {
+		self.navigation.read().unwrap().clone()
 	}
 
 	pub fn cache<'a>(&'a self) -> MutexGuard<'a, PageContentCache> {
@@ -203,7 +208,7 @@ struct Worker {
 	config: ScribeConfig,
 	fonts: Arc<SculpterFonts>,
 	cache: Arc<Mutex<PageContentCache>>,
-	shared_toc: Arc<RwLock<IllustratorToC>>,
+	shared_navigation: Arc<RwLock<Arc<epub::Navigation>>>,
 	shared_location: Arc<RwLock<Location>>,
 	records: scribe::record_keeper::RecordKeeper,
 }
@@ -224,8 +229,12 @@ pub enum IllustratorWorkerError {
 	SculpterCreate(#[from] sculpter::SculpterCreateError),
 	#[error("sculpter print error: {0}")]
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
-	#[error("book meta error: {0}")]
-	BookMeta(#[from] IllustratorBookMetaError),
+	#[error("epub error: {0}")]
+	Epub(#[from] epub::EpubError),
+	#[error(transparent)]
+	TreeBuilder(#[from] TreeBuilderError),
+	#[error("Missing resource {0}")]
+	MissingResource(epub::ResourceId),
 }
 
 impl From<std::io::Error> for IllustratorWorkerError {
@@ -251,18 +260,18 @@ impl Worker {
 		let bytes = SharedVec(Arc::new(fs::read(&book.path)?));
 
 		let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))?;
-		let (book_meta, toc) = read_book_meta(bytes, &mut archive)?;
-		if let Some(toc) = toc {
-			*self.shared_toc.write().unwrap() = toc;
-		}
-		log::info!(
-			"Opened book with {} resources, {} spine items",
-			book_meta.resources.len(),
-			book_meta.spine.len()
-		);
+		let (package, navigation) = {
+			let mut epub = epub::EpubMetadata::new(&mut archive);
+			let package = epub.package()?;
+			let navigation = epub.navigation()?;
+			(package, navigation)
+		};
+		let spine = count_spine_elements(package.clone(), &mut archive)?;
+		*self.shared_navigation.write().unwrap() = navigation.into();
+
 		self.cache.lock().unwrap().clear();
 		let book_loc = book.location();
-		let mut current_loc = if book_meta.spine_resource(book_loc).is_some() {
+		let mut current_loc = if package.spine.get(book_loc.spine as usize).is_some() {
 			book_loc
 		} else {
 			log::warn!("Invalid book location {book_loc:?}, reset to first page");
@@ -291,13 +300,20 @@ impl Worker {
 			let req = match req_rx.try_recv() {
 				Ok(req) => req,
 				Err(TryRecvError::Empty) => {
-					let (item, path) = book_meta
-						.spine_resource(current_loc)
-						.expect("On location without spine");
+					let item = &spine[current_loc.spine as usize];
+					let resource = package
+						.manifest
+						.get(&item.idref)
+						.expect("Unexpected missing resource");
 
 					if clear_cache || !self.cache.lock().unwrap().is_cached(item) {
 						let settings = StyleSettings::new(&illustrator_config, &params);
-						let l = layouter.load(&mut archive, path, &settings)?;
+						let l = layouter.load(
+							&mut archive,
+							package.package_root.as_path(),
+							resource.as_path(),
+							&settings,
+						)?;
 						let (mut l, pages) = l.layout(&settings)?;
 						{
 							let mut cache = self.cache.lock().unwrap();
@@ -331,18 +347,14 @@ impl Worker {
 			log::trace!("{req:?} {current_loc}");
 			match req {
 				Request::NextPage => {
-					current_loc = self
-						.cache
-						.lock()
-						.unwrap()
-						.next_page(&book_meta, current_loc);
+					current_loc = self.cache.lock().unwrap().next_page(&spine, current_loc);
 				}
 				Request::PreviousPage => {
 					current_loc = self
 						.cache
 						.lock()
 						.unwrap()
-						.previous_page(&book_meta, current_loc);
+						.previous_page(&spine, current_loc);
 				}
 				Request::Goto(loc) => {
 					current_loc = loc;
@@ -386,7 +398,7 @@ pub fn create_illustrator(
 	let fonts = fonts.clone();
 
 	let cache = Arc::new(Mutex::new(PageContentCache::default()));
-	let toc = Arc::new(RwLock::new(IllustratorToC::default()));
+	let navigation = Arc::new(RwLock::new(Arc::new(epub::Navigation::default())));
 	let location = Arc::new(RwLock::new(book.location()));
 
 	let (req_tx, req_rx) = channel();
@@ -396,7 +408,7 @@ pub fn create_illustrator(
 		fonts,
 		records,
 		cache: cache.clone(),
-		shared_toc: toc.clone(),
+		shared_navigation: navigation.clone(),
 		shared_location: location.clone(),
 	};
 
@@ -417,8 +429,52 @@ pub fn create_illustrator(
 	Ok(IllustratorHandle {
 		req_tx,
 		handle,
-		toc,
+		navigation,
 		location,
 		cache,
 	})
+}
+
+#[derive(Debug)]
+struct BookSpineItem {
+	pub(crate) index: u32,
+	pub(crate) idref: epub::ResourceId,
+	pub(crate) elements: Range<U26F6>,
+}
+
+fn count_spine_elements<R: io::Seek + io::Read>(
+	package: Arc<epub::Package>,
+	archive: &mut ZipArchive<R>,
+) -> Result<Vec<BookSpineItem>, IllustratorWorkerError> {
+	let start = Instant::now();
+
+	let spine = {
+		let mut builder = NodeTreeBuilder::new();
+		let mut items = Vec::new();
+		for (index, item) in package.spine.iter().enumerate() {
+			let resource = package
+				.manifest
+				.get(item)
+				.ok_or_else(|| IllustratorWorkerError::MissingResource(item.clone()))?;
+			let file = archive.by_path(resource.as_path())?;
+			let tree = builder.read_from(file)?;
+			let node_count = tree.tree.node_count();
+			items.push(BookSpineItem {
+				index: index as u32,
+				idref: item.clone(),
+				elements: U26F6::ZERO..U26F6::from_num(node_count),
+			});
+			builder = tree.into_builder();
+		}
+		items
+	};
+	let dur = Instant::now().duration_since(start);
+
+	log::info!(
+		"Opened {:?} in {}",
+		package.metadata.title.as_ref(),
+		dur.as_secs_f64()
+	);
+
+	Ok(spine)
 }

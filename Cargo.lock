@@ -1653,17 +1653,13 @@ dependencies = [
  "bitflags 2.11.0",
  "config",
  "env_logger",
- "epub",
  "fixed",
  "html5ever",
  "imagesize",
  "log",
- "mime",
- "quick-xml",
  "resvg",
  "scribe",
  "sculpter",
- "serde",
  "taffy",
  "thiserror 2.0.18",
  "zip 8.4.0",
@@ -3404,7 +3400,6 @@ dependencies = [
  "thiserror 2.0.18",
  "wgpu",
  "winit",
- "wrangler",
  "xdg",
 ]
 
@@ -3427,16 +3422,18 @@ version = "0.1.1"
 dependencies = [
  "chrono",
  "config",
+ "epub",
+ "expand-tilde",
  "fixed",
  "image",
  "log",
+ "mime",
  "quick-xml",
  "rusqlite",
  "rusqlite_migration",
  "serde",
  "serde_rusqlite",
  "thiserror 2.0.18",
- "wrangler",
  "zip 8.4.0",
 ]
 
@@ -5118,13 +5115,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "wrangler"
-version = "0.1.0"
-dependencies = [
- "log",
 ]
 
 [[package]]

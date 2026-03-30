@@ -10,6 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use quick_xml::escape::unescape;
 use quick_xml::events::BytesStart;
 use quick_xml::name::QName;
 use zip::ZipArchive;
@@ -385,18 +386,13 @@ pub fn parse_package<R: BufRead>(
 	let mut spine = Vec::new();
 
 	let mut buf = Vec::new();
+	let mut txt_buf = Vec::new();
 	let mut path = Vec::new();
 
 	loop {
 		match reader.read_event_into(&mut buf)? {
 			Event::Start(e) => {
-				path.push(PackageElement::from(e.name()));
-			}
-			Event::End(_) => {
-				path.pop();
-			}
-			Event::Text(e) if path.iter().any(|el| matches!(el, PackageElement::Metadata)) => {
-				let el = path.last().expect("Unexpected empty path inside metadata");
+				let el = PackageElement::from(e.name());
 
 				let field = match el {
 					PackageElement::DcIdentifier => Some(&mut metadata.identifier),
@@ -406,14 +402,23 @@ pub fn parse_package<R: BufRead>(
 					PackageElement::DcLanguage => Some(&mut metadata.language),
 					PackageElement::DcDate => Some(&mut metadata.date),
 					PackageElement::DcRights => Some(&mut metadata.rights),
-					_ => None,
+					_ => {
+						path.push(el);
+						None
+					}
 				};
 
-				if let Some(field) = field
-					&& field.replace(e.xml_content()?.to_string()).is_some()
-				{
-					log::warn!("Multiple '{:?}' metadata entries", el);
+				if let Some(field) = field {
+					let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+					let value = unescape(&value)?.to_string();
+
+					if field.replace(value).is_some() {
+						log::warn!("Multiple '{:?}' metadata entries", el);
+					}
 				}
+			}
+			Event::End(_) => {
+				path.pop();
 			}
 			Event::Empty(e) if path.iter().any(|el| matches!(el, PackageElement::Metadata)) => {
 				let el = PackageElement::from(e.name());
@@ -671,6 +676,7 @@ pub fn parse_nav<R: BufRead>(
 	let mut stack = Vec::new();
 
 	let mut path = Vec::new();
+	let mut txt_buf = Vec::new();
 	let mut buf = Vec::new();
 
 	let mut has_nav_toc_element = false;
@@ -707,6 +713,12 @@ pub fn parse_nav<R: BufRead>(
 					if let Some(href) = href
 						&& let Some(idx) = stack.last().cloned()
 					{
+						path.pop(); // Read text handles end
+
+						let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+						let value = unescape(&value)?.to_string();
+						entries[idx].title = Some(value);
+
 						let path = Path::new(href.as_ref());
 						if path.is_relative() {
 							let path = package_root.join(path);
@@ -723,6 +735,12 @@ pub fn parse_nav<R: BufRead>(
 							entries[idx].idref = idref;
 						};
 					}
+				} else if matches!(el, NavElement::H1) {
+					path.pop(); // Read text handles end
+
+					let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+					let value = unescape(&value)?.to_string();
+					doc_title = Some(value);
 				}
 			}
 			Event::End(_) => {
@@ -732,24 +750,6 @@ pub fn parse_nav<R: BufRead>(
 					&& matches!(el, NavElement::Li)
 				{
 					stack.pop();
-				}
-			}
-			Event::Text(e) => {
-				if !path.iter().any(|el| matches!(el, NavElement::NavToc)) {
-					continue;
-				}
-
-				if path.iter().any(|el| matches!(el, NavElement::A)) {
-					if let Some(idx) = stack.last().cloned() {
-						if let Some(current) = &mut entries[idx].title {
-							// There is already content in title, concat
-							current.push_str(e.xml_content()?.as_ref());
-						} else {
-							entries[idx].title = Some(e.xml_content()?.to_string());
-						}
-					}
-				} else if path.iter().any(|el| matches!(el, NavElement::H1)) {
-					doc_title = Some(e.xml_content()?.to_string());
 				}
 			}
 			Event::Eof => break,
@@ -853,14 +853,14 @@ pub fn parse_ncx<R: BufRead>(
 	let mut entries = Vec::new();
 	let mut stack = Vec::new();
 
-	let mut path = Vec::new();
 	let mut buf = Vec::new();
+	let mut txt_buf = Vec::new();
+	let mut path = Vec::new();
 
 	loop {
 		match reader.read_event_into(&mut buf)? {
 			Event::Start(e) => {
 				let el = NcxElement::from(e.name());
-				path.push(el);
 
 				if matches!(el, NcxElement::NavPoint) {
 					let idx = entries.len();
@@ -871,6 +871,21 @@ pub fn parse_ncx<R: BufRead>(
 					});
 					stack.push(idx);
 				}
+
+				if matches!(el, NcxElement::Text) {
+					let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+					let value = unescape(&value)?;
+
+					if matches!(path.last(), Some(NcxElement::DocTitle)) {
+						doc_title = Some(value.to_string());
+					} else if matches!(path.last(), Some(NcxElement::NavLabel))
+						&& let Some(idx) = stack.last().cloned()
+					{
+						entries[idx].title = Some(value.to_string());
+					}
+				} else {
+					path.push(el);
+				}
 			}
 			Event::End(_) => {
 				let el = path.pop();
@@ -878,20 +893,6 @@ pub fn parse_ncx<R: BufRead>(
 					&& matches!(el, NcxElement::NavPoint)
 				{
 					stack.pop();
-				}
-			}
-			Event::Text(e) => {
-				let l = path.len();
-				match path[l.saturating_sub(2)..] {
-					[NcxElement::DocTitle, NcxElement::Text] => {
-						doc_title = Some(e.xml_content()?.to_string());
-					}
-					[NcxElement::NavLabel, NcxElement::Text] => {
-						if let Some(idx) = stack.last().cloned() {
-							entries[idx].title = Some(e.xml_content()?.to_string());
-						}
-					}
-					_ => {}
 				}
 			}
 			Event::Empty(e) => {

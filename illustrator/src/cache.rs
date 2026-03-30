@@ -2,10 +2,9 @@ use fixed::types::I26F6;
 use scribe::library::Location;
 use sculpter::AtlasImage;
 
+use crate::BookSpineItem;
 use crate::PageContent;
 use crate::PageFlags;
-use crate::meta::BookMeta;
-use crate::meta::BookSpineItem;
 
 const CACHE_CHAPTERS: usize = 5;
 
@@ -45,12 +44,11 @@ impl PageContentCache {
 		self.entry(loc).map(|(_, page)| page)
 	}
 
-	pub(crate) fn next_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
+	pub(crate) fn next_page(&self, spine: &[BookSpineItem], loc: Location) -> Location {
 		self.entry(loc)
 			.map(|(entry, page)| {
 				if page.flags.contains(PageFlags::Last) {
-					book_meta
-						.spine
+					spine
 						.get(entry.spine as usize + 1)
 						.map(|item| Location {
 							spine: item.index,
@@ -74,12 +72,11 @@ impl PageContentCache {
 			.unwrap_or(loc)
 	}
 
-	pub(crate) fn previous_page(&self, book_meta: &BookMeta, loc: Location) -> Location {
+	pub(crate) fn previous_page(&self, spine: &[BookSpineItem], loc: Location) -> Location {
 		self.entry(loc)
 			.map(|(entry, page)| {
 				if page.flags.contains(PageFlags::First) {
-					book_meta
-						.spine
+					spine
 						.get(entry.spine.saturating_sub(1) as usize)
 						.map(|item| Location {
 							spine: item.index,

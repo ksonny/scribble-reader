@@ -50,6 +50,15 @@ pub struct Location {
 	pub element: U26F6,
 }
 
+impl Location {
+	pub fn from_spine(spine: u32) -> Self {
+		Self {
+			spine,
+			element: U26F6::ZERO,
+		}
+	}
+}
+
 impl Display for Location {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "[sp{}_el{}]", self.spine, self.element)

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["main", "illustrator", "scribe", "sculpter", "app-android", "wrangler"]
+members = ["main", "illustrator", "scribe", "sculpter", "app-android"]
 default-members = ["main"]
 
 [workspace.dependencies]
@@ -47,7 +47,6 @@ illustrator = { path = "./illustrator" }
 scribble-reader = { path = "./main" }
 scribe = {  path = "./scribe" }
 sculpter = {  path = "./sculpter" }
-wrangler = { path = "./wrangler" }
 
 [profile.dev-opt]
 inherits = "dev"

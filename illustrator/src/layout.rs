@@ -366,6 +366,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 	pub(crate) fn load<R: io::Seek + io::Read + Sync + Send>(
 		self,
 		archive: &mut ZipArchive<R>,
+		root: &Path,
 		path: &Path,
 		settings: &StyleSettings<'a>,
 	) -> Result<PageLayouter<'a, PageLayouterLoaded>, IllustratorLayoutError> {
@@ -380,10 +381,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 			let file = archive.by_path(path)?;
 			builder.read_from(file)?
 		};
-		let svg_options = svg_options(
-			Mutex::new(archive),
-			path.parent().unwrap_or(Path::new("OEBPS/")),
-		);
+		let svg_options = svg_options(Mutex::new(archive), root);
 
 		let page_height = settings.page_height_padded();
 		let page_width = settings.page_width_padded();
