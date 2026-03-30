@@ -53,7 +53,7 @@ impl<'a, APainterUI, APainterPixmap> Painter<'a, APainterUI, APainterPixmap> {
 impl<'a, PainterPixmap> Painter<'a, PainterUIReady, PainterPixmap> {
 	pub(crate) fn draw_ui(
 		self,
-		run_ui: impl FnMut(&egui::Context),
+		run_ui: impl FnMut(&mut egui::Ui),
 	) -> Painter<'a, PainterUIPainted, PainterPixmap> {
 		self.gui_renderer
 			.prepare(self.device, self.queue, self.ui_input.run(run_ui));

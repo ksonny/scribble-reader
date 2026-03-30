@@ -5,9 +5,9 @@ use chrono::DateTime;
 use chrono::Utc;
 use egui::CentralPanel;
 use egui::Color32;
+use egui::Panel;
 use egui::RichText;
 use egui::TextStyle;
-use egui::TopBottomPanel;
 use egui::load::Bytes;
 use lucide_icons::Icon;
 use scribe::ScribeAssistant;
@@ -141,7 +141,7 @@ impl OnAction<ToolAction> for LibraryView {
 
 impl ViewHandle for LibraryView {
 	fn draw<'a, 'b>(&'a mut self, painter: Painter<'b>) {
-		painter.draw_ui(|ctx| {
+		painter.draw_ui(|ui| {
 			let menu_items = &[
 				MenuItem {
 					icon: Icon::RefreshCw,
@@ -183,14 +183,14 @@ impl ViewHandle for LibraryView {
 				None,
 			];
 
-			let top_panel = TopBottomPanel::top("top")
-				.show(ctx, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+			let top_panel = Panel::top("top")
+				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 
-			TopBottomPanel::bottom("bottom")
-				.show(ctx, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+			Panel::bottom("bottom")
+				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 
-			CentralPanel::default().show(ctx, |ui| {
+			CentralPanel::default().show_inside(ui, |ui| {
 				if is_open {
 					ui.disable();
 				}

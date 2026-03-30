@@ -3,6 +3,7 @@ pub(crate) mod painter;
 pub(crate) mod pixmap_renderer;
 
 use winit::dpi::PhysicalSize;
+use winit::event_loop::OwnedDisplayHandle;
 
 use egui_wgpu::wgpu::{
 	self,
@@ -22,8 +23,6 @@ pub(crate) enum RendererError {
 	#[error(transparent)]
 	RequestAdapter(#[from] wgpu::wgt::RequestAdapterError),
 	#[error(transparent)]
-	Surface(#[from] wgpu::SurfaceError),
-	#[error(transparent)]
 	PixmapRender(#[from] pixmap_renderer::RenderError),
 	#[error("Failed to get surface format")]
 	NoTextureFormat,
@@ -31,6 +30,8 @@ pub(crate) enum RendererError {
 	NoAlphaMode,
 	#[error("Surface not available, probably suspended")]
 	SurfaceNotAvailable,
+	#[error("Surface lost")]
+	SurfaceLost,
 }
 
 struct SurfaceState<'window> {
@@ -41,7 +42,7 @@ struct SurfaceState<'window> {
 }
 
 impl<'window> SurfaceState<'window> {
-	fn setup_swapchain(&self, device: &wgpu::Device, width: u32, height: u32) {
+	fn configure_surface(&self, device: &wgpu::Device, width: u32, height: u32) {
 		let surface_configuration = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 			format: self.format,
@@ -70,13 +71,17 @@ pub(crate) struct Renderer<'window> {
 
 impl Renderer<'_> {
 	pub(crate) async fn create(
+		display: OwnedDisplayHandle,
 		window: Window,
 		egui_ctx: &egui::Context,
 	) -> Result<Self, RendererError> {
 		let window = Arc::new(window);
-		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-			backends: wgpu::Backends::all(),
-			..Default::default()
+		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+			backends: wgpu::Backends::VULKAN,
+			flags: Default::default(),
+			memory_budget_thresholds: Default::default(),
+			backend_options: Default::default(),
+			display: Some(Box::new(display)),
 		});
 		let surface = instance.create_surface(window.clone())?;
 
@@ -109,7 +114,7 @@ impl Renderer<'_> {
 			format,
 			alpha_mode,
 		};
-		surface_state.setup_swapchain(&device, size.width, size.height);
+		surface_state.configure_surface(&device, size.width, size.height);
 
 		Ok(Renderer {
 			instance,
@@ -145,7 +150,7 @@ impl Renderer<'_> {
 			format,
 			alpha_mode,
 		};
-		surface_state.setup_swapchain(&self.device, size.width, size.height);
+		surface_state.configure_surface(&self.device, size.width, size.height);
 		self.surface_state = Some(surface_state);
 
 		Ok(())
@@ -179,62 +184,73 @@ impl Renderer<'_> {
 			.as_mut()
 			.ok_or(RendererError::SurfaceNotAvailable)?;
 		if let Some(size) = self.resized {
-			surface_state.setup_swapchain(&self.device, size.width, size.height);
+			surface_state.configure_surface(&self.device, size.width, size.height);
 		}
 
-		match surface_state.surface.get_current_texture() {
-			Ok(frame) => {
-				let view = frame
-					.texture
-					.create_view(&wgpu::TextureViewDescriptor::default());
-
-				let mut encoder =
-					self.device
-						.create_command_encoder(&wgpu::wgt::CommandEncoderDescriptor {
-							label: Some("render encoder"),
-						});
-
-				self.gui_renderer
-					.update_buffers(&self.device, &self.queue, &mut encoder);
-
-				let mut rpass = encoder
-					.begin_render_pass(&wgpu::RenderPassDescriptor {
-						label: Some("main render pass"),
-						color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-							view: &view,
-							depth_slice: None,
-							resolve_target: None,
-							ops: wgpu::Operations {
-								load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-								store: wgpu::StoreOp::Store,
-							},
-						})],
-						depth_stencil_attachment: None,
-						timestamp_writes: None,
-						occlusion_query_set: None,
-					})
-					.forget_lifetime();
-
-				self.pixmap_renderer.render(&mut rpass)?;
-				self.gui_renderer.render(&mut rpass);
-
-				drop(rpass);
-				self.queue.submit(Some(encoder.finish()));
-				frame.present();
-
-				self.gui_renderer.cleanup();
-
-				Ok(())
+		let frame = match surface_state.surface.get_current_texture() {
+			wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+			wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+				let size = surface_state.window.inner_size();
+				surface_state.configure_surface(&self.device, size.width, size.height);
+				surface_texture
 			}
-			Err(e @ wgpu::SurfaceError::OutOfMemory) => {
-				log::error!("Swapchain error: {e}");
-				Err(e.into())
+			wgpu::CurrentSurfaceTexture::Timeout
+			| wgpu::CurrentSurfaceTexture::Occluded
+			| wgpu::CurrentSurfaceTexture::Validation => return Ok(()),
+			wgpu::CurrentSurfaceTexture::Outdated => {
+				let size = surface_state.window.inner_size();
+				surface_state.configure_surface(&self.device, size.width, size.height);
+				return Ok(());
 			}
-			Err(e) => {
-				log::warn!("Hopefully recoverable error in render: {e}");
-				Ok(())
+			wgpu::CurrentSurfaceTexture::Lost => {
+				let size = surface_state.window.inner_size();
+				surface_state.configure_surface(&self.device, size.width, size.height);
+				return Err(RendererError::SurfaceLost);
 			}
-		}
+		};
+
+		let view = frame
+			.texture
+			.create_view(&wgpu::TextureViewDescriptor::default());
+
+		let mut encoder =
+			self.device
+				.create_command_encoder(&wgpu::wgt::CommandEncoderDescriptor {
+					label: Some("render encoder"),
+				});
+
+		self.gui_renderer
+			.update_buffers(&self.device, &self.queue, &mut encoder);
+
+		let mut rpass = encoder
+			.begin_render_pass(&wgpu::RenderPassDescriptor {
+				label: Some("main render pass"),
+				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+					view: &view,
+					depth_slice: None,
+					resolve_target: None,
+					ops: wgpu::Operations {
+						load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+						store: wgpu::StoreOp::Store,
+					},
+				})],
+				depth_stencil_attachment: None,
+				timestamp_writes: None,
+				occlusion_query_set: None,
+				multiview_mask: None,
+			})
+			.forget_lifetime();
+
+		self.pixmap_renderer.render(&mut rpass)?;
+		self.gui_renderer.render(&mut rpass);
+
+		drop(rpass);
+		self.queue.submit(Some(encoder.finish()));
+		frame.present();
+
+		self.gui_renderer.cleanup();
+
+		Ok(())
 	}
 
 	pub(crate) fn painter<'a>(&'a mut self, ui_input: &'a mut UiInput) -> Painter<'a> {

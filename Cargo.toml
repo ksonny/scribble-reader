@@ -11,10 +11,10 @@ bytemuck = { version = "1.24.0", features = ["derive"] }
 chrono = { version = "0.4.44", default-features = false, features = ["alloc", "clock", "now", "std", "serde"] }
 config = { version = "0.15.22", default-features = false, features = ["toml"] }
 dotenv = "0.15.0"
-egui = "0.33.3"
-egui-wgpu = "0.33.3"
-egui-winit = "0.33.3"
-egui_extras = { version = "0.33.3", features = ["image"] }
+egui = "0.34.1"
+egui-wgpu = "0.34.1"
+egui-winit = "0.34.1"
+egui_extras = { version = "0.34.1", features = ["image"] }
 env_logger = "0.11.8"
 etagere = "0.3.0"
 expand-tilde = "0.6.1"
@@ -38,7 +38,7 @@ serde_rusqlite = "0.42.0"
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror = "2.0.17"
 ttf-parser = "0.25.1"
-wgpu = "27.0.1"
+wgpu = "29.0.1"
 winit = "0.30.13"
 xdg = "3.0.0"
 zip = "8.4.0"
@@ -58,7 +58,7 @@ lto = "thin"
 
 [patch.crates-io]
 winit = { git = "https://github.com/ksonny/winit", rev = "e7cda559cd05923ad03fda1ca788ea4b8c62867c" }
-egui = { git = "https://github.com/ksonny/egui", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
-egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
-egui-winit = { git = "https://github.com/ksonny/egui", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
-egui_extras = { git = "https://github.com/ksonny/egui", rev = "6a943c00066f23fe73a28c8c0afddea80f65b497" }
+egui = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
+egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
+egui-winit = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
+egui_extras = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }

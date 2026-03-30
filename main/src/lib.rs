@@ -134,7 +134,8 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				}
 			};
 		} else {
-			match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
+			let display = event_loop.owned_display_handle();
+			match pollster::block_on(Renderer::create(display, window, &self.egui_ctx)) {
 				Ok(renderer) => self.renderer = Some(renderer),
 				Err(e) => {
 					log::error!("Failed to create renderer: {e}");
@@ -265,6 +266,9 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 						self.fps.tick();
 					}
 					Err(e @ RendererError::SurfaceNotAvailable) => {
+						log::warn!("Failure render: {e}");
+					}
+					Err(e @ RendererError::SurfaceLost) => {
 						log::warn!("Failure render: {e}");
 					}
 					Err(e) => {

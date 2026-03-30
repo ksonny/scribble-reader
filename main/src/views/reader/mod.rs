@@ -289,7 +289,7 @@ impl ViewHandle for ReaderView {
 			painter.draw_pixmap([].into_iter())
 		};
 
-		painter.draw_ui(|ctx| {
+		painter.draw_ui(|ui| {
 			if matches!(self.mode, ReaderMode::ReadNoUi) {
 				return;
 			}
@@ -339,23 +339,23 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
-			let top_panel = egui::TopBottomPanel::top("top")
-				.show(ctx, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+			let top_panel = egui::Panel::top("top")
+				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 			if !is_open {
 				self.rects.push(top_panel.response.interact_rect);
 			} else {
-				self.rects.push(ctx.content_rect())
+				self.rects.push(ui.content_rect())
 			}
 
-			let bottom_panel = egui::TopBottomPanel::bottom("bottom")
-				.show(ctx, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+			let bottom_panel = egui::Panel::bottom("bottom")
+				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 			if !is_open {
 				self.rects.push(bottom_panel.response.interact_rect);
 			}
 
 			if matches!(self.mode, ReaderMode::Navigation) {
-				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
+				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
@@ -386,7 +386,7 @@ impl ViewHandle for ReaderView {
 					self.rects.push(central_panel.response.interact_rect);
 				}
 			} else if matches!(self.mode, ReaderMode::Settings) {
-				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
+				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
