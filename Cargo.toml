@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["main", "illustrator", "scribe", "sculpter", "app-android"]
+members = ["main", "illustrator", "scribe", "sculpter", "app-android", "wrangler"]
 default-members = ["main"]
 
 [workspace.dependencies]
@@ -28,7 +28,7 @@ lazy_static = "1.5.0"
 log = "0.4.28"
 lucide-icons = "0.575.0"
 pollster = "0.4.0"
-quick-xml = { version = "0.39.2", features = ["serialize"] }
+quick-xml = { version = "0.39.2", features = ["serialize", "escape-html"] }
 resvg = { version = "0.47.0", default-features = false, features = ["raster-images"] }
 rusqlite = { version = "0.39.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
@@ -37,6 +37,7 @@ serde = { version = "1.0.226", features = ["derive", "rc"] }
 serde_rusqlite = "0.42.0"
 taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror = "2.0.17"
+toml = "1.1.1"
 ttf-parser = "0.25.1"
 wgpu = "29.0.1"
 winit = "0.30.13"
@@ -47,6 +48,7 @@ illustrator = { path = "./illustrator" }
 scribble-reader = { path = "./main" }
 scribe = {  path = "./scribe" }
 sculpter = {  path = "./sculpter" }
+wrangler = { path = "./wrangler" }
 
 [profile.dev-opt]
 inherits = "dev"

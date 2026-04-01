@@ -10,13 +10,13 @@ import android.util.Log
 import android.view.WindowManager
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.Closeable
 import java.util.LinkedList
-
 
 class MainActivity : GameActivity() {
     private lateinit var launcher: ActivityResultLauncher<Uri?>
@@ -45,7 +45,13 @@ class MainActivity : GameActivity() {
             registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { contentUri ->
                 Log.i("main-activity", contentUri.toString())
                 if (contentUri != null) {
-                    showFolderContent(contentUri)
+                    try {
+                        contentResolver.takePersistableUriPermission(contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } catch (e: SecurityException) {
+                        Log.e("main-activity", "Failed to get permission", e)
+                    }
+
+                    wranglerOpenTree(contentUri.toString())
                 }
             }
 
@@ -63,26 +69,25 @@ class MainActivity : GameActivity() {
         hideSystemUI()
     }
 
+    @Suppress("unused")
     val isGooglePlayGames: Boolean
         get() {
             val pm = packageManager
             return pm.hasSystemFeature("com.google.android.play.feature.HPE_EXPERIENCE")
         }
 
-    private fun requestOpenFolderTree() {
-        Log.d("main-activity", "Method called")
+    @Suppress("unused")
+    private fun discoverOpenTree() {
         val path = Environment.getExternalStorageDirectory()
         val uri = Uri.fromFile(path)
         launcher.launch(uri)
     }
 
-    private fun showFolderContent(rootUri: Uri) {
-        val cr = contentResolver
-        try {
-            cr.takePersistableUriPermission(rootUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } catch (e: SecurityException) {
-            Log.e("main-activity", "Failed to get permission", e)
-        }
+    @Suppress("unused")
+    private fun discoverFolderContent(ticketId: Long, rootUri: String) {
+        val rootUri = rootUri.toUri()
+
+        wranglerDiscoverStart(ticketId)
 
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
             rootUri,
@@ -102,6 +107,7 @@ class MainActivity : GameActivity() {
                     Document.COLUMN_DISPLAY_NAME,
                     Document.COLUMN_MIME_TYPE,
                     Document.COLUMN_SIZE,
+                    Document.COLUMN_LAST_MODIFIED,
                 ),
                 null,
                 null,
@@ -113,22 +119,62 @@ class MainActivity : GameActivity() {
                     val name = c.getString(1)
                     val mime = c.getString(2)
                     val size = c.getLong(3)
-                    Log.d("main-activity", "docId: $docId, name: $name, mime: $mime, size: $size")
-                    if (isDirectory(mime)) {
+                    val lastModified = c.getLong(4)
+                    if (Document.MIME_TYPE_DIR == mime) {
                         val uri = DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, docId)
                         dirNodes.add(uri)
+                    } else {
+                        wranglerDiscover(ticketId, docId, name, size, lastModified)
                     }
                 }
+            } catch (exception: Exception) {
+                Log.e("main-activity", "Failed to list tree: $exception")
             } finally {
                 closeQuietly(c)
             }
         }
 
+        wranglerDiscoverEnd(ticketId)
     }
 
-    // Util method to check if the mime type is a directory
-    private fun isDirectory(mimeType: String?): Boolean {
-        return Document.MIME_TYPE_DIR == mimeType
+    @Suppress("unused")
+    private fun openFileContent(ticketId: Long, rootUri: String, docId: String) {
+        val rootUri = rootUri.toUri()
+        val uri = DocumentsContract.buildDocumentUriUsingTree(rootUri, docId)
+
+        try {
+            val c = contentResolver.query(
+                uri,
+                arrayOf(
+                    Document.COLUMN_SIZE,
+                    Document.COLUMN_LAST_MODIFIED,
+                ),
+                null,
+                null,
+                null
+            )
+            if (c!!.moveToNext()) {
+                val size = c.getLong(0)
+                val lastModified = c.getLong(1)
+                closeQuietly(c)
+
+                val afd = contentResolver.openAssetFileDescriptor(uri, "r")
+                if (afd != null) {
+                    val pfd = afd.parcelFileDescriptor
+                    val fd = pfd.fd
+
+                    wranglerFile(ticketId, docId, fd, size, lastModified)
+
+                    closeQuietly(pfd)
+                } else {
+                    Log.e("main-activity", "Failed to open file, got null result")
+                    wranglerFail(ticketId, "Failed to open file, got null result")
+                }
+            }
+        } catch (exception: Exception) {
+            Log.e("main-activity", "Failed to open file: $exception")
+            wranglerFail(ticketId, exception.toString())
+        }
     }
 
     // Util method to close a closeable
@@ -144,6 +190,19 @@ class MainActivity : GameActivity() {
         }
     }
 
+
+    external fun wranglerOpenTree(rootUri: String)
+    external fun wranglerDiscoverStart(ticketId: Long)
+    external fun wranglerDiscover(
+        ticketId: Long,
+        docId: String,
+        name: String,
+        size: Long,
+        lastModified: Long
+    )
+    external fun wranglerDiscoverEnd(ticketId: Long)
+    external fun wranglerFile(ticketId: Long, docId: String, fd: Int, size: Long, lastModified: Long)
+    external fun wranglerFail(ticketId: Long, reason: String)
 
     companion object {
         init {

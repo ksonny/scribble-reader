@@ -3,7 +3,6 @@ mod html_parser;
 mod layout;
 mod svg;
 
-use std::fs;
 use std::io;
 use std::io::Cursor;
 use std::ops::Range;
@@ -25,9 +24,12 @@ use scribe::ScribeConfig;
 use scribe::epub;
 use scribe::library;
 use scribe::library::Location;
+use scribe::record_keeper::RecordKeeper;
 use sculpter::SculpterFonts;
 use sculpter::SculpterOptions;
 use sculpter::TextBlock;
+use wrangler::DocumentId;
+use wrangler::content::ContentWranglerAssistant;
 use zip::ZipArchive;
 
 use crate::cache::PageContentCache;
@@ -210,7 +212,8 @@ struct Worker {
 	cache: Arc<Mutex<PageContentCache>>,
 	shared_navigation: Arc<RwLock<Arc<epub::Navigation>>>,
 	shared_location: Arc<RwLock<Location>>,
-	records: scribe::record_keeper::RecordKeeper,
+	record_keeper: RecordKeeper,
+	content: ContentWranglerAssistant,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -257,7 +260,9 @@ impl Worker {
 			scale: 1.0,
 		};
 
-		let bytes = SharedVec(Arc::new(fs::read(&book.path)?));
+		let document = DocumentId::new(book.path.to_string_lossy().to_string());
+		let (bytes, _) = pollster::block_on(self.content.load(document))?;
+		let bytes = SharedVec(Arc::new(bytes));
 
 		let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))?;
 		let (package, navigation) = {
@@ -296,6 +301,8 @@ impl Worker {
 		let mut layouter = PageLayouter::new(sculpter);
 		let mut clear_cache = false;
 
+		let records = self.record_keeper.assistant()?;
+
 		loop {
 			let req = match req_rx.try_recv() {
 				Ok(req) => req,
@@ -331,7 +338,7 @@ impl Worker {
 
 					log::debug!("Save location {current_loc} in {}", book.id);
 					*self.shared_location.write().unwrap() = current_loc;
-					self.records.record_book_state(book.id, Some(current_loc))?;
+					records.record_book_state(book.id, Some(current_loc))?;
 					bell.content_ready(book.id, current_loc);
 
 					match req_rx.recv() {
@@ -384,14 +391,15 @@ pub enum IllustratorSpawnError {
 #[must_use = "Must track handle or illustrator dies"]
 pub fn create_illustrator(
 	config: ScribeConfig,
+	record_keeper: RecordKeeper,
+	content: ContentWranglerAssistant,
 	fonts: Arc<SculpterFonts>,
 	bell: impl Bell + Send + 'static,
 	book_id: library::BookId,
 ) -> Result<IllustratorHandle, IllustratorSpawnError> {
-	let state_path = config.paths().data_path.join("state.db");
-	let records = scribe::record_keeper::create(&state_path)?;
-
 	log::info!("Open book {book_id}");
+
+	let records = record_keeper.assistant()?;
 	let book = records.fetch_book(book_id)?;
 
 	let config = config.clone();
@@ -406,10 +414,11 @@ pub fn create_illustrator(
 	let worker = Worker {
 		config,
 		fonts,
-		records,
 		cache: cache.clone(),
 		shared_navigation: navigation.clone(),
 		shared_location: location.clone(),
+		record_keeper,
+		content,
 	};
 
 	let handle = std::thread::spawn(move || -> Result<(), IllustratorWorkerError> {

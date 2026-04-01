@@ -12,11 +12,13 @@ fixed.workspace = true
 html5ever.workspace = true
 imagesize.workspace = true
 log.workspace = true
+pollster.workspace = true
 resvg.workspace = true
 scribe.workspace = true
 sculpter.workspace = true
 taffy.workspace = true
 thiserror.workspace = true
+wrangler.workspace = true
 zip.workspace = true
 
 [dev-dependencies]

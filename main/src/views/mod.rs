@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use illustrator::IllustratorHandle;
 use scribe::ScribeAssistant;
+use scribe::record_keeper::RecordKeeper;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -65,8 +66,13 @@ impl AppView {
 		}
 	}
 
-	pub(crate) fn library(&mut self, scribe: ScribeAssistant) {
-		self.view = Views::Library(library::LibraryView::create(self.bell.clone(), scribe))
+	pub(crate) fn library(&mut self, records: RecordKeeper, scribe: ScribeAssistant) {
+		match library::LibraryView::create(self.bell.clone(), records, scribe) {
+			Ok(view) => self.view = Views::Library(view),
+			Err(e) => {
+				log::error!("Library view error: {}", e);
+			}
+		};
 	}
 
 	pub(crate) fn reader(&mut self, illustrator: IllustratorHandle) {

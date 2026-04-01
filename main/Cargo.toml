@@ -29,4 +29,5 @@ sculpter.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 winit.workspace = true
+wrangler.workspace = true
 xdg.workspace = true

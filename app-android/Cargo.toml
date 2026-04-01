@@ -11,8 +11,8 @@ jni.workspace = true
 log.workspace = true
 scribble-reader.workspace = true
 scribe.workspace = true
-thiserror.workspace = true
 winit = { workspace = true, features = ["android-game-activity"] }
+wrangler.workspace = true
 
 [lib]
 name = "main"

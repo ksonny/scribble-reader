@@ -2,4 +2,4 @@
 runner = "cargo ndk-runner"
 
 [env]
-RUST_LOG = "egui=debug,egui-winit=debug,winit=debug,android_activity=debug,wgpu_hal=warn"
+RUST_LOG = "egui=debug,egui-winit=debug,winit=debug,android_activity=debug,wgpu_hal=warn,scribe=debug"
