@@ -1,7 +1,7 @@
 use std::iter;
 use std::sync::Arc;
 
-use egui::TopBottomPanel;
+use egui::Panel;
 use image::ImageBuffer;
 use lucide_icons::Icon;
 use sculpter::AtlasImage;
@@ -203,7 +203,7 @@ impl ViewHandle for ExperimentsView {
 					},
 				})),
 			)
-			.draw_ui(|ctx| {
+			.draw_ui(|ui| {
 				let menu_items = &[
 					MenuItem {
 						icon: Icon::Library,
@@ -242,12 +242,12 @@ impl ViewHandle for ExperimentsView {
 					None,
 				];
 
-				let top_panel = TopBottomPanel::top("top")
-					.show(ctx, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+				let top_panel = Panel::top("top")
+					.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
 				let is_open = top_panel.inner.context_menu_opened();
 
-				TopBottomPanel::bottom("bottom")
-					.show(ctx, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+				Panel::bottom("bottom")
+					.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 			});
 	}
 

@@ -33,7 +33,7 @@ pub const CHAPTER_LIST_SIZE: u32 = 12;
 enum ReaderMode {
 	ReadNoUi,
 	Read,
-	Chapters,
+	Navigation,
 	Settings,
 }
 
@@ -85,25 +85,26 @@ impl ReaderView {
 	}
 
 	fn toggle_chapters(&mut self) {
-		if matches!(self.mode, ReaderMode::Chapters) {
+		if matches!(self.mode, ReaderMode::Navigation) {
 			self.mode = ReaderMode::Read;
 		} else {
 			let loc = self.illustrator.location();
-			let chapters = self.illustrator.toc.read().unwrap();
-			let index = chapters
-				.items
+			let navigation = self.illustrator.navigation();
+			log::info!("Got navigation with {} items", navigation.nav_points.len());
+			let index = navigation
+				.nav_points
 				.iter()
-				.position(|i| i.location.spine == loc.spine);
+				.position(|p| p.spine == Some(loc.spine));
 			let page = index
 				.map(|index| index as u32 / CHAPTER_LIST_SIZE)
 				.unwrap_or(0);
 			let offset = page * CHAPTER_LIST_SIZE;
 
-			let mut item_iter = chapters.items.iter().skip(offset as usize);
+			let mut item_iter = navigation.nav_points.iter().skip(offset as usize);
 			for card in self.cards.as_mut() {
 				if let Some(item) = item_iter.next() {
 					*card = Some(ChapterCard {
-						location: item.location,
+						location: Location::from_spine(item.spine.unwrap_or_default()),
 						title: item.title.clone(),
 					});
 				} else {
@@ -111,7 +112,7 @@ impl ReaderView {
 				}
 			}
 			self.page = page;
-			self.mode = ReaderMode::Chapters;
+			self.mode = ReaderMode::Navigation;
 		}
 	}
 
@@ -131,15 +132,16 @@ impl ReaderView {
 					.previous_page()
 					.inspect_err(|err| log::error!("Previous page error: {err}"));
 			}
-			ReaderMode::Chapters => {
+			ReaderMode::Navigation => {
 				self.page = self.page.saturating_sub(1);
 				let offset = self.page * CHAPTER_LIST_SIZE;
-				let chapters = self.illustrator.toc.read().unwrap();
-				let mut item_iter = chapters.items.iter().skip(offset as usize);
+				let navigation = self.illustrator.navigation();
+				log::info!("Got navigation with {} items", navigation.nav_points.len());
+				let mut item_iter = navigation.nav_points.iter().skip(offset as usize);
 				for card in self.cards.as_mut() {
 					if let Some(item) = item_iter.next() {
 						*card = Some(ChapterCard {
-							location: item.location,
+							location: Location::from_spine(item.spine.unwrap_or_default()),
 							title: item.title.clone(),
 						});
 					} else {
@@ -159,16 +161,17 @@ impl ReaderView {
 					.next_page()
 					.inspect_err(|err| log::error!("Next page error: {err}"));
 			}
-			ReaderMode::Chapters => {
+			ReaderMode::Navigation => {
 				let page = self.page + 1;
 				let offset = (page * CHAPTER_LIST_SIZE) as usize;
-				let chapters = self.illustrator.toc.read().unwrap();
-				if chapters.items.len() > offset {
-					let mut item_iter = chapters.items.iter().skip(offset);
+				let navigation = self.illustrator.navigation();
+				log::info!("Got navigation with {} items", navigation.nav_points.len());
+				if navigation.nav_points.len() > offset {
+					let mut item_iter = navigation.nav_points.iter().skip(offset);
 					for card in self.cards.as_mut() {
 						if let Some(item) = item_iter.next() {
 							*card = Some(ChapterCard {
-								location: item.location,
+								location: Location::from_spine(item.spine.unwrap_or_default()),
 								title: item.title.clone(),
 							});
 						} else {
@@ -286,7 +289,7 @@ impl ViewHandle for ReaderView {
 			painter.draw_pixmap([].into_iter())
 		};
 
-		painter.draw_ui(|ctx| {
+		painter.draw_ui(|ui| {
 			if matches!(self.mode, ReaderMode::ReadNoUi) {
 				return;
 			}
@@ -317,7 +320,7 @@ impl ViewHandle for ReaderView {
 				Some(ToolItem {
 					icon: Icon::ListTree,
 					description: "Chapters",
-					active: matches!(self.mode, ReaderMode::Chapters),
+					active: matches!(self.mode, ReaderMode::Navigation),
 					action: ToolAction::Chapters,
 				}),
 				Some(ToolItem {
@@ -336,23 +339,23 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
-			let top_panel = egui::TopBottomPanel::top("top")
-				.show(ctx, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+			let top_panel = egui::Panel::top("top")
+				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 			if !is_open {
 				self.rects.push(top_panel.response.interact_rect);
 			} else {
-				self.rects.push(ctx.content_rect())
+				self.rects.push(ui.content_rect())
 			}
 
-			let bottom_panel = egui::TopBottomPanel::bottom("bottom")
-				.show(ctx, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+			let bottom_panel = egui::Panel::bottom("bottom")
+				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 			if !is_open {
 				self.rects.push(bottom_panel.response.interact_rect);
 			}
 
-			if matches!(self.mode, ReaderMode::Chapters) {
-				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
+			if matches!(self.mode, ReaderMode::Navigation) {
+				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
@@ -383,7 +386,7 @@ impl ViewHandle for ReaderView {
 					self.rects.push(central_panel.response.interact_rect);
 				}
 			} else if matches!(self.mode, ReaderMode::Settings) {
-				let central_panel = egui::CentralPanel::default().show(ctx, |ui| {
+				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}

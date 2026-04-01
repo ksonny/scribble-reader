@@ -1,19 +1,26 @@
 use std::array;
+use std::collections::BTreeMap;
+use std::collections::BinaryHeap;
+use std::fs;
 use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
 use egui::CentralPanel;
 use egui::Color32;
+use egui::Panel;
 use egui::RichText;
 use egui::TextStyle;
-use egui::TopBottomPanel;
 use egui::load::Bytes;
 use lucide_icons::Icon;
 use scribe::ScribeAssistant;
-use scribe::ScribeRequest;
 use scribe::library;
+use scribe::library::Book;
 use scribe::library::BookId;
+use scribe::library::Thumbnail;
+use scribe::record_keeper::RecordKeeper;
+use scribe::record_keeper::RecordKeeperAssistant;
+use scribe::record_keeper::RecordKeeperError;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -32,47 +39,134 @@ use crate::views::ViewHandle;
 
 pub const LIBRARY_LIST_SIZE: usize = 5;
 
-struct Thumbnail {
-	bytes: Arc<[u8]>,
-}
-
 struct BookCard {
 	id: BookId,
 	title: Option<Arc<String>>,
 	author: Option<Arc<String>>,
 	modified_at: DateTime<Utc>,
-	thumbnail: Option<Thumbnail>,
+	thumbnail: Thumbnail,
+}
+
+#[derive(Debug, Default)]
+struct Shelves {
+	pub(crate) books: BTreeMap<BookId, Book>,
+	pub(crate) sorted: Vec<BookId>,
+	pub(crate) thumbnails: BTreeMap<BookId, Thumbnail>,
+}
+
+impl Shelves {
+	fn open(books: BTreeMap<BookId, Book>) -> Self {
+		let books_len = books.len();
+		let sorted = books
+			.values()
+			.map(|book| (book.modified_at, book.id))
+			.collect::<BinaryHeap<_>>()
+			.into_iter()
+			.map(|(_, id)| id)
+			.collect();
+		log::info!("Open library with {books_len} books");
+
+		Self {
+			books,
+			sorted,
+			thumbnails: BTreeMap::new(),
+		}
+	}
+
+	fn update(&mut self, book: library::Book) {
+		self.thumbnails.remove(&book.id);
+		self.books.insert(book.id, book);
+		self.sorted.splice(
+			..,
+			self.books
+				.values()
+				.map(|book| (book.modified_at, book.id))
+				.collect::<BinaryHeap<_>>()
+				.into_iter()
+				.map(|(_, id)| id),
+		);
+	}
+
+	fn remove(&mut self, book_id: BookId) {
+		self.thumbnails.remove(&book_id);
+		self.books.remove(&book_id);
+		self.sorted.splice(
+			..,
+			self.books
+				.values()
+				.map(|book| (book.modified_at, book.id))
+				.collect::<BinaryHeap<_>>()
+				.into_iter()
+				.map(|(_, id)| id),
+		);
+	}
+
+	fn books(&self, n: std::ops::Range<u32>) -> Vec<Book> {
+		let start = n.start as usize;
+		let end = (n.end as usize).min(self.sorted.len());
+		let books = self
+			.sorted
+			.get(start..end)
+			.into_iter()
+			.flatten()
+			.filter_map(|id| self.books.get(id).cloned())
+			.collect::<Vec<_>>();
+		log::trace!(
+			"Requested books {start}..{end}, received {} from all books {}",
+			books.len(),
+			self.sorted.len()
+		);
+		books
+	}
 }
 
 pub(crate) struct LibraryView {
 	bell: AppBell,
+	records: RecordKeeperAssistant,
 	scribe: ScribeAssistant,
+	shelves: Shelves,
 	page: u32,
 	cards: [Option<BookCard>; LIBRARY_LIST_SIZE],
 }
 
 impl LibraryView {
-	pub(crate) fn create(bell: AppBell, scribe: ScribeAssistant) -> Self {
+	pub(crate) fn create(
+		bell: AppBell,
+		records: RecordKeeper,
+		scribe: ScribeAssistant,
+	) -> Result<Self, RecordKeeperError> {
 		// TODO: Preserve page somewhere
 		let page = 0;
-		let cards = read_cards(&scribe, page);
 
-		Self {
+		let records = records.assistant()?;
+		let books = match records.fetch_books() {
+			Ok(books) => books,
+			Err(e) => {
+				log::error!("Fetch books error: {e}");
+				BTreeMap::new()
+			}
+		};
+		let mut shelves = Shelves::open(books);
+		let cards = read_cards(&mut shelves, &records, page);
+
+		Ok(Self {
 			bell,
+			records,
 			scribe,
+			shelves,
 			page,
 			cards,
-		}
+		})
 	}
 
 	fn prev_page(&mut self) {
 		self.page = self.page.saturating_sub(1);
-		self.cards = read_cards(&self.scribe, self.page);
+		self.cards = read_cards(&mut self.shelves, &self.records, self.page);
 	}
 
 	fn next_page(&mut self) {
 		let page = self.page + 1;
-		let cards = read_cards(&self.scribe, page);
+		let cards = read_cards(&mut self.shelves, &self.records, page);
 		if cards.iter().any(|c| c.is_some()) {
 			self.page = page;
 			self.cards = cards;
@@ -80,31 +174,61 @@ impl LibraryView {
 	}
 }
 
-fn read_cards(scribe: &ScribeAssistant, page: u32) -> [Option<BookCard>; LIBRARY_LIST_SIZE] {
+fn read_cards(
+	shelves: &mut Shelves,
+	records: &RecordKeeperAssistant,
+	page: u32,
+) -> [Option<BookCard>; LIBRARY_LIST_SIZE] {
 	let start = page * LIBRARY_LIST_SIZE as u32;
 	let end = (1 + page) * LIBRARY_LIST_SIZE as u32;
-	let books = scribe.library().books(start..end);
+	let books = shelves.books(start..end);
 	let mut books_iter = books.into_iter().map(|b| {
 		let id = b.id;
-		let thumb = scribe.library().thumbnail(id);
+		let thumb = shelves
+			.thumbnails
+			.entry(id)
+			.or_insert_with(|| match load_thumbnail(records, id) {
+				Ok(thumb) => thumb,
+				Err(e) => {
+					log::error!("Error loading thumbnail: {e}");
+					Thumbnail::None
+				}
+			})
+			.clone();
+
 		(b, thumb)
 	});
-	let cards = array::from_fn(|_| books_iter.next().map(BookCard::new));
+	array::from_fn(|_| books_iter.next().map(BookCard::new))
+}
 
-	for card in &cards {
-		if let Some(card) = card
-			&& card.thumbnail.is_none()
-		{
-			scribe.send(ScribeRequest::Show(card.id));
+fn load_thumbnail(
+	records: &RecordKeeperAssistant,
+	id: BookId,
+) -> Result<Thumbnail, RecordKeeperError> {
+	if let Some(thumbnail) = records.fetch_thumbnail(id)?
+		&& let Some(path) = thumbnail.path.as_deref()
+	{
+		match fs::read(path) {
+			Ok(bytes) => {
+				let thumbnail = Thumbnail::Bytes {
+					bytes: bytes.into(),
+				};
+				Ok(thumbnail)
+			}
+			Err(e) => {
+				log::warn!("Failed to load thumbnail at {}: {e}", path.display());
+				Ok(Thumbnail::None)
+			}
 		}
+	} else {
+		Ok(Thumbnail::None)
 	}
-	cards
 }
 
 #[derive(Clone, Copy)]
 enum MenuAction {
 	Exit,
-	Refresh,
+	Scan,
 	OpenExperiment,
 }
 
@@ -120,8 +244,8 @@ impl OnAction<MenuAction> for LibraryView {
 			MenuAction::Exit => {
 				self.bell.send_event(AppEvent::Exit);
 			}
-			MenuAction::Refresh => {
-				self.scribe.send(ScribeRequest::Scan);
+			MenuAction::Scan => {
+				self.scribe.scan();
 			}
 			MenuAction::OpenExperiment => {
 				self.bell.send_event(AppEvent::OpenExperiments);
@@ -141,13 +265,13 @@ impl OnAction<ToolAction> for LibraryView {
 
 impl ViewHandle for LibraryView {
 	fn draw<'a, 'b>(&'a mut self, painter: Painter<'b>) {
-		painter.draw_ui(|ctx| {
+		painter.draw_ui(|ui| {
 			let menu_items = &[
 				MenuItem {
 					icon: Icon::RefreshCw,
-					description: "Refresh",
+					description: "Scan",
 					active: false,
-					action: MenuAction::Refresh,
+					action: MenuAction::Scan,
 				},
 				MenuItem {
 					icon: Icon::RefreshCw,
@@ -183,14 +307,14 @@ impl ViewHandle for LibraryView {
 				None,
 			];
 
-			let top_panel = TopBottomPanel::top("top")
-				.show(ctx, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+			let top_panel = Panel::top("top")
+				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 
-			TopBottomPanel::bottom("bottom")
-				.show(ctx, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+			Panel::bottom("bottom")
+				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 
-			CentralPanel::default().show(ctx, |ui| {
+			CentralPanel::default().show_inside(ui, |ui| {
 				if is_open {
 					ui.disable();
 				}
@@ -214,17 +338,18 @@ impl ViewHandle for LibraryView {
 
 	fn event(&mut self, event: &AppEvent) -> EventResult {
 		match event {
-			AppEvent::LibraryUpdated => {
-				self.cards = read_cards(&self.scribe, self.page);
+			AppEvent::BookUpdated(id) => {
+				match self.records.fetch_book(*id) {
+					Ok(book) => {
+						self.shelves.update(book);
+					}
+					Err(e) => {
+						log::error!("Error fetching book {id}: {e}");
+						self.shelves.remove(*id);
+					}
+				};
+				self.cards = read_cards(&mut self.shelves, &self.records, self.page);
 				EventResult::RequestRedraw
-			}
-			AppEvent::LibraryBookUpdated(id) => {
-				if self.cards.iter().flatten().any(|c| &c.id == id) {
-					self.cards = read_cards(&self.scribe, self.page);
-					EventResult::RequestRedraw
-				} else {
-					EventResult::None
-				}
 			}
 			_ => EventResult::None,
 		}
@@ -246,17 +371,14 @@ impl ViewHandle for LibraryView {
 }
 
 impl BookCard {
-	fn new(entry: (library::Book, Option<library::Thumbnail>)) -> Self {
+	fn new(entry: (library::Book, library::Thumbnail)) -> Self {
 		let (b, tn) = entry;
 		BookCard {
 			id: b.id,
 			title: b.title,
 			author: b.author,
 			modified_at: b.modified_at,
-			thumbnail: tn.and_then(|tn| match tn {
-				library::Thumbnail::Bytes { bytes } => Some(Thumbnail { bytes }),
-				library::Thumbnail::None => None,
-			}),
+			thumbnail: tn,
 		}
 	}
 }
@@ -278,19 +400,19 @@ impl egui::Widget for BookCardUi<'_> {
 				ui.allocate_ui([cover_width, height].into(), |ui| {
 					ui.set_width(cover_width);
 					ui.centered_and_justified(|ui| match &card.thumbnail {
-						Some(Thumbnail { bytes }) => {
+						Thumbnail::Bytes { bytes } => {
 							ui.add(egui::Image::new(egui::ImageSource::Bytes {
 								uri: format!("bytes://thumbnail_{}.png", card.id.value()).into(),
 								bytes: Bytes::Shared(bytes.clone()),
 							}))
 						}
-						None => ui.label(
+						Thumbnail::None => ui.label(
 							UiIcon::new(Icon::Book)
 								.size(cover_width)
 								.color(Color32::GRAY)
 								.build(),
 						),
-					});
+					})
 				});
 				ui.separator();
 				ui.vertical(|ui| {

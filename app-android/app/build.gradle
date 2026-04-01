@@ -1,0 +1,50 @@
+plugins {
+    id "com.android.application"
+}
+
+def propsFile = rootProject.file("keystore.properties")
+def props = new Properties()
+props.load(new FileInputStream(propsFile))
+
+android {
+    namespace = "org.lotrax.scribblereader"
+    compileSdk = 34
+
+    defaultConfig {
+        minSdk = 33
+        targetSdk = 36
+        versionCode = 1
+        versionName = "1.0"
+    }
+
+    signingConfigs {
+        release {
+            storeFile = file(props["storeFile"])
+            storePassword = props["storePassword"]
+            keyAlias = props["keyAlias"]
+            keyPassword = props["keyPassword"]
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled = false
+        }
+        release {
+            minifyEnabled = false
+            signingConfig = signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+}
+
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.games:games-activity:4.4.0"
+}
+

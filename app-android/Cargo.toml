@@ -1,0 +1,20 @@
+[package]
+name = "scribble-reader-android"
+version = "0.1.1"
+authors = ["ksonny <ksonny@lotrax.org>"]
+edition = "2024"
+publish = false
+
+[dependencies]
+android_logger.workspace = true
+jni.workspace = true
+log.workspace = true
+scribble-reader.workspace = true
+scribe.workspace = true
+winit = { workspace = true, features = ["android-game-activity"] }
+wrangler.workspace = true
+
+[lib]
+name = "main"
+crate-type = ["cdylib"]
+

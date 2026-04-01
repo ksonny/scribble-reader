@@ -15,9 +15,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::library;
 use crate::library::Location;
+use crate::settings::Paths;
 
 const MIGRATIONS_SLICE: &[M<'_>] = &[
 	M::up(
@@ -128,6 +130,15 @@ impl From<SecretBook> for library::Book {
 }
 
 #[derive(Debug, Serialize)]
+pub struct UpdateBook<'a> {
+	pub book_id: i64,
+	pub title: Option<&'a str>,
+	pub author: Option<&'a str>,
+	#[serde(with = "ts_seconds")]
+	pub modified_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct InsertBook {
 	pub path: PathBuf,
 	pub title: Option<String>,
@@ -156,22 +167,37 @@ struct InsertBookState {
 	pub element: Option<u32>,
 }
 
-pub struct RecordKeeper {
+pub struct RecordKeeperAssistant {
 	conn: rusqlite::Connection,
 }
 
-pub fn create(db_path: &Path) -> Result<RecordKeeper, RecordKeeperError> {
-	let mut conn = rusqlite::Connection::open(db_path)?;
-
-	conn.pragma_update(None, "foreign_keys", "on")?;
-	conn.pragma_update(None, "journal_mode", "WAL")?;
-
-	MIGRATIONS.to_latest(&mut conn).unwrap();
-
-	Ok(RecordKeeper { conn })
+#[derive(Clone)]
+pub struct RecordKeeper {
+	db_path: Arc<PathBuf>,
 }
 
 impl RecordKeeper {
+	pub fn new(paths: &Paths) -> Self {
+		let db_path = paths.data_path.join("state.db");
+		Self {
+			db_path: Arc::new(db_path),
+		}
+	}
+
+	pub fn assistant(&self) -> Result<RecordKeeperAssistant, RecordKeeperError> {
+		let mut conn = rusqlite::Connection::open(self.db_path.as_ref())?;
+
+		conn.pragma_update(None, "foreign_keys", "on")?;
+		conn.pragma_update(None, "journal_mode", "WAL")?;
+
+		static ONCE: OnceLock<()> = OnceLock::new();
+		ONCE.get_or_init(|| MIGRATIONS.to_latest(&mut conn).unwrap());
+
+		Ok(RecordKeeperAssistant { conn })
+	}
+}
+
+impl RecordKeeperAssistant {
 	pub fn fetch_book(&self, id: library::BookId) -> Result<library::Book, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
@@ -221,34 +247,39 @@ impl RecordKeeper {
 			.collect::<Result<_, _>>()?)
 	}
 
-	pub fn record_book_inventory(
-		&mut self,
-		books_iter: impl Iterator<Item = InsertBook>,
-	) -> Result<u64, RecordKeeperError> {
-		let tx = self.conn.transaction()?;
-		tx.execute("update books set exist = false;", [])?;
-		let mut upsert_stmt = tx.prepare(
+	pub fn upsert_book(&mut self, book: InsertBook) -> Result<library::BookId, RecordKeeperError> {
+		let mut insert_stmt = self.conn.prepare(
 			"insert into books (path, title, author, size, modified_at, added_at, exist)
 				values (:path, :title, :author, :size, :modified_at, :added_at, true)
-				on conflict (path)
-				do update set
-					title = :title,
-					author = :author,
-					size = :size,
-					modified_at = :modified_at,
-					exist = true;
-			",
+			on conflict (path)
+			do update set
+				title = :title,
+				author = :author,
+				size = :size,
+				modified_at = :modified_at,
+				exist = true
+			returning books.id",
 		)?;
-		let mut count = 0;
-		for book in books_iter {
-			let params = to_params_named(&book)?;
-			let params = params.to_slice();
-			upsert_stmt.execute(params.as_slice())?;
-			count += 1;
+		let params = to_params_named(&book)?;
+		let params = params.to_slice();
+		let book_id: i64 = insert_stmt.query_one(params.as_slice(), |row| row.get(0))?;
+
+		Ok(library::BookId(book_id))
+	}
+
+	pub fn unexist_books<'a>(
+		&mut self,
+		book_ids: impl IntoIterator<Item = &'a library::BookId>,
+	) -> Result<(), RecordKeeperError> {
+		let tx = self.conn.transaction()?;
+		let mut unexist_stmt = tx.prepare("update books set exist = false where id = ?1")?;
+		for id in book_ids {
+			log::info!("Unexist book {:?}", id);
+			unexist_stmt.execute([id.value()])?;
 		}
-		drop(upsert_stmt);
+		drop(unexist_stmt);
 		tx.commit()?;
-		Ok(count)
+		Ok(())
 	}
 
 	pub fn fetch_thumbnail(
@@ -270,6 +301,20 @@ impl RecordKeeper {
 			.next()
 			.transpose()
 			.map_err(|e| e.into())
+	}
+
+	pub fn update_book(&mut self, book: UpdateBook) -> Result<(), RecordKeeperError> {
+		let mut stmt = self.conn.prepare(
+			"update books set
+				title = :title,
+				author = :author,
+				modified_at = :modified_at,
+				exist = true
+			where id = :book_id;
+			",
+		)?;
+		stmt.execute(to_params_named(book)?.to_slice().as_slice())?;
+		Ok(())
 	}
 
 	pub fn record_thumbnail(

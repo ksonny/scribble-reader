@@ -33,7 +33,7 @@ pub fn create_egui_ctx() -> Context {
 		}],
 	));
 	egui_ctx.set_theme(egui::Theme::Light);
-	egui_ctx.style_mut(|style| {
+	egui_ctx.global_style_mut(|style| {
 		style.animation_time = 0.0;
 		style.spacing.item_spacing = Vec2::new(5.0, 5.0);
 		style.wrap_mode = Some(TextWrapMode::Truncate);
@@ -174,9 +174,9 @@ impl UiInput {
 		self.egui_input.take()
 	}
 
-	pub fn run(&mut self, run_ui: impl FnMut(&egui::Context)) -> egui::FullOutput {
+	pub fn run(&mut self, run_ui: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
 		let input = self.tick();
-		self.egui_ctx.run(input, run_ui)
+		self.egui_ctx.run_ui(input, run_ui)
 	}
 }
 

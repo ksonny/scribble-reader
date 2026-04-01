@@ -1,5 +1,3 @@
-#![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]
-
 mod fonts;
 mod fps_calculator;
 mod gestures;
@@ -7,13 +5,20 @@ mod renderer;
 mod ui;
 mod views;
 
+use std::fs;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use config::ConfigError;
 use illustrator::create_illustrator;
+use scribe::Scribe;
+use scribe::ScribeAssistant;
 use scribe::ScribeConfig;
 use scribe::library::Location;
+use scribe::record_keeper::RecordKeeper;
+use scribe::record_keeper::RecordKeeperError;
 use sculpter::SculpterFontErrors;
 use sculpter::SculpterFonts;
 use sculpter::SculpterFontsBuilder;
@@ -21,9 +26,10 @@ use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
-#[cfg(target_os = "android")]
-use winit::platform::android::activity::AndroidApp;
 use winit::window::Window;
+use wrangler::WranglerSystem;
+use wrangler::content::ContentWrangler;
+use wrangler::content::ContentWranglerAssistant;
 
 use crate::fps_calculator::FpsCalculator;
 use crate::gestures::Gesture;
@@ -34,14 +40,12 @@ use crate::ui::UiInput;
 use crate::views::AppView;
 use crate::views::EventResult;
 use crate::views::ViewHandle;
-use scribe::Scribe;
 use scribe::library;
 use scribe::library::BookId;
 
 struct App<'window> {
 	input: UiInput,
 	renderer: Option<Renderer<'window>>,
-	scribe: Scribe,
 	view: AppView,
 	bell: AppBell,
 	egui_ctx: egui::Context,
@@ -50,6 +54,9 @@ struct App<'window> {
 	gestures: GestureTracker<10>,
 	config: ScribeConfig,
 	fonts: Arc<SculpterFonts>,
+	keeper: RecordKeeper,
+	scribe: ScribeAssistant,
+	content: ContentWranglerAssistant,
 }
 
 impl App<'_> {
@@ -112,7 +119,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 		};
 	}
 
-	fn resumed(&mut self, event_loop: &egui_winit::winit::event_loop::ActiveEventLoop) {
+	fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
 		log::info!("resumed");
 		let window = event_loop
 			.create_window(Window::default_attributes())
@@ -136,7 +143,8 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				}
 			};
 		} else {
-			match pollster::block_on(Renderer::create(window, &self.egui_ctx)) {
+			let display = event_loop.owned_display_handle();
+			match pollster::block_on(Renderer::create(display, window, &self.egui_ctx)) {
 				Ok(renderer) => self.renderer = Some(renderer),
 				Err(e) => {
 					log::error!("Failed to create renderer: {e}");
@@ -157,12 +165,14 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 		match event {
 			AppEvent::OpenLibrary => {
 				log::debug!("Open library");
-				self.view.library(self.scribe.assistant());
+				self.view.library(self.keeper.clone(), self.scribe.clone());
 			}
 			AppEvent::OpenReader(book_id) => {
 				log::debug!("Open book {book_id:?}");
 				match create_illustrator(
 					self.config.clone(),
+					self.keeper.clone(),
+					self.content.clone(),
 					self.fonts.clone(),
 					self.bell.clone(),
 					book_id,
@@ -201,13 +211,13 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 	) {
 		match event {
 			WindowEvent::CloseRequested => {
-				log::info!("close requested");
+				log::info!("Window close requested");
 				self.renderer.take();
 				event_loop.exit();
 				return;
 			}
 			WindowEvent::Destroyed => {
-				log::info!("destroyed");
+				log::info!("Window destroyed");
 				self.renderer.take();
 				return;
 			}
@@ -269,6 +279,9 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 					Err(e @ RendererError::SurfaceNotAvailable) => {
 						log::warn!("Failure render: {e}");
 					}
+					Err(e @ RendererError::SurfaceLost) => {
+						log::warn!("Failure render: {e}");
+					}
 					Err(e) => {
 						log::error!("Failure render: {e}");
 						event_loop.exit();
@@ -285,8 +298,7 @@ pub enum AppEvent {
 	OpenLibrary,
 	OpenExperiments,
 	OpenReader(BookId),
-	LibraryUpdated,
-	LibraryBookUpdated(BookId),
+	BookUpdated(BookId),
 	BookContentReady(BookId, Location),
 	Exit,
 }
@@ -313,37 +325,51 @@ impl illustrator::Bell for AppBell {
 }
 
 impl scribe::Bell for AppBell {
-	fn library_updated(&self, book_id: Option<BookId>) {
-		if let Some(book_id) = book_id {
-			self.send_event(AppEvent::LibraryBookUpdated(book_id));
-		} else {
-			self.send_event(AppEvent::LibraryUpdated);
-		}
+	fn book_updated(&self, book_id: BookId) {
+		self.send_event(AppEvent::BookUpdated(book_id));
 	}
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
 	#[error(transparent)]
+	Io(#[from] io::Error),
+	#[error(transparent)]
 	EventLoop(#[from] EventLoopError),
 	#[error(transparent)]
-	ScribeCreate(#[from] scribe::ScribeCreateError),
-	#[error(transparent)]
-	Scribe(#[from] scribe::ScribeError),
-	#[error(transparent)]
 	SculpterFonts(#[from] SculpterFontErrors),
+	#[error(transparent)]
+	RecordKeeper(#[from] RecordKeeperError),
+	#[error(transparent)]
+	Config(#[from] ConfigError),
+	#[error(transparent)]
+	ExpandTilde(#[from] expand_tilde::Error),
 }
 
-pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<(), Error> {
+pub fn start(
+	config: ScribeConfig,
+	system: WranglerSystem,
+	event_loop: EventLoop<AppEvent>,
+) -> Result<(), Error> {
+	fs::create_dir_all(config.paths().cache_path.as_ref())?;
+	fs::create_dir_all(config.paths().config_path.as_ref())?;
+	fs::create_dir_all(config.paths().data_path.as_ref())?;
+
 	let bell = AppBell::new(event_loop.create_proxy());
 	let view = AppView::new(bell.clone());
-
 	let egui_ctx = ui::create_egui_ctx();
 	let input = UiInput::new(egui_ctx.clone());
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
+	let keeper = RecordKeeper::new(config.paths());
+	let scribe = Scribe::create(
+		system.clone(),
+		bell.clone(),
+		keeper.assistant()?,
+		config.paths(),
+	);
+	let content = ContentWrangler::create(system);
 
-	let scribe = Scribe::create(bell.clone(), config.clone())?;
 	let fonts = {
 		let fonts = SculpterFontsBuilder::new("EB Garamond", "Open Sans")
 			.add_font(fonts::EB_GARAMOND_VF_TTF)?
@@ -360,7 +386,6 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 	let mut app = App {
 		input,
 		renderer: None,
-		scribe,
 		view,
 		bell,
 		egui_ctx,
@@ -369,42 +394,12 @@ pub fn start(event_loop: EventLoop<AppEvent>, config: ScribeConfig) -> Result<()
 		gestures,
 		config,
 		fonts,
+		keeper,
+		scribe,
+		content,
 	};
 
 	event_loop.run_app(&mut app)?;
 
-	app.scribe.quit()?;
-
 	Ok(())
-}
-
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: AndroidApp) {
-	use android_logger::Config;
-	use scribe::settings::Paths;
-	use winit::platform::android::EventLoopBuilderExtAndroid;
-
-	android_logger::init_once(
-		Config::default()
-			.with_tag("scribble-reader")
-			.with_max_level(log::LevelFilter::Info),
-	);
-
-	let ext_data_path = app.external_data_path().unwrap();
-	let paths = Paths {
-		cache_path: ext_data_path.parent().unwrap().join("cache"),
-		config_path: ext_data_path.join("config"),
-		data_path: ext_data_path.join("data"),
-	};
-	let config = ScribeConfig::new(paths);
-
-	let event_loop = EventLoop::with_user_event()
-		.with_android_app(app)
-		.build()
-		.unwrap();
-	match start(event_loop, config) {
-		Ok(_) => {}
-		Err(e) => log::error!("Error: {e}"),
-	}
 }
