@@ -1,6 +1,6 @@
 [package]
 name = "illustrator"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["ksonny <ksonny@lotrax.org>"]
 edition = "2024"
 publish = false
