@@ -32,7 +32,7 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 			modified_at integer not null,
 			added_at integer not null,
 			exist boolean not null
-		);",
+		) strict;",
 	),
 	M::up(
 		"create table book_cache_thumbnails (
@@ -42,7 +42,7 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 			foreign key (book_id) references books(id)
 				on update cascade
 				on delete cascade
-		);",
+		) strict;",
 	),
 	M::up(
 		"create table book_reading_state (
@@ -53,7 +53,7 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 			foreign key (book_id) references books(id)
 				on update cascade
 				on delete cascade
-		);",
+		) strict;",
 	),
 ];
 const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
