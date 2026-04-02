@@ -31,7 +31,7 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 			size integer not null,
 			modified_at integer not null,
 			added_at integer not null,
-			exist boolean not null
+			exist integer not null check (exist in (0, 1))
 		) strict;",
 	),
 	M::up(
