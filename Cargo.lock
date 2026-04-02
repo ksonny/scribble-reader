@@ -5233,6 +5233,7 @@ dependencies = [
 name = "wrangler"
 version = "0.1.2"
 dependencies = [
+ "expand-tilde",
  "log",
 ]
 

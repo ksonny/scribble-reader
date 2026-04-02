@@ -16,6 +16,8 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::SystemTime;
 
+use expand_tilde::expand_tilde_owned;
+
 #[derive(Debug, Clone)]
 pub struct DocumentTree(Arc<String>);
 
@@ -234,7 +236,14 @@ pub fn create_wrangler(document_tree: DocumentTree) -> (WranglerSystem, JoinHand
 						continue;
 					};
 
-					let mut folders = vec![document_tree.path().to_path_buf()];
+					let root_path = match expand_tilde_owned(document_tree.path()) {
+						Ok(path) => path,
+						Err(err) => {
+							log::error!("Failed tilde expand tree {}: {}", document_tree, err);
+							continue;
+						}
+					};
+					let mut folders = vec![root_path];
 					loop {
 						let Some(folder) = folders.pop() else {
 							break;

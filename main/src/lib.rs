@@ -342,8 +342,6 @@ pub enum Error {
 	RecordKeeper(#[from] RecordKeeperError),
 	#[error(transparent)]
 	Config(#[from] ConfigError),
-	#[error(transparent)]
-	ExpandTilde(#[from] expand_tilde::Error),
 }
 
 pub fn start(
