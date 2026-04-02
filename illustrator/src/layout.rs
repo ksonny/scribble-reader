@@ -385,6 +385,7 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 
 		let page_height = settings.page_height_padded();
 		let page_width = settings.page_width_padded();
+		let min_line_height = Fixed::from_num(settings.min_line_height());
 
 		let content_id = taffy_tree.new_leaf(Style {
 			size: taffy::Size {
@@ -543,10 +544,10 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 							AvailableSpace::MaxContent => page_width,
 							AvailableSpace::Definite(width) => width,
 						});
-					let result = sculpter.measure(handle, max_width as u32);
+					let result = sculpter.measure(handle, max_width as u32, min_line_height);
 					taffy::Size {
 						width: max_width,
-						height: result.height as f32,
+						height: result.height.to_num::<f32>().ceil(),
 					}
 				}
 				None => taffy::Size::ZERO,
@@ -711,7 +712,9 @@ impl<'a> PageLayouter<'a, PageLayouterLoaded> {
 							while !text.is_empty() {
 								debug_assert!(
 									offset <= l.size.height,
-									"Accumulated block height exceeded measured height"
+									"Accumulated block height exceeded measured height {} <= {}",
+									offset,
+									l.size.height
 								);
 
 								let glyph_rem = text.glyph_range().len();

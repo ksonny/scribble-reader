@@ -203,12 +203,16 @@ pub fn create_sculpter<'a>(
 		let shaper_ref = shaper.add(shaper_face, false);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
-		let fo_hash = {
+		let hash = {
 			let mut s = DefaultHasher::new();
 			option.hash(&mut s);
 			s.finish()
 		};
-		faces.push((fo_hash, shaper_ref, font));
+		faces.push(SculpterFace {
+			hash,
+			face_ref: shaper_ref,
+			font,
+		});
 	}
 
 	for font in fonts.font_fallbacks() {
@@ -274,8 +278,14 @@ pub enum SculpterShapeError {
 	FaceNotFound,
 }
 
+pub struct SculpterFace<'font> {
+	hash: u64,
+	face_ref: ShapeFaceRef,
+	font: &'font FontEntry,
+}
+
 pub struct Sculpter<'font> {
-	faces: Vec<(u64, ShapeFaceRef, &'font FontEntry)>,
+	faces: Vec<SculpterFace<'font>>,
 	shaper: SculptureShaper<'font>,
 	printer: SculpturePrinter<'font>,
 	glyphs: Vec<GlyphPlan>,
@@ -304,9 +314,13 @@ impl Sculpter<'_> {
 			let (face_ref, units_per_em) = self
 				.faces
 				.iter()
-				.find_map(|(h, face_ref, font)| {
-					(*h == font_opts_h).then_some((*face_ref, font.units_per_em))
-				})
+				.find_map(
+					|SculpterFace {
+					     hash,
+					     face_ref,
+					     font,
+					 }| { (*hash == font_opts_h).then_some((*face_ref, font.units_per_em)) },
+				)
 				.ok_or(SculpterShapeError::FaceNotFound)?;
 
 			self.shaper.shape(face_ref, input, &mut self.glyphs)?;
@@ -330,40 +344,56 @@ impl Sculpter<'_> {
 
 #[derive(Debug)]
 pub struct MeasureResult {
-	pub height: u32,
+	pub height: I26F6,
 	pub lines: u32,
 }
 
 impl Sculpter<'_> {
-	pub fn measure(&self, handle: &SculpterHandle, width_px: u32) -> MeasureResult {
+	pub fn measure(
+		&self,
+		handle: &SculpterHandle,
+		width_px: u32,
+		empty_line_height_px: I26F6,
+	) -> MeasureResult {
 		debug_assert_eq!(
 			self.glyph_set_id, handle.glyph_set_id,
 			"Glyph set missmatch"
 		);
 
 		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
+		let empty_line_height = empty_line_height_px.round();
 
+		let mut measure_height = I26F6::ZERO;
+		let mut lines = 0;
 		let lines_iter = ShapeLines::new(
 			handle.glyphs_start,
 			&self.glyphs[handle.glyph_range()],
 			&self.styles,
 			I26F6::from_num(width_px),
 		);
-
-		let mut height = I26F6::ZERO;
-		let mut lines = 0;
 		for line in lines_iter {
+			if line.glyphs.is_empty() {
+				measure_height += empty_line_height;
+				continue;
+			}
+
 			let line_style = line
 				.height_decider_style()
 				.expect("Should never happen, no style for line with glyphs");
 
 			let font_height = line_style.font_size * px_per_pt;
-			height += font_height * line_style.line_height_em;
+			measure_height += font_height;
+
+			let line_space = font_height * (line_style.line_height_em - I26F6::ONE);
+			// Round to nearest pixel
+			measure_height = (measure_height + line_space).round();
 			lines += 1;
 		}
-		let height = height.ceil().to_num();
 
-		MeasureResult { height, lines }
+		MeasureResult {
+			height: measure_height,
+			lines,
+		}
 	}
 }
 
@@ -409,6 +439,7 @@ impl Sculpter<'_> {
 		);
 
 		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
+		let empty_line_height = empty_line_height_px.round();
 
 		let mut output = Vec::new();
 		let mut block_height = I26F6::ZERO;
@@ -419,8 +450,13 @@ impl Sculpter<'_> {
 			I26F6::from_num(width_px),
 		);
 		for line in lines_iter {
+			if block_height + empty_line_height > height_px {
+				break;
+			}
 			if line.glyphs.is_empty() {
-				block_height += empty_line_height_px.round();
+				log::info!("empty line, end {}", line.end());
+				handle.glyphs_start = line.end();
+				block_height += empty_line_height;
 				continue;
 			}
 
@@ -438,7 +474,7 @@ impl Sculpter<'_> {
 			let x_origin = I26F6::ZERO;
 			let y_origin = block_height;
 
-			handle.glyphs_start += line.len();
+			handle.glyphs_start = line.end();
 			self.printer
 				.print_line(x_origin, y_origin, line, &mut output, &self.options)?;
 

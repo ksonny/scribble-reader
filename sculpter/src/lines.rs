@@ -32,6 +32,10 @@ impl<'a> StyledGlyphs<'a> {
 		})?;
 		Some(line_style)
 	}
+
+	pub(crate) fn end(&self) -> usize {
+		self.offset + self.cursor + self.glyphs.len()
+	}
 }
 
 impl<'a> ExactSizeIterator for StyledGlyphs<'a> {
@@ -69,8 +73,11 @@ impl<'a> ShapeLines<'a> {
 		offset: usize,
 		glyphs: &'a [GlyphPlan],
 		styles: &'a [Style],
-		max_line_width: I26F6,
+		max_line_width_px: I26F6,
 	) -> Self {
+		let pt_per_px = I26F6::lit("72") / I26F6::lit("96");
+		let max_line_width = max_line_width_px * pt_per_px;
+
 		Self {
 			max_line_width,
 			glyphs,
@@ -85,69 +92,46 @@ impl<'a> Iterator for ShapeLines<'a> {
 	type Item = StyledGlyphs<'a>;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		let glyphs = self.glyphs;
-		let glyphs_len = glyphs.len();
-		let max_line_width = self.max_line_width;
-		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
-
-		if glyphs[self.cursor..].is_empty() {
+		if self.glyphs[self.cursor..].is_empty() {
 			return None;
 		}
 
-		let used = self.cursor;
-		let mut line_width = I26F6::ZERO;
+		let mut idx = self.cursor;
+		let mut segment_width = I26F6::ZERO;
+		let mut last_break = None;
 
-		while self.cursor < glyphs_len {
-			let (br_idx, br, br_width) = StyledGlyphs::new(
-				self.offset + self.cursor,
-				&glyphs[self.cursor..],
-				self.styles,
-			)
-			.enumerate()
-			.find_map(|(idx, (s, g))| {
-				(!matches!(g.br, BreakpointType::No)).then_some((
-					self.cursor + idx,
-					g.br,
-					g.pos.x_advance * s.font_scale * px_per_pt,
-				))
-			})
-			.unwrap_or((glyphs_len, BreakpointType::No, I26F6::ZERO));
-
-			if matches!(br, BreakpointType::Newline) {
-				self.cursor = (br_idx + 1).min(glyphs_len);
+		let rest = StyledGlyphs::new(
+			self.offset + self.cursor,
+			&self.glyphs[self.cursor..],
+			self.styles,
+		);
+		for (s, g) in rest.clone() {
+			let width = g.pos.x_advance * s.font_scale;
+			if segment_width + width > self.max_line_width {
+				let used = self.cursor;
+				self.cursor = last_break.unwrap_or(idx);
 				return Some(StyledGlyphs::new(
 					self.offset + used,
-					&glyphs[used..br_idx],
+					&self.glyphs[used..self.cursor],
 					self.styles,
 				));
 			}
 
-			let word_width = StyledGlyphs::new(
-				self.offset + self.cursor,
-				&glyphs[self.cursor..br_idx],
-				self.styles,
-			)
-			.map(|(s, g)| g.pos.x_advance * s.font_scale * px_per_pt)
-			.sum::<I26F6>();
-			if line_width + word_width > max_line_width {
-				return Some(StyledGlyphs::new(
-					self.offset + used,
-					&glyphs[used..self.cursor],
-					self.styles,
-				));
+			idx += 1;
+			segment_width += width;
+			if !matches!(g.br, BreakpointType::No) {
+				last_break = Some(idx);
 			}
-			line_width += word_width + br_width;
-			self.cursor = (br_idx + 1).min(glyphs_len);
 		}
+		self.cursor = idx;
+		Some(rest)
+	}
+}
 
-		if used < self.cursor {
-			Some(StyledGlyphs::new(
-				self.offset + used,
-				&glyphs[used..self.cursor],
-				self.styles,
-			))
-		} else {
-			None
-		}
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn test_basic() {
+		todo!()
 	}
 }
