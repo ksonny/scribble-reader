@@ -347,19 +347,24 @@ impl<B: Bell> Scribe<B> {
 			let thumbnail_path = self
 				.thumbnail_path
 				.join(format!("thumbnail_{}.png", book_id.value()));
+
 			if !thumbnail_path.try_exists()? {
 				self.buffer.clear();
 				archive
 					.by_path(cover.as_path())?
 					.read_to_end(&mut self.buffer)?;
-
 				create_thumbnail(&thumbnail_path, &self.buffer)?;
+			}
 
+			if self
+				.records
+				.fetch_thumbnail(book_id)?
+				.and_then(|t| t.path)
+				.is_none_or(|p| p == thumbnail_path)
+			{
 				self.records
 					.record_thumbnail(book_id, Some(&thumbnail_path))?;
 				self.bell.book_updated(book_id);
-			} else {
-				log::debug!("Thumbnail for {book_id} exists");
 			}
 		}
 
