@@ -77,7 +77,7 @@ impl Renderer<'_> {
 	) -> Result<Self, RendererError> {
 		let window = Arc::new(window);
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-			backends: wgpu::Backends::VULKAN,
+			backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
 			flags: Default::default(),
 			memory_budget_thresholds: Default::default(),
 			backend_options: Default::default(),
