@@ -312,6 +312,12 @@ pub struct Package {
 	pub spine: Vec<ResourceId>,
 }
 
+impl Package {
+	pub fn metadata_by_spine(&self, idx: usize) -> Option<&ResourceItem> {
+		self.manifest.get(self.spine.get(idx)?)
+	}
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 enum PackageElement {
 	#[default]

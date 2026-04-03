@@ -99,14 +99,11 @@ impl PageContentCache {
 			.unwrap_or(loc)
 	}
 
-	pub(crate) fn is_cached(&self, spine_item: &BookSpineItem) -> bool {
-		self.entries
-			.iter()
-			.flatten()
-			.any(|e| e.spine == spine_item.index)
+	pub(crate) fn is_cached(&self, loc: Location) -> bool {
+		self.entries.iter().flatten().any(|e| e.spine == loc.spine)
 	}
 
-	pub(crate) fn insert(&mut self, spine_item: &BookSpineItem, pages: Vec<PageContent>) {
+	pub(crate) fn insert(&mut self, spine_index: u32, pages: Vec<PageContent>) {
 		#[cfg(debug_assertions)]
 		if !pages.iter().is_sorted_by_key(|p| p.elements.start) {
 			let starts = pages
@@ -117,7 +114,7 @@ impl PageContentCache {
 		}
 
 		self.entries[self.index % CACHE_CHAPTERS] = Some(PageCacheEntry {
-			spine: spine_item.index,
+			spine: spine_index,
 			pages,
 		});
 		self.index += 1;

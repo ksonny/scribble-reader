@@ -4,7 +4,7 @@ mod reader;
 
 use std::sync::Arc;
 
-use illustrator::IllustratorHandle;
+use illustrator::IllustratorAssistant;
 use scribe::ScribeAssistant;
 use scribe::record_keeper::RecordKeeper;
 
@@ -75,7 +75,7 @@ impl AppView {
 		};
 	}
 
-	pub(crate) fn reader(&mut self, illustrator: IllustratorHandle) {
+	pub(crate) fn reader(&mut self, illustrator: IllustratorAssistant) {
 		let _ = illustrator.rescale(self.scale_factor);
 		let _ = illustrator.resize(self.screen_width, self.screen_height);
 
