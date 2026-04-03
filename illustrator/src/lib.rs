@@ -365,6 +365,16 @@ impl Worker {
 					records.record_book_state(book.id, Some(current_loc))?;
 					bell.content_ready(book.id, current_loc);
 
+					if spine_cache.is_none() {
+						let start = Instant::now();
+						let spine = count_spine_elements(package.clone(), &mut archive)?;
+						log::debug!(
+							"Load spine count in {}",
+							Instant::now().duration_since(start).as_secs_f64()
+						);
+						spine_cache = Some(spine);
+					};
+
 					self.working.store(false, Ordering::Release);
 					match req_rx.recv() {
 						Ok(req) => {
@@ -407,6 +417,7 @@ impl Worker {
 				);
 				spine_cache.insert(spine)
 			};
+
 			match req {
 				Request::NextPage => {
 					current_loc = self.cache.lock().unwrap().next_page(spine, current_loc);
