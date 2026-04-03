@@ -12,9 +12,9 @@ use crate::fonts::FontEntry;
 pub use crate::fonts::SculpterFontErrors;
 pub use crate::fonts::SculpterFonts;
 pub use crate::fonts::SculpterFontsBuilder;
-use crate::lines::ShapeLines;
+use crate::lines::StyledLines;
 pub use crate::printer::AtlasImage;
-use crate::printer::SculpturePrinter;
+use crate::printer::SculpterPrinter;
 use crate::shaper::GlyphPlan;
 use crate::shaper::SculptureShaper;
 use crate::shaper::ShapeFaceRef;
@@ -25,6 +25,9 @@ mod printer;
 mod shaper;
 
 pub type Fixed = I26F6;
+
+const PX_PER_PT: I26F6 = I26F6::lit("96").strict_div(I26F6::lit("72"));
+const PT_PER_PX: I26F6 = I26F6::lit("72").strict_div(I26F6::lit("96"));
 
 #[derive(Debug, Default, Hash)]
 pub enum Family<'a> {
@@ -174,7 +177,7 @@ pub fn create_sculpter<'a>(
 	options: SculpterOptions,
 ) -> Result<Sculpter<'a>, SculpterCreateError> {
 	let mut shaper = SculptureShaper::new();
-	let mut printer = SculpturePrinter::new([8192; 2]);
+	let mut printer = SculpterPrinter::new([8192; 2]);
 
 	let mut faces = Vec::with_capacity(font_options.len());
 	for option in font_options {
@@ -203,6 +206,7 @@ pub fn create_sculpter<'a>(
 		let shaper_ref = shaper.add(shaper_face, false);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
+
 		let hash = {
 			let mut s = DefaultHasher::new();
 			option.hash(&mut s);
@@ -264,6 +268,7 @@ impl SculpterHandle {
 
 #[derive(Debug)]
 struct Style {
+	face_ref: ShapeFaceRef,
 	font_size: I26F6,
 	font_scale: I26F6,
 	line_height_em: I26F6,
@@ -287,7 +292,7 @@ pub struct SculpterFace<'font> {
 pub struct Sculpter<'font> {
 	faces: Vec<SculpterFace<'font>>,
 	shaper: SculptureShaper<'font>,
-	printer: SculpturePrinter<'font>,
+	printer: SculpterPrinter<'font>,
 	glyphs: Vec<GlyphPlan>,
 	#[cfg(debug_assertions)]
 	glyph_set_id: u32,
@@ -319,6 +324,7 @@ impl Sculpter<'_> {
 					     hash,
 					     face_ref,
 					     font,
+					     ..
 					 }| { (*hash == font_opts_h).then_some((*face_ref, font.units_per_em)) },
 				)
 				.ok_or(SculpterShapeError::FaceNotFound)?;
@@ -326,6 +332,7 @@ impl Sculpter<'_> {
 			self.shaper.shape(face_ref, input, &mut self.glyphs)?;
 
 			self.styles.push(Style {
+				face_ref,
 				font_size,
 				font_scale: font_size / units_per_em,
 				line_height_em,
@@ -360,16 +367,15 @@ impl Sculpter<'_> {
 			"Glyph set missmatch"
 		);
 
-		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
 		let empty_line_height = empty_line_height_px.round();
 
 		let mut measure_height = I26F6::ZERO;
 		let mut lines = 0;
-		let lines_iter = ShapeLines::new(
+		let lines_iter = StyledLines::new(
 			handle.glyphs_start,
-			&self.glyphs[handle.glyph_range()],
 			&self.styles,
-			I26F6::from_num(width_px),
+			&self.glyphs[handle.glyph_range()],
+			I26F6::from_num(width_px) * PT_PER_PX,
 		);
 		for line in lines_iter {
 			if line.glyphs.is_empty() {
@@ -381,7 +387,7 @@ impl Sculpter<'_> {
 				.height_decider_style()
 				.expect("Should never happen, no style for line with glyphs");
 
-			let font_height = line_style.font_size * px_per_pt;
+			let font_height = line_style.font_size * PX_PER_PT;
 			measure_height += font_height;
 
 			let line_space = font_height * (line_style.line_height_em - I26F6::ONE);
@@ -438,16 +444,15 @@ impl Sculpter<'_> {
 			"Glyph set missmatch"
 		);
 
-		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
 		let empty_line_height = empty_line_height_px.round();
 
 		let mut output = Vec::new();
 		let mut block_height = I26F6::ZERO;
-		let lines_iter = ShapeLines::new(
+		let lines_iter = StyledLines::new(
 			handle.glyphs_start,
-			&self.glyphs[handle.glyph_range()],
 			&self.styles,
-			I26F6::from_num(width_px),
+			&self.glyphs[handle.glyph_range()],
+			I26F6::from_num(width_px) * PT_PER_PX,
 		);
 		for line in lines_iter {
 			if block_height + empty_line_height > height_px {
@@ -465,7 +470,7 @@ impl Sculpter<'_> {
 				.height_decider_style()
 				.expect("Should never happen, no style for line with glyphs");
 
-			let font_height = line_style.font_size * px_per_pt;
+			let font_height = line_style.font_size * PX_PER_PT;
 			if block_height + font_height > height_px {
 				break;
 			}

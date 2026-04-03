@@ -15,6 +15,7 @@ use image::GrayImage;
 use image::Pixel;
 
 use crate::DisplayGlyph;
+use crate::PX_PER_PT;
 use crate::SculpterOptions;
 use crate::SculpterPrinterError;
 use crate::lines::StyledGlyphs;
@@ -58,7 +59,7 @@ struct GlyphKey {
 }
 
 impl GlyphKey {
-	fn new(
+	fn from_glyph(
 		glyph: &GlyphPlan,
 		font_size: I26F6,
 		sub_pixel: I26F6,
@@ -66,9 +67,18 @@ impl GlyphKey {
 	) -> Self {
 		let sub_pixel = sub_pixel & options.atlas_sub_pixel_mask;
 
+		Self::new(
+			glyph.face_ref,
+			GlyphId(glyph.glyph_id),
+			font_size,
+			sub_pixel,
+		)
+	}
+
+	fn new(face_ref: ShapeFaceRef, glyph_id: GlyphId, font_size: I26F6, sub_pixel: I26F6) -> Self {
 		Self {
-			face_ref: glyph.face_ref,
-			glyph_id: GlyphId(glyph.glyph_id),
+			face_ref,
+			glyph_id,
 			font_size,
 			sub_pixel,
 		}
@@ -80,15 +90,21 @@ struct GlyphMapEntry {
 	outline: OutlinedGlyph,
 }
 
-pub(crate) struct SculpturePrinter<'a> {
-	fonts: Vec<ab_glyph::FontRef<'a>>,
+#[derive(Debug)]
+struct SculpterPrinterFont<'a> {
+	font: ab_glyph::FontRef<'a>,
+	hyphen_glyph_id: GlyphId,
+}
+
+pub(crate) struct SculpterPrinter<'a> {
+	fonts: Vec<SculpterPrinterFont<'a>>,
 	allocator: BucketedAtlasAllocator,
 	glyph_map: BTreeMap<GlyphKey, Option<GlyphMapEntry>>,
 	write_queue: Vec<GlyphKey>,
 	max_texture_2d: Size,
 }
 
-impl<'a> SculpturePrinter<'a> {
+impl<'a> SculpterPrinter<'a> {
 	const ATLAS_MARGIN: i32 = 1;
 
 	pub(crate) fn new(max_texture_2d: [u32; 2]) -> Self {
@@ -105,7 +121,11 @@ impl<'a> SculpturePrinter<'a> {
 
 	pub(crate) fn add(&mut self, font: ab_glyph::FontRef<'a>) -> ShapeFaceRef {
 		let face_ref = ShapeFaceRef(self.fonts.len() as u16);
-		self.fonts.push(font);
+		let hyphen_glyph_id = font.glyph_id('-');
+		self.fonts.push(SculpterPrinterFont {
+			font,
+			hyphen_glyph_id,
+		});
 		face_ref
 	}
 
@@ -117,16 +137,17 @@ impl<'a> SculpturePrinter<'a> {
 		glyphs: &mut Vec<DisplayGlyph>,
 		options: &SculpterOptions,
 	) -> Result<(), SculpterPrinterError> {
-		let px_per_pt = I26F6::lit("96") / I26F6::lit("72");
+		let hyphen_style = styled_glyphs.hyphen_style();
+
 		let mut x_pos = x_origin;
 		for (style, glyph) in styled_glyphs {
-			let x_advance = glyph.pos.x_advance * style.font_scale * px_per_pt;
-			let x_offset = glyph.pos.x_offset * style.font_scale * px_per_pt;
-			let y_offset = glyph.pos.y_offset * style.font_scale * px_per_pt;
+			let x_advance = glyph.pos.x_advance * style.font_scale * PX_PER_PT;
+			let x_offset = glyph.pos.x_offset * style.font_scale * PX_PER_PT;
+			let y_offset = glyph.pos.y_offset * style.font_scale * PX_PER_PT;
 
-			let font_size = style.font_size * px_per_pt;
+			let font_size = style.font_size * PX_PER_PT;
 			let sub_pixel = (x_pos + x_offset).frac();
-			let key = GlyphKey::new(glyph, font_size, sub_pixel, options);
+			let key = GlyphKey::from_glyph(glyph, font_size, sub_pixel, options);
 			let entry = if let Some(entry) = self.glyph_map.get(&key) {
 				entry
 			} else {
@@ -155,6 +176,38 @@ impl<'a> SculpturePrinter<'a> {
 			}
 			x_pos += x_advance;
 		}
+		if let Some(style) = hyphen_style {
+			let face_ref = style.face_ref;
+			let glyph_id = self.fonts[face_ref.0 as usize].hyphen_glyph_id;
+			let font_size = style.font_size * PX_PER_PT;
+			let key = GlyphKey::new(face_ref, glyph_id, font_size, I26F6::ZERO);
+			let entry = if let Some(entry) = self.glyph_map.get(&key) {
+				entry
+			} else {
+				self.alloc_glyph(key)?
+			};
+
+			if let Some(GlyphMapEntry { alloc, outline }) = entry {
+				let bounds = outline.px_bounds();
+
+				let x = x_pos + I26F6::from_num(bounds.min.x);
+				let y = y_origin + I26F6::from_num(bounds.min.y);
+				let w = bounds.width();
+				let h = bounds.height();
+
+				let u = alloc.rectangle.min.x;
+				let v = alloc.rectangle.min.y;
+				let uv_w = bounds.width();
+				let uv_h = bounds.height();
+
+				glyphs.push(DisplayGlyph {
+					pos: [x.to_num(), y.to_num()],
+					size: [w, h],
+					uv_pos: [u as u32, v as u32],
+					uv_size: [uv_w as u32, uv_h as u32],
+				});
+			}
+		}
 		Ok(())
 	}
 
@@ -162,7 +215,7 @@ impl<'a> SculpturePrinter<'a> {
 		&mut self,
 		key: GlyphKey,
 	) -> Result<&Option<GlyphMapEntry>, SculpterPrinterError> {
-		let font = &self.fonts[key.face_ref.0 as usize];
+		let font = &self.fonts[key.face_ref.0 as usize].font;
 
 		let units_per_em = font.units_per_em().unwrap();
 		let height = font.height_unscaled();
@@ -296,7 +349,7 @@ impl<'a> SculpturePrinter<'a> {
 		for (i, ((face_ref, glyph_id), n)) in repeat.into_iter().rev().take(10).enumerate() {
 			let i = i + 1;
 			let rev_glyph = face_rev_glyph.entry(face_ref).or_insert_with(|| {
-				let font = &self.fonts[face_ref.0 as usize];
+				let font = &self.fonts[face_ref.0 as usize].font;
 				font.codepoint_ids().collect::<BTreeMap<_, _>>()
 			});
 			let c = rev_glyph.get(&glyph_id).unwrap_or(&' ');
@@ -321,7 +374,7 @@ impl<'a> SculpturePrinter<'a> {
 		{
 			let i = i + 1;
 			let rev_glyph = face_rev_glyph.entry(face_ref).or_insert_with(|| {
-				let font = &self.fonts[face_ref.0 as usize];
+				let font = &self.fonts[face_ref.0 as usize].font;
 				font.codepoint_ids().collect::<BTreeMap<_, _>>()
 			});
 			let c = rev_glyph.get(&glyph_id).unwrap_or(&' ');
