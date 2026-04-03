@@ -90,17 +90,14 @@ impl ReaderView {
 		} else {
 			let loc = self.illustrator.location();
 			let navigation = self.illustrator.navigation();
-			log::info!("Got navigation with {} items", navigation.nav_points.len());
-			let index = navigation
-				.nav_points
-				.iter()
-				.position(|p| p.spine == Some(loc.spine));
-			let page = index
-				.map(|index| index as u32 / CHAPTER_LIST_SIZE)
-				.unwrap_or(0);
-			let offset = page * CHAPTER_LIST_SIZE;
+			let nav_points = navigation
+				.as_ref()
+				.map(|n| n.nav_points.as_slice())
+				.unwrap_or_default();
 
-			let mut item_iter = navigation.nav_points.iter().skip(offset as usize);
+			let page = loc.spine / CHAPTER_LIST_SIZE;
+			let offset = page * CHAPTER_LIST_SIZE;
+			let mut item_iter = nav_points.iter().skip(offset as usize);
 			for card in self.cards.as_mut() {
 				if let Some(item) = item_iter.next() {
 					*card = Some(ChapterCard {
@@ -135,9 +132,14 @@ impl ReaderView {
 			ReaderMode::Navigation => {
 				self.page = self.page.saturating_sub(1);
 				let offset = self.page * CHAPTER_LIST_SIZE;
+
 				let navigation = self.illustrator.navigation();
-				log::info!("Got navigation with {} items", navigation.nav_points.len());
-				let mut item_iter = navigation.nav_points.iter().skip(offset as usize);
+				let nav_points = navigation
+					.as_ref()
+					.map(|n| n.nav_points.as_slice())
+					.unwrap_or_default();
+
+				let mut item_iter = nav_points.iter().skip(offset as usize);
 				for card in self.cards.as_mut() {
 					if let Some(item) = item_iter.next() {
 						*card = Some(ChapterCard {
@@ -164,10 +166,15 @@ impl ReaderView {
 			ReaderMode::Navigation => {
 				let page = self.page + 1;
 				let offset = (page * CHAPTER_LIST_SIZE) as usize;
+
 				let navigation = self.illustrator.navigation();
-				log::info!("Got navigation with {} items", navigation.nav_points.len());
-				if navigation.nav_points.len() > offset {
-					let mut item_iter = navigation.nav_points.iter().skip(offset);
+				let nav_points = navigation
+					.as_ref()
+					.map(|n| n.nav_points.as_slice())
+					.unwrap_or_default();
+
+				if nav_points.len() > offset {
+					let mut item_iter = nav_points.iter().skip(offset);
 					for card in self.cards.as_mut() {
 						if let Some(item) = item_iter.next() {
 							*card = Some(ChapterCard {
@@ -339,8 +346,9 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
+			let loading = self.illustrator.working();
 			let top_panel = egui::Panel::top("top")
-				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, loading).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 			if !is_open {
 				self.rects.push(top_panel.response.interact_rect);
