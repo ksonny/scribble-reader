@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use egui::Rect;
 use egui::RichText;
-use illustrator::IllustratorHandle;
+use illustrator::IllustratorAssistant;
 use lucide_icons::Icon;
 use scribe::library::Location;
 
@@ -45,7 +45,7 @@ pub(crate) struct ChapterCard {
 
 pub(crate) struct ReaderView {
 	bell: AppBell,
-	illustrator: IllustratorHandle,
+	illustrator: IllustratorAssistant,
 	screen_width: u32,
 	screen_height: u32,
 	scale_factor: f32,
@@ -58,7 +58,7 @@ pub(crate) struct ReaderView {
 impl ReaderView {
 	pub(crate) fn create(
 		bell: AppBell,
-		illustrator: IllustratorHandle,
+		illustrator: IllustratorAssistant,
 		screen_width: u32,
 		screen_height: u32,
 		scale_factor: f32,

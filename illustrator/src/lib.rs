@@ -48,7 +48,7 @@ pub enum Request {
 	Rescale { scale: f32 },
 }
 
-pub struct IllustratorHandle {
+pub struct IllustratorAssistant {
 	req_tx: Sender<Request>,
 	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
@@ -63,7 +63,7 @@ pub enum IllustratorRequestError {
 	NotRunning,
 }
 
-impl IllustratorHandle {
+impl IllustratorAssistant {
 	pub fn location(&self) -> Location {
 		*self.location.lock().unwrap()
 	}
@@ -402,7 +402,7 @@ pub fn create_illustrator(
 	fonts: Arc<SculpterFonts>,
 	bell: impl Bell + Send + 'static,
 	book_id: library::BookId,
-) -> Result<IllustratorHandle, IllustratorCreateError> {
+) -> Result<IllustratorAssistant, IllustratorCreateError> {
 	log::debug!("Open book {book_id}");
 
 	let records = record_keeper.assistant()?;
@@ -441,7 +441,7 @@ pub fn create_illustrator(
 		}
 	});
 
-	Ok(IllustratorHandle {
+	Ok(IllustratorAssistant {
 		req_tx,
 		handle,
 		navigation,
