@@ -351,6 +351,14 @@ impl ViewHandle for LibraryView {
 				self.cards = read_cards(&mut self.shelves, &self.records, self.page);
 				EventResult::RequestRedraw
 			}
+			AppEvent::NavigateNext => {
+				self.next_page();
+				EventResult::RequestRedraw
+			}
+			AppEvent::NavigatePrevious => {
+				self.prev_page();
+				EventResult::RequestRedraw
+			}
 			_ => EventResult::None,
 		}
 	}
