@@ -10,7 +10,7 @@ pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
 path = "~/Documents/ebooks"
 
 [illustrator]
-font_size = 18.0
+font_size = 16.0
 line_height = 1.5
 h1 = { font_size_em = 1.8 }
 h2 = { font_size_em = 1.4 }
@@ -28,14 +28,14 @@ variation = { wght = 400, ital = 1 }
 
 [illustrator.font_bold]
 family = "serif"
-variation = { wght = 700 }
+variation = { wght = 600 }
 
 [illustrator.padding]
 top_em = 2.0
 left_em = 2.0
 right_em = 2.0
-bottom_em = 3.0
-paragraph_em = 1.0
+bottom_em = 2.0
+paragraph_em = 1.2
 "#;
 
 #[cfg(target_os = "android")]
@@ -43,7 +43,7 @@ pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
 [library]
 
 [illustrator]
-font_size = 18.0
+font_size = 16.0
 line_height = 1.5
 h1 = { font_size_em = 1.8 }
 h2 = { font_size_em = 1.4 }
@@ -53,22 +53,22 @@ h5 = { font_size_em = 1.0 }
 
 [illustrator.font_regular]
 family = "serif"
-variation = { wght = 500 }
+variation = { wght = 400 }
 
 [illustrator.font_italic]
 family = "serif"
-variation = { wght = 500, ital = 1 }
+variation = { wght = 400, ital = 1 }
 
 [illustrator.font_bold]
 family = "serif"
-variation = { wght = 800 }
+variation = { wght = 600 }
 
 [illustrator.padding]
 top_em = 2.0
 left_em = 2.0
 right_em = 2.0
-bottom_em = 3.0
-paragraph_em = 1.0
+bottom_em = 2.0
+paragraph_em = 1.2
 "#;
 
 #[derive(Debug, Deserialize, Serialize)]

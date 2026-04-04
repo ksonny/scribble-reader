@@ -302,13 +302,13 @@ impl Worker {
 		};
 
 		let start = Instant::now();
-		let illustrator_config = self.config.illustrator()?;
+		let settings = self.config.illustrator()?;
 		let sculpter = sculpter::create_sculpter(
 			&self.fonts,
 			&[
-				&into_font_options(&illustrator_config.font_regular),
-				&into_font_options(&illustrator_config.font_bold),
-				&into_font_options(&illustrator_config.font_italic),
+				&into_font_options(&settings.font_regular),
+				&into_font_options(&settings.font_bold),
+				&into_font_options(&settings.font_italic),
 			],
 			SculpterOptions {
 				atlas_sub_pixel_mask: I26F6::from_bits(!0b1),
@@ -331,7 +331,7 @@ impl Worker {
 				Err(TryRecvError::Empty) => {
 					if clear_cache || !self.cache.lock().unwrap().is_cached(current_loc) {
 						let start = Instant::now();
-						let settings = StyleSettings::new(&illustrator_config, &params);
+						let settings = StyleSettings::new(&settings, &params);
 						let resource = package
 							.metadata_by_spine(current_loc.spine as usize)
 							.expect("Unexpected missing resource");

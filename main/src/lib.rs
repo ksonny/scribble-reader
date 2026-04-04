@@ -371,11 +371,13 @@ pub fn start(
 	let content = ContentWrangler::create(system);
 
 	let fonts = {
-		let fonts = SculpterFontsBuilder::new("EB Garamond", "Open Sans")
+		let fonts = SculpterFontsBuilder::new("Literata", "Open Sans")
 			.add_font(fonts::EB_GARAMOND_VF_TTF)?
 			.add_font(fonts::EB_GARAMOND_ITALIC_VF_TTF)?
 			.add_font(fonts::OPEN_SANS_VF_TTF)?
 			.add_font(fonts::OPEN_SANS_ITALIC_VF_TTF)?
+			.add_font(fonts::LITERATA_VF_TTF)?
+			.add_font(fonts::LITERATA_ITALIC_VF_TTF)?
 			.add_fallback(fonts::NOTO_EMOJI_VF_TTF)?
 			.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
 			.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
