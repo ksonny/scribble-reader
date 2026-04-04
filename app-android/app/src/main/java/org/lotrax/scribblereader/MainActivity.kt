@@ -73,7 +73,6 @@ class MainActivity : GameActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         // android-activity filters volume key events in activity glue, so we run a bypass
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            inputNext()
             return inputNext()
         } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             return inputPrev()
