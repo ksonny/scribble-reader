@@ -46,7 +46,7 @@ jobs:
           keyPassword=$SIGNING_KEY_PASSWD
           EOF
           echo "$SIGNING_KEYSTORE" | base64 -di > "$SIGNING_STORE_FILE"
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        if: ${{ github.actor != 'dependabot[bot]' }}
 
       - name: build app
         run: |
@@ -55,7 +55,7 @@ jobs:
           cd ..
           mkdir -p apk
           mv app-android/app/build/outputs/apk/release/app-release.apk apk/scribblereader.apk
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        if: ${{ github.actor != 'dependabot[bot]' }}
 
       - uses: actions/upload-artifact@v6
         with:
