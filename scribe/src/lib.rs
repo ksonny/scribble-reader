@@ -12,6 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use chrono::DateTime;
@@ -128,6 +130,7 @@ enum LibraryTask {
 
 pub struct Scribe<B: Bell> {
 	system: WranglerSystem,
+	working: Arc<AtomicBool>,
 	records: RecordKeeperAssistant,
 	bell: B,
 	thumbnail_path: PathBuf,
@@ -141,6 +144,7 @@ pub struct Scribe<B: Bell> {
 #[derive(Clone)]
 pub struct ScribeAssistant {
 	system: WranglerSystem,
+	working: Arc<AtomicBool>,
 	tasks: Arc<Mutex<BTreeMap<Ticket, LibraryTask>>>,
 }
 
@@ -156,12 +160,12 @@ impl<B: Bell + Send + 'static> Scribe<B> {
 		paths: &Paths,
 	) -> ScribeAssistant {
 		let thumbnail_path = paths.cache_path.join("thumbnails");
-
+		let working = Arc::new(AtomicBool::new(true));
 		let tasks = Arc::new(Mutex::new(BTreeMap::new()));
 
-		log::info!("Register wrangler");
 		system.register(Box::new(Self {
 			system: system.clone(),
+			working: working.clone(),
 			records,
 			bell,
 			thumbnail_path,
@@ -172,11 +176,19 @@ impl<B: Bell + Send + 'static> Scribe<B> {
 			buffer: Vec::new(),
 		}));
 
-		ScribeAssistant { system, tasks }
+		ScribeAssistant {
+			system,
+			working,
+			tasks,
+		}
 	}
 }
 
 impl ScribeAssistant {
+	pub fn working(&self) -> bool {
+		self.working.load(Ordering::Acquire)
+	}
+
 	pub fn scan(&self) {
 		let ticket = Ticket::take();
 		self.tasks
@@ -184,6 +196,7 @@ impl ScribeAssistant {
 			.unwrap()
 			.insert(ticket, LibraryTask::Discover);
 		self.system.send(WranglerCommand::ExploreTree(ticket));
+		self.working.store(true, Ordering::Release);
 	}
 }
 
@@ -256,16 +269,21 @@ impl<B: Bell> Scribe<B> {
 	}
 
 	fn send_stale_batch(&mut self) {
-		log::debug!("Request 5 more stale files");
-		for _ in 0..5 {
-			if let Some((_, id, doc)) = self.stale_books.pop() {
-				let ticket = Ticket::take();
-				self.tasks
-					.lock()
-					.unwrap()
-					.insert(ticket, LibraryTask::Read(id));
-				self.system.send(WranglerCommand::Document(ticket, doc));
+		let n = self.stale_books.len().clamp(0, 5);
+		if n > 0 {
+			log::debug!("Request {n} more stale files");
+			for _ in 0..n {
+				if let Some((_, id, doc)) = self.stale_books.pop() {
+					let ticket = Ticket::take();
+					self.tasks
+						.lock()
+						.unwrap()
+						.insert(ticket, LibraryTask::Read(id));
+					self.system.send(WranglerCommand::Document(ticket, doc));
+				}
 			}
+		} else {
+			self.working.store(false, Ordering::Release);
 		}
 	}
 }
