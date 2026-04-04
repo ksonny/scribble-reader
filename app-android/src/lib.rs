@@ -20,9 +20,11 @@ use jni::native_method;
 use jni::objects::JObject;
 use jni::objects::JString;
 use jni::refs::Global;
+use jni::sys::jboolean;
 use jni::sys::jint;
 use jni::sys::jlong;
 use jni::vm::JavaVM;
+use scribble_reader::AppEvent;
 use scribble_reader::start;
 use scribe::ScribeConfig;
 use scribe::settings;
@@ -82,11 +84,21 @@ const _WRANGLER_NATIVE_METHODS: &[jni::NativeMethod] = &[
 		java_type = "org.lotrax.scribblereader.MainActivity",
 		extern fn wrangler_fail(ticket_id: jlong, reason: JString),
 	},
+	native_method! {
+		java_type = "org.lotrax.scribblereader.MainActivity",
+		extern fn input_next() -> jboolean,
+	},
+	native_method! {
+		java_type = "org.lotrax.scribblereader.MainActivity",
+		extern fn input_prev() -> jboolean,
+	},
 ];
 
 static WRANGLERS: OnceLock<Arc<Mutex<Vec<Box<dyn Wrangler>>>>> = OnceLock::new();
 
 static WRANGLER_SENDER: OnceLock<Sender<WranglerCommand>> = OnceLock::new();
+
+static EVENT_LOOP_PROXY: OnceLock<winit::event_loop::EventLoopProxy<AppEvent>> = OnceLock::new();
 
 fn wrangler_open_tree<'local>(
 	env: &mut Env<'local>,
@@ -229,6 +241,24 @@ fn wrangler_fail<'local>(
 
 	send_document_fail(ticket, reason);
 	Ok(())
+}
+
+fn input_next<'local>(
+	_env: &mut Env<'local>,
+	_this: JObject<'local>,
+) -> Result<jboolean, jni::errors::Error> {
+	let event_loop = EVENT_LOOP_PROXY.wait();
+	event_loop.send_event(AppEvent::NavigateNext).unwrap();
+	Ok(true)
+}
+
+fn input_prev<'local>(
+	_env: &mut Env<'local>,
+	_this: JObject<'local>,
+) -> Result<jboolean, jni::errors::Error> {
+	let event_loop = EVENT_LOOP_PROXY.wait();
+	event_loop.send_event(AppEvent::NavigatePrevious).unwrap();
+	Ok(true)
 }
 
 fn send_document_fail(ticket: Ticket, err: impl ToString) {
@@ -382,10 +412,10 @@ fn android_main(app: AndroidApp) {
 	android_logger::init_once(
 		Config::default()
 			.with_tag("scribble-reader")
-			.with_max_level(log::LevelFilter::Trace)
+			.with_max_level(log::LevelFilter::Debug)
 			.with_filter(
 				android_logger::FilterBuilder::new()
-					.parse("info,naga=warn,wgpu=warn,scribe=trace")
+					.parse("debug,naga=warn,wgpu=warn,scribble-reader=trace,scribe=trace")
 					.build(),
 			),
 	);
@@ -429,8 +459,12 @@ fn android_main(app: AndroidApp) {
 
 	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
+		.handle_volume_keys()
 		.build()
 		.unwrap();
+
+	let event_loop_proxy = event_loop.create_proxy();
+	EVENT_LOOP_PROXY.get_or_init(|| event_loop_proxy);
 
 	if let Err(e) = start(config, system.clone(), event_loop) {
 		log::error!("App error: {e}")

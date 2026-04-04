@@ -300,6 +300,8 @@ pub enum AppEvent {
 	OpenReader(BookId),
 	BookUpdated(BookId),
 	BookContentReady(BookId, Location),
+	NavigateNext,
+	NavigatePrevious,
 	Exit,
 }
 

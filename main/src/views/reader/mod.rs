@@ -409,10 +409,17 @@ impl ViewHandle for ReaderView {
 	}
 
 	fn event(&mut self, event: &AppEvent) -> EventResult {
-		if let AppEvent::BookContentReady(..) = event {
-			EventResult::RequestRedraw
-		} else {
-			EventResult::None
+		match event {
+			AppEvent::BookContentReady(..) => EventResult::RequestRedraw,
+			AppEvent::NavigateNext => {
+				self.next_page();
+				EventResult::None
+			}
+			AppEvent::NavigatePrevious => {
+				self.prev_page();
+				EventResult::None
+			}
+			_ => EventResult::None,
 		}
 	}
 

@@ -8,6 +8,7 @@ import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.util.Log
 import android.view.WindowManager
+import android.view.KeyEvent
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.net.toUri
@@ -67,6 +68,18 @@ class MainActivity : GameActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemUI()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // android-activity filters volume key events in activity glue, so we run a bypass
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            inputNext()
+            return inputNext()
+        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return inputPrev()
+        } else {
+            return super.onKeyDown(keyCode, event)
+        }
     }
 
     @Suppress("unused")
@@ -190,7 +203,6 @@ class MainActivity : GameActivity() {
         }
     }
 
-
     external fun wranglerOpenTree(rootUri: String)
     external fun wranglerDiscoverStart(ticketId: Long)
     external fun wranglerDiscover(
@@ -203,6 +215,9 @@ class MainActivity : GameActivity() {
     external fun wranglerDiscoverEnd(ticketId: Long)
     external fun wranglerFile(ticketId: Long, docId: String, fd: Int, size: Long, lastModified: Long)
     external fun wranglerFail(ticketId: Long, reason: String)
+
+    external fun inputNext(): Boolean
+    external fun inputPrev(): Boolean
 
     companion object {
         init {
