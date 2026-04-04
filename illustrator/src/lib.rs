@@ -511,25 +511,21 @@ fn count_spine_elements<R: io::Seek + io::Read>(
 	package: Arc<epub::Package>,
 	archive: &mut ZipArchive<R>,
 ) -> Result<Vec<BookSpineItem>, IllustratorWorkerError> {
-	let spine = {
-		let mut builder = NodeTreeBuilder::new();
-		let mut items = Vec::new();
-		for (index, item) in package.spine.iter().enumerate() {
-			let resource = package
-				.manifest
-				.get(item)
-				.ok_or_else(|| IllustratorWorkerError::MissingResource(item.clone()))?;
-			let file = archive.by_path(resource.as_path())?;
-			let tree = builder.read_from(file)?;
-			let node_count = tree.tree.node_count();
-			items.push(BookSpineItem {
-				index: index as u32,
-				elements: U26F6::ZERO..U26F6::from_num(node_count),
-			});
-			builder = tree.into_builder();
-		}
-		items
-	};
-
-	Ok(spine)
+	let mut builder = NodeTreeBuilder::new();
+	let mut items = Vec::new();
+	for (index, item) in package.spine.iter().enumerate() {
+		let resource = package
+			.manifest
+			.get(item)
+			.ok_or_else(|| IllustratorWorkerError::MissingResource(item.clone()))?;
+		let file = archive.by_path(resource.as_path())?;
+		let tree = builder.read_from(file)?;
+		let node_count = tree.tree.node_count();
+		items.push(BookSpineItem {
+			index: index as u32,
+			elements: U26F6::ZERO..U26F6::from_num(node_count),
+		});
+		builder = tree.into_builder();
+	}
+	Ok(items)
 }
