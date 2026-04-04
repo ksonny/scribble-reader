@@ -35,7 +35,7 @@ rusqlite_migration = "2.3.0"
 rustybuzz = "0.20.1"
 serde = { version = "1.0.226", features = ["derive", "rc"] }
 serde_rusqlite = "0.42.0"
-taffy = { version = "0.9.1", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
+taffy = { version = "0.10.0", default-features = false, features = ["alloc", "std", "block_layout", "taffy_tree", "content_size"] }
 thiserror = "2.0.17"
 toml = "1.1.1"
 ttf-parser = "0.25.1"
