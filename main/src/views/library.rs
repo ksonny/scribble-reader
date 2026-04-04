@@ -307,8 +307,9 @@ impl ViewHandle for LibraryView {
 				None,
 			];
 
+			let working = self.scribe.working();
 			let top_panel = Panel::top("top")
-				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, false).ui(ui));
+				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, working).ui(ui));
 			let is_open = top_panel.inner.context_menu_opened();
 
 			Panel::bottom("bottom")
