@@ -59,7 +59,7 @@ overflow-checks = false
 lto = "thin"
 
 [patch.crates-io]
-winit = { git = "https://github.com/ksonny/winit", rev = "e7cda559cd05923ad03fda1ca788ea4b8c62867c" }
+winit = { git = "https://github.com/ksonny/winit", rev = "3dfe4bd368ea8763e902653ef598e219d2a0dccd" }
 egui = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
 egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
 egui-winit = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
