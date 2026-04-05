@@ -1,5 +1,6 @@
 mod active_areas;
 
+use std::fmt::Write;
 use std::sync::Arc;
 
 use egui::Rect;
@@ -50,9 +51,14 @@ pub(crate) struct ReaderView {
 	screen_height: u32,
 	scale_factor: f32,
 	mode: ReaderMode,
-	rects: Vec<Rect>,
-	page: u32,
-	cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
+
+	/// Keeps track of where taps/clicks should go through to activy areas.
+	active_rects: Vec<Rect>,
+
+	chapters_page: u32,
+	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
+
+	statusline: Option<String>,
 }
 
 impl ReaderView {
@@ -70,9 +76,10 @@ impl ReaderView {
 			screen_height,
 			scale_factor,
 			mode: ReaderMode::ReadNoUi,
-			rects: Vec::new(),
-			page: 0,
-			cards: Default::default(),
+			active_rects: Vec::new(),
+			chapters_page: 0,
+			chapters_cards: Default::default(),
+			statusline: String::new().into(),
 		}
 	}
 
@@ -98,7 +105,7 @@ impl ReaderView {
 			let page = loc.spine / CHAPTER_LIST_SIZE;
 			let offset = page * CHAPTER_LIST_SIZE;
 			let mut item_iter = nav_points.iter().skip(offset as usize);
-			for card in self.cards.as_mut() {
+			for card in self.chapters_cards.as_mut() {
 				if let Some(item) = item_iter.next() {
 					*card = Some(ChapterCard {
 						location: Location::from_spine(item.spine.unwrap_or_default()),
@@ -108,7 +115,7 @@ impl ReaderView {
 					*card = None;
 				}
 			}
-			self.page = page;
+			self.chapters_page = page;
 			self.mode = ReaderMode::Navigation;
 		}
 	}
@@ -130,8 +137,8 @@ impl ReaderView {
 					.inspect_err(|err| log::error!("Previous page error: {err}"));
 			}
 			ReaderMode::Navigation => {
-				self.page = self.page.saturating_sub(1);
-				let offset = self.page * CHAPTER_LIST_SIZE;
+				self.chapters_page = self.chapters_page.saturating_sub(1);
+				let offset = self.chapters_page * CHAPTER_LIST_SIZE;
 
 				let navigation = self.illustrator.navigation();
 				let nav_points = navigation
@@ -140,7 +147,7 @@ impl ReaderView {
 					.unwrap_or_default();
 
 				let mut item_iter = nav_points.iter().skip(offset as usize);
-				for card in self.cards.as_mut() {
+				for card in self.chapters_cards.as_mut() {
 					if let Some(item) = item_iter.next() {
 						*card = Some(ChapterCard {
 							location: Location::from_spine(item.spine.unwrap_or_default()),
@@ -164,7 +171,7 @@ impl ReaderView {
 					.inspect_err(|err| log::error!("Next page error: {err}"));
 			}
 			ReaderMode::Navigation => {
-				let page = self.page + 1;
+				let page = self.chapters_page + 1;
 				let offset = (page * CHAPTER_LIST_SIZE) as usize;
 
 				let navigation = self.illustrator.navigation();
@@ -175,7 +182,7 @@ impl ReaderView {
 
 				if nav_points.len() > offset {
 					let mut item_iter = nav_points.iter().skip(offset);
-					for card in self.cards.as_mut() {
+					for card in self.chapters_cards.as_mut() {
 						if let Some(item) = item_iter.next() {
 							*card = Some(ChapterCard {
 								location: Location::from_spine(item.spine.unwrap_or_default()),
@@ -185,7 +192,7 @@ impl ReaderView {
 							*card = None;
 						}
 					}
-					self.page = page;
+					self.chapters_page = page;
 				}
 			}
 			ReaderMode::Settings => {}
@@ -233,13 +240,22 @@ impl OnAction<ToolAction> for ReaderView {
 
 impl ViewHandle for ReaderView {
 	fn draw(&mut self, painter: Painter<'_>) {
-		self.rects.clear();
+		self.active_rects.clear();
+
+		let mut statusline = self.statusline.take().unwrap_or_default();
+		statusline.clear();
 
 		let painter = if matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
 			let loc = self.illustrator.location();
 			let cache = self.illustrator.cache();
-			let content = cache.page(loc);
-			if let Some(content) = content {
+			let page = cache.page(loc);
+			if let Some((content, meta)) = page {
+				let _ = write!(
+					&mut statusline,
+					"{} of {} in chapter",
+					meta.page, meta.pages
+				);
+
 				let mut glyph_targets = Vec::new();
 				for item in &content.items {
 					if let illustrator::DisplayItem {
@@ -346,20 +362,24 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
-			let loading = self.illustrator.working();
-			let top_panel = egui::Panel::top("top")
-				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, loading).ui(ui));
+			let working = self.illustrator.working();
+			let top_panel = egui::Panel::top("top").show_inside(ui, |ui| {
+				MainMenuBar::new(self, menu_items)
+					.with_loading(working)
+					.with_status(Some(&statusline))
+					.ui(ui)
+			});
 			let is_open = top_panel.inner.context_menu_opened();
 			if !is_open {
-				self.rects.push(top_panel.response.interact_rect);
+				self.active_rects.push(top_panel.response.interact_rect);
 			} else {
-				self.rects.push(ui.content_rect())
+				self.active_rects.push(ui.content_rect())
 			}
 
 			let bottom_panel = egui::Panel::bottom("bottom")
 				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 			if !is_open {
-				self.rects.push(bottom_panel.response.interact_rect);
+				self.active_rects.push(bottom_panel.response.interact_rect);
 			}
 
 			if matches!(self.mode, ReaderMode::Navigation) {
@@ -374,7 +394,7 @@ impl ViewHandle for ReaderView {
 
 					ui.vertical(|ui| {
 						let mut untoggle = false;
-						for card in self.cards.iter().flatten() {
+						for card in self.chapters_cards.iter().flatten() {
 							ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
 								if ui.add(card.ui()).clicked() {
 									let _ = self
@@ -391,7 +411,7 @@ impl ViewHandle for ReaderView {
 					});
 				});
 				if !is_open {
-					self.rects.push(central_panel.response.interact_rect);
+					self.active_rects.push(central_panel.response.interact_rect);
 				}
 			} else if matches!(self.mode, ReaderMode::Settings) {
 				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -402,10 +422,12 @@ impl ViewHandle for ReaderView {
 					// TODO: Settings
 				});
 				if !is_open {
-					self.rects.push(central_panel.response.interact_rect);
+					self.active_rects.push(central_panel.response.interact_rect);
 				}
 			}
 		});
+
+		self.statusline = Some(statusline);
 	}
 
 	fn event(&mut self, event: &AppEvent) -> EventResult {
@@ -427,7 +449,7 @@ impl ViewHandle for ReaderView {
 		match event.gesture {
 			Gesture::Tap => {
 				let pos = egui::pos2(event.loc.x as f32, event.loc.y as f32) / self.scale_factor;
-				if self.rects.iter().any(|r| r.contains(pos)) {
+				if self.active_rects.iter().any(|r| r.contains(pos)) {
 					GestureResult::Unhandled
 				} else {
 					let areas = ActiveAreas::new(self.screen_width, self.screen_height);
