@@ -95,14 +95,14 @@ impl ReaderView {
 		if matches!(self.mode, ReaderMode::Navigation) {
 			self.mode = ReaderMode::Read;
 		} else {
-			let loc = self.illustrator.location();
+			let state = self.illustrator.state();
 			let navigation = self.illustrator.navigation();
 			let nav_points = navigation
 				.as_ref()
 				.map(|n| n.nav_points.as_slice())
 				.unwrap_or_default();
 
-			let page = loc.spine / CHAPTER_LIST_SIZE;
+			let page = state.location.spine / CHAPTER_LIST_SIZE;
 			let offset = page * CHAPTER_LIST_SIZE;
 			let mut item_iter = nav_points.iter().skip(offset as usize);
 			for card in self.chapters_cards.as_mut() {
@@ -246,14 +246,14 @@ impl ViewHandle for ReaderView {
 		statusline.clear();
 
 		let painter = if matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
-			let loc = self.illustrator.location();
+			let state = self.illustrator.state();
 			let cache = self.illustrator.cache();
-			let page = cache.page(loc);
+			let page = cache.page(state.location);
 			if let Some((content, meta)) = page {
 				let _ = write!(
 					&mut statusline,
-					"{} of {} in chapter",
-					meta.page, meta.pages
+					"Chapter {} / {} Book {}%",
+					meta.page, meta.pages, state.percent_read
 				);
 
 				let mut glyph_targets = Vec::new();

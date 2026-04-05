@@ -74,6 +74,7 @@ pub struct Book {
 	pub modified_at: DateTime<Utc>,
 	pub added_at: DateTime<Utc>,
 	pub opened_at: Option<DateTime<Utc>>,
+	pub percent_read: Option<u32>,
 	pub spine: Option<u32>,
 	pub element: Option<U26F6>,
 }
