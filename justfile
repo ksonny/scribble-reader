@@ -1,4 +1,4 @@
-setup-ndk:
+setup:
 	cargo +stable install cargo-ndk
 	cargo +stable install samply
 	rustup target add aarch64-linux-android x86_64-linux-android
@@ -6,7 +6,7 @@ setup-ndk:
 _build profile:
 	#!/usr/bin/env bash
 	set -e
-	cd app-android/
+	cd crates/app-android/
 	cargo ndk \
 		--target aarch64-linux-android \
 		--target x86_64-linux-android \
@@ -14,13 +14,13 @@ _build profile:
 		build \
 		--profile {{profile}}
 	./gradlew build
-	cd ..
+	cd -
 
 build target="dev-opt": (_build target)
 	@echo "Build {{target}}"
 
 install target="dev-opt": (_build target)
-	adb install ./app-android/app/build/outputs/apk/release/app-release.apk
+	adb install ./crates//app-android/app/build/outputs/apk/release/app-release.apk
 
 profile:
 	cargo build --profile dev-opt
@@ -34,10 +34,10 @@ check:
 		--target x86_64-linux-android \
 		--target aarch64-linux-android \
 		--package scribble-reader-android \
-		--output-dir ./app-android/app/src/main/jniLibs/ \
+		--output-dir ./crates/app-android/app/src/main/jniLibs/ \
 		check
 
 logcat:
 	adb logcat \
 		-v color \
-		-s "scribble-reader:D","winit:D","main-activity:D","RustStdoutStderr"
+		-s "scribble-reader:D","main-activity:D","RustStdoutStderr"
