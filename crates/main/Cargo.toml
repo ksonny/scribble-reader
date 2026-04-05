@@ -1,8 +1,8 @@
 [package]
 name = "scribble-reader"
-version = "0.1.3"
-authors = ["ksonny <ksonny@lotrax.org>"]
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 publish = false
 
 [dependencies]

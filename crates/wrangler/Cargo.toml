@@ -1,7 +1,9 @@
 [package]
 name = "wrangler"
-version = "0.1.3"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish = false
 
 [dependencies]
 expand-tilde.workspace = true

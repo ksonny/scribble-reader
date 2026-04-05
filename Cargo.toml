@@ -1,7 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["main", "illustrator", "scribe", "sculpter", "app-android", "wrangler"]
-default-members = ["main"]
+members = ["crates/main", "crates/illustrator", "crates/scribe", "crates/sculpter", "crates/app-android", "crates/wrangler"]
+
+[workspace.package]
+version = "0.1.3"
+authors = ["ksonny <ksonny@lotrax.org>"]
+edition = "2024"
 
 [workspace.dependencies]
 ab_glyph = "0.2.32"
@@ -44,11 +48,11 @@ winit = "0.30.13"
 xdg = "3.0.0"
 zip = "8.5.0"
 
-illustrator = { path = "./illustrator" }
-scribble-reader = { path = "./main" }
-scribe = {  path = "./scribe" }
-sculpter = {  path = "./sculpter" }
-wrangler = { path = "./wrangler" }
+illustrator = { path = "./crates/illustrator" }
+scribble-reader = { path = "./crates/main" }
+scribe = {  path = "./crates/scribe" }
+sculpter = {  path = "./crates/sculpter" }
+wrangler = { path = "./crates/wrangler" }
 
 [profile.dev-opt]
 inherits = "dev"

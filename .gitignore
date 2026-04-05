@@ -12,9 +12,9 @@ target
 *.iml
 .gradle
 .idea
-/app-android/build
-/app-android/app/build
-/app-android/app/src/main/jniLibs
+/crates/app-android/build
+/crates/app-android/app/build
+/crates/app-android/app/src/main/jniLibs
 .externalNativeBuild
 .cxx
 local.properties
