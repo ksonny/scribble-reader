@@ -1,17 +1,22 @@
 use std::array;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
+use std::fmt::Display;
 use std::fmt::Write;
 use std::fs;
 use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
+use egui::Align;
 use egui::CentralPanel;
 use egui::Color32;
+use egui::CornerRadius;
+use egui::Layout;
 use egui::Panel;
+use egui::ProgressBar;
 use egui::RichText;
-use egui::TextStyle;
+use egui::Vec2;
 use egui::load::Bytes;
 use lucide_icons::Icon;
 use scribe::ScribeAssistant;
@@ -34,6 +39,7 @@ use crate::ui::OnAction;
 use crate::ui::ToolBar;
 use crate::ui::ToolItem;
 use crate::ui::UiIcon;
+use crate::ui::theme;
 use crate::views::EventResult;
 use crate::views::GestureResult;
 use crate::views::ViewHandle;
@@ -44,58 +50,91 @@ struct BookCard {
 	id: BookId,
 	title: Option<Arc<String>>,
 	author: Option<Arc<String>>,
+	percent_read: u32,
+	sort_by: SortBy,
+	opened_at: Option<DateTime<Utc>>,
 	modified_at: DateTime<Utc>,
+	added_at: DateTime<Utc>,
 	thumbnail: Thumbnail,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
+enum SortBy {
+	#[default]
+	Modified,
+	Opened,
+	Added,
+}
+
+impl Display for SortBy {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			SortBy::Modified => write!(f, "By Changed"),
+			SortBy::Opened => write!(f, "By Opened"),
+			SortBy::Added => write!(f, "By Added"),
+		}
+	}
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
+enum SortKey {
+	None,
+	Date(DateTime<Utc>),
+}
+
+impl SortBy {
+	fn select(self, book: &library::Book) -> SortKey {
+		use SortKey::*;
+		match self {
+			SortBy::Modified => Date(book.modified_at),
+			SortBy::Opened => book.opened_at.map(Date).unwrap_or(None),
+			SortBy::Added => Date(book.added_at),
+		}
+	}
+}
+
+#[derive(Debug)]
 struct Shelves {
-	pub(crate) books: BTreeMap<BookId, Book>,
-	pub(crate) sorted: Vec<BookId>,
-	pub(crate) thumbnails: BTreeMap<BookId, Thumbnail>,
+	books: BTreeMap<BookId, Book>,
+	sorted: Vec<BookId>,
+	sort_by: SortBy,
+	thumbnails: BTreeMap<BookId, Thumbnail>,
 }
 
 impl Shelves {
 	fn open(books: BTreeMap<BookId, Book>) -> Self {
 		let books_len = books.len();
-		let sorted = books
-			.values()
-			.map(|book| (book.modified_at, book.id))
-			.collect::<BinaryHeap<_>>()
-			.into_iter()
-			.map(|(_, id)| id)
-			.collect();
 		log::info!("Open library with {books_len} books");
-
-		Self {
+		let mut shelves = Self {
 			books,
-			sorted,
+			// TODO: Really need that state storage
+			sort_by: SortBy::Opened,
+			sorted: Vec::new(),
 			thumbnails: BTreeMap::new(),
-		}
+		};
+		shelves.sort_books();
+		shelves
 	}
 
 	fn update(&mut self, book: library::Book) {
 		self.thumbnails.remove(&book.id);
 		self.books.insert(book.id, book);
-		self.sorted.splice(
-			..,
-			self.books
-				.values()
-				.map(|book| (book.modified_at, book.id))
-				.collect::<BinaryHeap<_>>()
-				.into_iter()
-				.map(|(_, id)| id),
-		);
+		self.sort_books();
 	}
 
 	fn remove(&mut self, book_id: BookId) {
 		self.thumbnails.remove(&book_id);
 		self.books.remove(&book_id);
+		self.sort_books();
+	}
+
+	fn sort_books(&mut self) {
+		let then_by = SortBy::default();
 		self.sorted.splice(
 			..,
 			self.books
 				.values()
-				.map(|book| (book.modified_at, book.id))
+				.map(|book| ((self.sort_by.select(book), then_by.select(book)), book.id))
 				.collect::<BinaryHeap<_>>()
 				.into_iter()
 				.map(|(_, id)| id),
@@ -175,6 +214,16 @@ impl LibraryView {
 			self.cards = cards;
 		}
 	}
+
+	fn sort_by_next(&mut self) {
+		self.shelves.sort_by = match self.shelves.sort_by {
+			SortBy::Modified => SortBy::Opened,
+			SortBy::Opened => SortBy::Added,
+			SortBy::Added => SortBy::Modified,
+		};
+		self.shelves.sort_books();
+		self.cards = read_cards(&mut self.shelves, &self.records, self.page);
+	}
 }
 
 fn read_cards(
@@ -201,7 +250,11 @@ fn read_cards(
 
 		(b, thumb)
 	});
-	array::from_fn(|_| books_iter.next().map(BookCard::new))
+	array::from_fn(|_| {
+		books_iter
+			.next()
+			.map(|(b, tn)| BookCard::new(b, tn, shelves.sort_by))
+	})
 }
 
 fn load_thumbnail(
@@ -239,6 +292,7 @@ enum MenuAction {
 enum ToolAction {
 	Prev,
 	Next,
+	Sort,
 }
 
 impl OnAction<MenuAction> for LibraryView {
@@ -262,6 +316,7 @@ impl OnAction<ToolAction> for LibraryView {
 		match action {
 			ToolAction::Prev => self.prev_page(),
 			ToolAction::Next => self.next_page(),
+			ToolAction::Sort => self.sort_by_next(),
 		}
 	}
 }
@@ -299,6 +354,12 @@ impl ViewHandle for LibraryView {
 				}),
 				None,
 				None,
+				Some(ToolItem {
+					icon: Icon::ArrowDownNarrowWide,
+					description: "Sort",
+					active: false,
+					action: ToolAction::Sort,
+				}),
 				None,
 				None,
 				Some(ToolItem {
@@ -316,7 +377,7 @@ impl ViewHandle for LibraryView {
 			let books = self.shelves.books.len();
 			let (full_pages, part_page) = (books / LIBRARY_LIST_SIZE, books % LIBRARY_LIST_SIZE);
 			let pages = full_pages + part_page.max(1);
-			let _ = write!(statusline, "{} / {}", page, pages);
+			let _ = write!(statusline, "{} {} / {}", self.shelves.sort_by, page, pages);
 
 			let working = self.scribe.working();
 			let top_panel = Panel::top("top").show_inside(ui, |ui| {
@@ -397,14 +458,17 @@ impl ViewHandle for LibraryView {
 }
 
 impl BookCard {
-	fn new(entry: (library::Book, library::Thumbnail)) -> Self {
-		let (b, tn) = entry;
+	fn new(book: library::Book, thumbnail: library::Thumbnail, sort_by: SortBy) -> Self {
 		BookCard {
-			id: b.id,
-			title: b.title,
-			author: b.author,
-			modified_at: b.modified_at,
-			thumbnail: tn,
+			id: book.id,
+			title: book.title,
+			author: book.author,
+			percent_read: book.percent_read.unwrap_or_default(),
+			sort_by,
+			opened_at: book.opened_at,
+			modified_at: book.modified_at,
+			added_at: book.added_at,
+			thumbnail,
 		}
 	}
 }
@@ -416,12 +480,10 @@ struct BookCardUi<'a> {
 impl egui::Widget for BookCardUi<'_> {
 	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
 		let card = self.card;
+		ui.spacing_mut().item_spacing = Vec2::new(3., 3.);
 		ui.group(|ui| {
-			ui.set_min_size(ui.available_size());
 			let height = ui.available_height();
-			let width = ui.available_width();
 			ui.horizontal(|ui| {
-				ui.set_width(width);
 				let cover_width = height * 0.75;
 				ui.allocate_ui([cover_width, height].into(), |ui| {
 					ui.set_width(cover_width);
@@ -444,13 +506,61 @@ impl egui::Widget for BookCardUi<'_> {
 				ui.vertical(|ui| {
 					let author = card
 						.author
-						.as_ref()
-						.map(|t| t.as_str())
+						.as_deref()
+						.map(String::as_str)
 						.unwrap_or("Unknown");
-					ui.label(author);
-					let title = card.title.as_ref().map(|t| t.as_str()).unwrap_or("Unknown");
-					ui.label(RichText::new(title).text_style(TextStyle::Heading));
-					ui.label(format!("{}", card.modified_at.format("%Y-%m-%d %H:%M")));
+					ui.label(RichText::new(author).size(theme::S_SIZE));
+
+					let title = card
+						.title
+						.as_deref()
+						.map(String::as_str)
+						.unwrap_or("Unknown");
+					ui.label(RichText::new(title).size(theme::L_SIZE));
+
+					match card.sort_by {
+						SortBy::Modified => {
+							ui.label(
+								RichText::new(format!(
+									"Changed {}",
+									card.modified_at.format("%e %b %H:%M")
+								))
+								.size(theme::S_SIZE),
+							);
+						}
+						SortBy::Opened => {
+							if let Some(opened_at) = card.opened_at {
+								ui.label(
+									RichText::new(format!(
+										"Opened {}",
+										opened_at.format("%e %b %H:%M")
+									))
+									.size(theme::S_SIZE),
+								);
+							} else {
+								ui.label(RichText::new("Never opened").size(theme::S_SIZE));
+							}
+						}
+						SortBy::Added => {
+							ui.label(
+								RichText::new(format!(
+									"Added {}",
+									card.added_at.format("%e %b %H:%M")
+								))
+								.size(theme::S_SIZE),
+							);
+						}
+					}
+
+					ui.with_layout(Layout::bottom_up(Align::Max), |ui| {
+						let read_part = card.percent_read as f32 / 100.;
+						ui.add(
+							ProgressBar::new(read_part)
+								.corner_radius(CornerRadius::ZERO)
+								.fill(theme::SECONDARY_COLOR)
+								.desired_height(3.),
+						);
+					});
 				});
 			});
 			ui.interact(
