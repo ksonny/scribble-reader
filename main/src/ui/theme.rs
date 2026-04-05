@@ -10,6 +10,7 @@ pub const M_SIZE: f32 = 18.0;
 pub const L_SIZE: f32 = 24.0;
 pub const XL_SIZE: f32 = 48.0;
 pub const ACCENT_COLOR: Color32 = Color32::DARK_RED;
+pub const SECONDARY_COLOR: Color32 = Color32::GRAY;
 
 lazy_static! {
 	pub static ref ICON_FONT_FAMILY: FontFamily = FontFamily::Name("lucide-icons".into());

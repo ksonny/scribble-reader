@@ -245,7 +245,8 @@ impl RecordKeeperAssistant {
 				bo.added_at,
 				bs.opened_at,
 				bs.spine,
-				bs.element
+				bs.element,
+				bs.percent_read
 			from books bo
 			left join book_reading_state bs on bs.book_id = bo.id
 			where bo.exist = true
