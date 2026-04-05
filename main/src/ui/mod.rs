@@ -2,6 +2,7 @@ pub(crate) mod theme;
 
 use std::time::Instant;
 
+use egui::Align;
 use egui::Color32;
 use egui::Context;
 use egui::FontFamily;
@@ -275,16 +276,26 @@ pub(crate) struct MenuItem<'a, A> {
 pub(crate) struct MainMenuBar<'a, A, H: OnAction<A>> {
 	handler: &'a mut H,
 	items: &'a [MenuItem<'a, A>],
+	statusline: Option<&'a str>,
 	loading: bool,
 }
 
 impl<'a, A, H: OnAction<A>> MainMenuBar<'a, A, H> {
-	pub(crate) fn new(handler: &'a mut H, items: &'a [MenuItem<A>], loading: bool) -> Self {
+	pub(crate) fn new(handler: &'a mut H, items: &'a [MenuItem<A>]) -> Self {
 		Self {
 			handler,
 			items,
-			loading,
+			statusline: None,
+			loading: false,
 		}
+	}
+
+	pub(crate) fn with_loading(self, loading: bool) -> Self {
+		Self { loading, ..self }
+	}
+
+	pub(crate) fn with_status(self, statusline: Option<&'a str>) -> Self {
+		Self { statusline, ..self }
 	}
 }
 
@@ -295,6 +306,8 @@ impl<A: Copy, H: OnAction<A>> MainMenuBar<'_, A, H> {
 				ui.vertical(|ui| {
 					ui.add_space(6.);
 					ui.horizontal(|ui| {
+						ui.spacing_mut().item_spacing.x = 10.;
+
 						let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
 							for item in self.items {
 								let color = if item.active {
@@ -316,6 +329,13 @@ impl<A: Copy, H: OnAction<A>> MainMenuBar<'_, A, H> {
 						});
 
 						ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
+
+						if let Some(statusline) = self.statusline {
+							ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+								ui.add_space(2.);
+								ui.label(RichText::new(statusline).size(theme::S_SIZE));
+							});
+						}
 
 						ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
 							if self.loading {

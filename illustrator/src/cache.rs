@@ -31,6 +31,13 @@ impl Default for PageContentCache {
 	}
 }
 
+pub struct PageMetadata {
+	/// Page number, starting from 1
+	pub page: usize,
+	/// Total number of pages for chapter
+	pub pages: usize,
+}
+
 impl PageContentCache {
 	pub fn atlas(&self) -> &AtlasImage {
 		&self.atlas
@@ -40,13 +47,13 @@ impl PageContentCache {
 		&mut self.atlas
 	}
 
-	pub fn page(&self, loc: Location) -> Option<&PageContent> {
-		self.entry(loc).map(|(_, page)| page)
+	pub fn page(&self, loc: Location) -> Option<(&PageContent, PageMetadata)> {
+		self.entry(loc).map(|(_, page, meta)| (page, meta))
 	}
 
 	pub(crate) fn next_page(&self, spine: &[BookSpineItem], loc: Location) -> Location {
 		self.entry(loc)
-			.map(|(entry, page)| {
+			.map(|(entry, page, _)| {
 				if page.flags.contains(PageFlags::Last) {
 					spine
 						.get(entry.spine as usize + 1)
@@ -74,7 +81,7 @@ impl PageContentCache {
 
 	pub(crate) fn previous_page(&self, spine: &[BookSpineItem], loc: Location) -> Location {
 		self.entry(loc)
-			.map(|(entry, page)| {
+			.map(|(entry, page, _)| {
 				if page.flags.contains(PageFlags::First) {
 					spine
 						.get(entry.spine.saturating_sub(1) as usize)
@@ -124,22 +131,32 @@ impl PageContentCache {
 		self.entries = [const { None }; CACHE_CHAPTERS];
 	}
 
-	fn entry(&self, loc: Location) -> Option<(&PageCacheEntry, &PageContent)> {
+	fn entry(&self, loc: Location) -> Option<(&PageCacheEntry, &PageContent, PageMetadata)> {
 		let entry = self
 			.entries
 			.iter()
 			.flatten()
 			.find(|e| e.spine == loc.spine)?;
 
-		let page = if loc.element == I26F6::ZERO {
-			entry.pages.first()?
+		let (page, meta) = if loc.element == I26F6::ZERO {
+			let meta = PageMetadata {
+				page: 1,
+				pages: entry.pages.len(),
+			};
+			(entry.pages.first()?, meta)
 		} else {
-			entry
+			let (index, page) = entry
 				.pages
 				.iter()
-				.find(|p| p.elements.contains(&loc.element))
-				.or_else(|| entry.pages.last())?
+				.enumerate()
+				.find(|(_, p)| p.elements.contains(&loc.element))
+				.or_else(|| entry.pages.last().map(|p| (entry.pages.len() - 1, p)))?;
+			let meta = PageMetadata {
+				page: index + 1,
+				pages: entry.pages.len(),
+			};
+			(page, meta)
 		};
-		Some((entry, page))
+		Some((entry, page, meta))
 	}
 }

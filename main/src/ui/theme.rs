@@ -5,7 +5,7 @@ use egui::TextStyle;
 use lazy_static::lazy_static;
 
 pub const DEFAULT_SIZE: f32 = 14.0;
-pub const S_SIZE: f32 = 12.0;
+pub const S_SIZE: f32 = 14.0;
 pub const M_SIZE: f32 = 18.0;
 pub const L_SIZE: f32 = 24.0;
 pub const XL_SIZE: f32 = 48.0;

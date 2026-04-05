@@ -1,6 +1,7 @@
 use std::array;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
+use std::fmt::Write;
 use std::fs;
 use std::sync::Arc;
 
@@ -127,6 +128,7 @@ pub(crate) struct LibraryView {
 	shelves: Shelves,
 	page: u32,
 	cards: [Option<BookCard>; LIBRARY_LIST_SIZE],
+	statusline: Option<String>,
 }
 
 impl LibraryView {
@@ -156,6 +158,7 @@ impl LibraryView {
 			shelves,
 			page,
 			cards,
+			statusline: None,
 		})
 	}
 
@@ -307,10 +310,24 @@ impl ViewHandle for LibraryView {
 				None,
 			];
 
+			let mut statusline = self.statusline.take().unwrap_or_default();
+			statusline.clear();
+			let page = self.page + 1;
+			let books = self.shelves.books.len();
+			let (full_pages, part_page) = (books / LIBRARY_LIST_SIZE, books % LIBRARY_LIST_SIZE);
+			let pages = full_pages + part_page.max(1);
+			let _ = write!(statusline, "{} / {}", page, pages);
+
 			let working = self.scribe.working();
-			let top_panel = Panel::top("top")
-				.show_inside(ui, |ui| MainMenuBar::new(self, menu_items, working).ui(ui));
+			let top_panel = Panel::top("top").show_inside(ui, |ui| {
+				MainMenuBar::new(self, menu_items)
+					.with_loading(working)
+					.with_status(Some(&statusline))
+					.ui(ui)
+			});
 			let is_open = top_panel.inner.context_menu_opened();
+
+			self.statusline = Some(statusline);
 
 			Panel::bottom("bottom")
 				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
