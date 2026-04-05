@@ -160,7 +160,7 @@ impl<B: Bell + Send + 'static> Scribe<B> {
 		paths: &Paths,
 	) -> ScribeAssistant {
 		let thumbnail_path = paths.cache_path.join("thumbnails");
-		let working = Arc::new(AtomicBool::new(true));
+		let working = Arc::new(AtomicBool::new(false));
 		let tasks = Arc::new(Mutex::new(BTreeMap::new()));
 
 		system.register(Box::new(Self {
