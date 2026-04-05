@@ -56,7 +56,7 @@ pub struct IllustratorAssistant {
 	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
 	working: Arc<AtomicBool>,
 	navigation: Arc<Mutex<Option<Arc<epub::Navigation>>>>,
-	location: Arc<Mutex<Location>>,
+	state: Arc<Mutex<BookState>>,
 	cache: Arc<Mutex<PageContentCache>>,
 }
 
@@ -71,8 +71,8 @@ impl IllustratorAssistant {
 		self.working.load(Ordering::Acquire)
 	}
 
-	pub fn location(&self) -> Location {
-		*self.location.lock().unwrap()
+	pub fn state(&self) -> BookState {
+		self.state.lock().unwrap().clone()
 	}
 
 	pub fn navigation(&self) -> Option<Arc<epub::Navigation>> {
@@ -212,12 +212,18 @@ impl AsRef<[u8]> for SharedVec {
 	}
 }
 
+#[derive(Debug, Clone)]
+pub struct BookState {
+	pub location: Location,
+	pub percent_read: u32,
+}
+
 struct Worker {
 	config: ScribeConfig,
 	fonts: Arc<SculpterFonts>,
 	cache: Arc<Mutex<PageContentCache>>,
 	navigation: Arc<Mutex<Option<Arc<epub::Navigation>>>>,
-	location: Arc<Mutex<Location>>,
+	state: Arc<Mutex<BookState>>,
 	working: Arc<AtomicBool>,
 	record_keeper: RecordKeeper,
 	content: ContentWranglerAssistant,
@@ -300,6 +306,7 @@ impl Worker {
 				element: U26F6::ZERO,
 			}
 		};
+		let mut current_percent_read = book.percent_read.unwrap_or(0);
 
 		let start = Instant::now();
 		let settings = self.config.illustrator()?;
@@ -360,9 +367,11 @@ impl Worker {
 						);
 					}
 
+					*self.state.lock().unwrap() = BookState {
+						location: current_loc,
+						percent_read: current_percent_read,
+					};
 					log::debug!("Save location {current_loc} in {}", book.id);
-					*self.location.lock().unwrap() = current_loc;
-					records.record_book_state(book.id, Some(current_loc))?;
 					bell.content_ready(book.id, current_loc);
 
 					if spine_cache.is_none() {
@@ -372,8 +381,17 @@ impl Worker {
 							"Load spine count in {}",
 							Instant::now().duration_since(start).as_secs_f64()
 						);
-						spine_cache = Some(spine);
+						let spine = spine_cache.insert(spine).as_slice();
+
+						// Recalculate as we know this is a newly opened book
+						current_percent_read = calculate_percent_read(spine, current_loc);
+						*self.state.lock().unwrap() = BookState {
+							location: current_loc,
+							percent_read: current_percent_read,
+						};
 					};
+
+					records.record_book_state(book.id, current_loc, current_percent_read)?;
 
 					self.working.store(false, Ordering::Release);
 					match req_rx.recv() {
@@ -421,12 +439,15 @@ impl Worker {
 			match req {
 				Request::NextPage => {
 					current_loc = self.cache.lock().unwrap().next_page(spine, current_loc);
+					current_percent_read = calculate_percent_read(spine, current_loc);
 				}
 				Request::PreviousPage => {
 					current_loc = self.cache.lock().unwrap().previous_page(spine, current_loc);
+					current_percent_read = calculate_percent_read(spine, current_loc);
 				}
 				Request::Goto(loc) => {
 					current_loc = loc;
+					current_percent_read = calculate_percent_read(spine, current_loc);
 				}
 				_ => {}
 			}
@@ -434,6 +455,18 @@ impl Worker {
 
 		Ok(())
 	}
+}
+
+fn calculate_percent_read(spine: &[BookSpineItem], current_loc: Location) -> u32 {
+	let mut el_read = current_loc.element;
+	let mut el_total = U26F6::ZERO;
+	for s in spine {
+		if s.index <= current_loc.spine {
+			el_read += s.elements.end;
+		}
+		el_total += s.elements.end;
+	}
+	((el_read / el_total) * 100).round().to_num()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -461,7 +494,10 @@ pub fn create_illustrator(
 
 	let cache = Arc::new(Mutex::new(PageContentCache::default()));
 	let navigation = Arc::new(Mutex::new(None));
-	let location = Arc::new(Mutex::new(book.location()));
+	let state = Arc::new(Mutex::new(BookState {
+		location: book.location(),
+		percent_read: book.percent_read.unwrap_or(0),
+	}));
 	let working = Arc::new(AtomicBool::new(true));
 
 	let (req_tx, req_rx) = channel();
@@ -471,7 +507,7 @@ pub fn create_illustrator(
 		fonts,
 		cache: cache.clone(),
 		navigation: navigation.clone(),
-		location: location.clone(),
+		state: state.clone(),
 		working: working.clone(),
 		record_keeper,
 		content,
@@ -496,7 +532,7 @@ pub fn create_illustrator(
 		handle,
 		working,
 		navigation,
-		location,
+		state,
 		cache,
 	})
 }

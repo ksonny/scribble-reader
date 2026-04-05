@@ -55,6 +55,11 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 				on delete cascade
 		) strict;",
 	),
+	M::up(
+		"alter table book_reading_state
+			add column percent_read integer;
+		",
+	),
 ];
 const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
 
@@ -110,6 +115,7 @@ struct SecretBook {
 	opened_at: Option<DateTime<Utc>>,
 	spine: Option<u32>,
 	element: Option<u32>,
+	percent_read: Option<u32>,
 }
 
 impl From<SecretBook> for library::Book {
@@ -125,6 +131,7 @@ impl From<SecretBook> for library::Book {
 			opened_at: value.opened_at,
 			spine: value.spine,
 			element: value.element.map(U26F6::from_bits),
+			percent_read: value.percent_read,
 		}
 	}
 }
@@ -163,8 +170,9 @@ struct InsertBookState {
 	pub book_id: i64,
 	#[serde(with = "ts_seconds")]
 	pub opened_at: DateTime<Utc>,
-	pub spine: Option<u32>,
-	pub element: Option<u32>,
+	pub spine: u32,
+	pub element: u32,
+	pub percent_read: u32,
 }
 
 pub struct RecordKeeperAssistant {
@@ -210,7 +218,8 @@ impl RecordKeeperAssistant {
 				bo.added_at,
 				bs.opened_at,
 				bs.spine,
-				bs.element
+				bs.element,
+				bs.percent_read
 			from books bo
 			left join book_reading_state bs on bs.book_id = bo.id
 			where bo.exist = true
@@ -343,23 +352,26 @@ impl RecordKeeperAssistant {
 	pub fn record_book_state(
 		&self,
 		id: super::BookId,
-		loc: Option<Location>,
+		loc: Location,
+		percent_read: u32,
 	) -> Result<(), RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
-			"insert into book_reading_state (book_id, opened_at, spine, element)
-				values (:book_id, :opened_at, :spine, :element)
+			"insert into book_reading_state (book_id, opened_at, spine, element, percent_read)
+				values (:book_id, :opened_at, :spine, :element, :percent_read)
 			on conflict (book_id)
 			do update set
 				opened_at = :opened_at,
-				spine = coalesce(:spine, spine),
-				element = coalesce(:element, element);
+				spine = :spine,
+				element = :element,
+				percent_read = :percent_read;
 			",
 		)?;
 		let state = InsertBookState {
 			book_id: id.value(),
 			opened_at: Utc::now(),
-			spine: loc.map(|l| l.spine),
-			element: loc.map(|l| U26F6::to_bits(l.element)),
+			spine: loc.spine,
+			element: loc.element.to_bits(),
+			percent_read,
 		};
 		stmt.execute(to_params_named(state)?.to_slice().as_slice())?;
 		Ok(())
