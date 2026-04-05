@@ -292,39 +292,46 @@ impl<A: Copy, H: OnAction<A>> MainMenuBar<'_, A, H> {
 	pub(crate) fn ui(self, ui: &mut egui::Ui) -> egui::Response {
 		egui::MenuBar::new()
 			.ui(ui, |ui| {
-				let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
-					for item in self.items {
-						let color = if item.active {
-							theme::ACCENT_COLOR
-						} else {
-							Color32::BLACK
-						};
-						let button = ui.button(
-							UiIcon::new(item.icon)
-								.large()
-								.text(item.description)
-								.color(color)
-								.build(),
-						);
-						if button.clicked() {
-							self.handler.on_action(item.action);
-						}
-					}
-				});
+				ui.vertical(|ui| {
+					ui.add_space(6.);
+					ui.horizontal(|ui| {
+						let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
+							for item in self.items {
+								let color = if item.active {
+									theme::ACCENT_COLOR
+								} else {
+									Color32::BLACK
+								};
+								let button = ui.button(
+									UiIcon::new(item.icon)
+										.large()
+										.text(item.description)
+										.color(color)
+										.build(),
+								);
+								if button.clicked() {
+									self.handler.on_action(item.action);
+								}
+							}
+						});
 
-				ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
+						ui.label(RichText::new("Scribble reader").size(theme::L_SIZE));
 
-				ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-					if self.loading {
-						ui.label(
-							UiIcon::new(Icon::RefreshCw)
-								.color(Color32::GRAY)
-								.large()
-								.build(),
-						);
-					}
-				});
-				menu.response
+						ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+							if self.loading {
+								ui.label(
+									UiIcon::new(Icon::RefreshCw)
+										.color(Color32::GRAY)
+										.large()
+										.build(),
+								);
+							}
+						});
+						menu.response
+					})
+					.inner
+				})
+				.inner
 			})
 			.inner
 	}
