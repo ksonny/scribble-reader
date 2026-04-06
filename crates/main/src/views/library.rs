@@ -26,6 +26,8 @@ use scribe::RecordKeeper;
 use scribe::RecordKeeperAssistant;
 use scribe::RecordKeeperError;
 use scribe::Thumbnail;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -57,7 +59,7 @@ struct BookCard {
 	thumbnail: Thumbnail,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 enum SortBy {
 	#[default]
 	Modified,
@@ -92,6 +94,12 @@ impl SortBy {
 	}
 }
 
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+struct ViewState {
+	sort_by: SortBy,
+	page: u32,
+}
+
 #[derive(Debug)]
 struct Shelves {
 	books: BTreeMap<BookId, Book>,
@@ -106,7 +114,6 @@ impl Shelves {
 		log::info!("Open library with {books_len} books");
 		let mut shelves = Self {
 			books,
-			// TODO: Really need that state storage
 			sort_by: SortBy::Opened,
 			sorted: Vec::new(),
 			thumbnails: BTreeMap::new(),
@@ -164,21 +171,25 @@ pub(crate) struct LibraryView {
 	records: RecordKeeperAssistant,
 	scribe: LibraryScribeAssistant,
 	shelves: Shelves,
-	page: u32,
+	state: ViewState,
 	cards: [Option<BookCard>; LIBRARY_LIST_SIZE],
 	statusline: Option<String>,
 }
 
 impl LibraryView {
+	const STATE_KEY: &str = "library_view_state";
+
 	pub(crate) fn create(
 		bell: AppBell,
 		records: RecordKeeper,
 		scribe: LibraryScribeAssistant,
 	) -> Result<Self, RecordKeeperError> {
-		// TODO: Preserve page somewhere
-		let page = 0;
-
 		let records = records.assistant()?;
+
+		let state: ViewState = records
+			.fetch_view_state(Self::STATE_KEY)?
+			.unwrap_or_default();
+
 		let books = match records.fetch_books() {
 			Ok(books) => books,
 			Err(e) => {
@@ -187,41 +198,55 @@ impl LibraryView {
 			}
 		};
 		let mut shelves = Shelves::open(books);
-		let cards = read_cards(&mut shelves, &records, page);
+		let cards = read_cards(&mut shelves, &records, state.page);
 
 		Ok(Self {
 			bell,
 			records,
 			scribe,
 			shelves,
-			page,
+			state,
 			cards,
 			statusline: None,
 		})
 	}
 
 	fn prev_page(&mut self) {
-		self.page = self.page.saturating_sub(1);
-		self.cards = read_cards(&mut self.shelves, &self.records, self.page);
+		self.state.page = self.state.page.saturating_sub(1);
+		self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
+		let _ = self
+			.records
+			.record_view_state(Self::STATE_KEY, &self.state)
+			.inspect_err(|e| log::warn!("Error saving state: {e}"));
 	}
 
 	fn next_page(&mut self) {
-		let page = self.page + 1;
+		let page = self.state.page + 1;
 		let cards = read_cards(&mut self.shelves, &self.records, page);
 		if cards.iter().any(|c| c.is_some()) {
-			self.page = page;
+			self.state.page = page;
 			self.cards = cards;
+			let _ = self
+				.records
+				.record_view_state(Self::STATE_KEY, &self.state)
+				.inspect_err(|e| log::warn!("Error saving state: {e}"));
 		}
 	}
 
 	fn sort_by_next(&mut self) {
 		self.shelves.sort_by = match self.shelves.sort_by {
-			SortBy::Modified => SortBy::Opened,
-			SortBy::Opened => SortBy::Added,
-			SortBy::Added => SortBy::Modified,
+			SortBy::Opened => SortBy::Modified,
+			SortBy::Modified => SortBy::Added,
+			SortBy::Added => SortBy::Opened,
 		};
 		self.shelves.sort_books();
-		self.cards = read_cards(&mut self.shelves, &self.records, self.page);
+		self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
+
+		self.state.sort_by = self.shelves.sort_by;
+		let _ = self
+			.records
+			.record_view_state(Self::STATE_KEY, &self.state)
+			.inspect_err(|e| log::warn!("Error saving state: {e}"));
 	}
 }
 
@@ -372,10 +397,10 @@ impl ViewHandle for LibraryView {
 
 			let mut statusline = self.statusline.take().unwrap_or_default();
 			statusline.clear();
-			let page = self.page + 1;
+			let page = self.state.page + 1;
 			let books = self.shelves.books.len();
 			let (full_pages, part_page) = (books / LIBRARY_LIST_SIZE, books % LIBRARY_LIST_SIZE);
-			let pages = full_pages + part_page.max(1);
+			let pages = full_pages + part_page.min(1);
 			let _ = write!(statusline, "{} {} / {}", self.shelves.sort_by, page, pages);
 
 			let working = self.scribe.working();
@@ -426,7 +451,7 @@ impl ViewHandle for LibraryView {
 						self.shelves.remove(*id);
 					}
 				};
-				self.cards = read_cards(&mut self.shelves, &self.records, self.page);
+				self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
 				EventResult::RequestRedraw
 			}
 			AppEvent::NavigateNext => {
