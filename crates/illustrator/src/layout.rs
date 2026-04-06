@@ -353,8 +353,8 @@ pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
 	state: TState,
 }
 
-impl<'a> PageLayouter<'a, PageLayouterEmpty> {
-	pub(crate) fn new(sculpter: Sculpter<'a>) -> Self {
+impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
+	pub(crate) fn new(sculpter: Sculpter<'layout>) -> Self {
 		Self {
 			builder: NodeTreeBuilder::new(),
 			taffy_tree: taffy::TaffyTree::new(),
@@ -363,13 +363,13 @@ impl<'a> PageLayouter<'a, PageLayouterEmpty> {
 		}
 	}
 
-	pub(crate) fn load<R: io::Seek + io::Read + Sync + Send>(
+	pub(crate) fn load<'settings, R: io::Seek + io::Read + Sync + Send>(
 		self,
 		archive: &mut ZipArchive<R>,
 		root: &Path,
 		path: &Path,
-		settings: &StyleSettings<'a>,
-	) -> Result<PageLayouter<'a, PageLayouterLoaded>, IllustratorLayoutError> {
+		settings: &StyleSettings<'settings>,
+	) -> Result<PageLayouter<'layout, PageLayouterLoaded>, IllustratorLayoutError> {
 		let Self {
 			builder,
 			mut taffy_tree,
@@ -665,11 +665,12 @@ impl PageBreaker {
 	}
 }
 
-impl<'a> PageLayouter<'a, PageLayouterLoaded> {
-	pub(crate) fn layout(
+impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
+	pub(crate) fn layout<'settings>(
 		self,
-		settings: &StyleSettings<'a>,
-	) -> Result<(PageLayouter<'a, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError> {
+		settings: &StyleSettings<'settings>,
+	) -> Result<(PageLayouter<'layout, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError>
+	{
 		let Self {
 			builder,
 			mut taffy_tree,

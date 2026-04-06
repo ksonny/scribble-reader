@@ -415,7 +415,7 @@ fn android_main(app: AndroidApp) {
 			.with_max_level(log::LevelFilter::Debug)
 			.with_filter(
 				android_logger::FilterBuilder::new()
-					.parse("debug,naga=warn,wgpu=warn,scribble-reader=trace,scribe=trace")
+					.parse("info,naga=warn,wgpu=warn,scribble-reader=debug,illustrator=debug")
 					.build(),
 			),
 	);

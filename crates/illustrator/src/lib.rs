@@ -23,6 +23,7 @@ use fixed::types::I26F6;
 use fixed::types::U26F6;
 use scribe::ScribeConfig;
 use scribe::epub;
+use scribe::epub::Package;
 use scribe::library;
 use scribe::library::Location;
 use scribe::record_keeper::RecordKeeper;
@@ -33,9 +34,8 @@ use wrangler::DocumentId;
 use wrangler::content::ContentWranglerAssistant;
 use zip::ZipArchive;
 
+use crate::cache::NavigateError;
 use crate::cache::PageContentCache;
-use crate::html_parser::NodeTreeBuilder;
-use crate::html_parser::TreeBuilderError;
 use crate::layout::IllustratorLayoutError;
 use crate::layout::PageLayouter;
 use crate::layout::StyleSettings;
@@ -247,10 +247,6 @@ pub enum IllustratorWorkerError {
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
 	#[error("epub error: {0}")]
 	Epub(#[from] epub::EpubError),
-	#[error(transparent)]
-	TreeBuilder(#[from] TreeBuilderError),
-	#[error("Missing resource {0}")]
-	MissingResource(epub::ResourceId),
 }
 
 impl From<std::io::Error> for IllustratorWorkerError {
@@ -296,6 +292,21 @@ impl Worker {
 			Instant::now().duration_since(start).as_secs_f64()
 		);
 
+		let start = Instant::now();
+		let mut spine_bytes = Vec::new();
+		for resource in package.spine.iter().map(|id| package.manifest.get(id)) {
+			if let Some(resource) = resource {
+				let file = archive.by_path(resource.as_path())?;
+				spine_bytes.push(file.size());
+			} else {
+				spine_bytes.push(0);
+			}
+		}
+		log::debug!(
+			"Loaded spine byte sizes in {}",
+			Instant::now().duration_since(start).as_secs_f64()
+		);
+
 		let book_loc = book.location();
 		let mut current_loc = if package.spine.get(book_loc.spine as usize).is_some() {
 			book_loc
@@ -306,7 +317,6 @@ impl Worker {
 				element: U26F6::ZERO,
 			}
 		};
-		let mut current_percent_read = book.percent_read.unwrap_or(0);
 
 		let start = Instant::now();
 		let settings = self.config.illustrator()?;
@@ -326,8 +336,7 @@ impl Worker {
 			Instant::now().duration_since(start).as_secs_f64()
 		);
 
-		let mut spine_cache = None;
-		let mut layouter = PageLayouter::new(sculpter);
+		let mut reusable_layouter = PageLayouter::new(sculpter);
 		let mut clear_cache = true;
 
 		let records = self.record_keeper.assistant()?;
@@ -338,62 +347,83 @@ impl Worker {
 				Err(TryRecvError::Empty) => {
 					if clear_cache || !self.cache.lock().unwrap().is_cached(current_loc) {
 						let start = Instant::now();
-						let settings = StyleSettings::new(&settings, &params);
-						let resource = package
-							.metadata_by_spine(current_loc.spine as usize)
-							.expect("Unexpected missing resource");
-						let l = layouter.load(
-							&mut archive,
-							package.package_root.as_path(),
-							resource.as_path(),
-							&settings,
-						)?;
-						let (mut l, pages) = l.layout(&settings)?;
-						{
-							let mut cache = self.cache.lock().unwrap();
 
-							if clear_cache {
-								cache.clear();
-								clear_cache = false;
-							}
-
-							cache.insert(current_loc.spine, pages);
-							l.write_glyph_atlas(cache.atlas_mut())?;
+						if clear_cache {
+							self.cache.lock().unwrap().clear();
+							clear_cache = false;
 						}
-						layouter = l;
+
+						let settings = StyleSettings::new(&settings, &params);
+						reusable_layouter = self.load_chapter_to_cache(
+							reusable_layouter,
+							&mut archive,
+							&package,
+							&settings,
+							current_loc.spine,
+						)?;
+
 						log::debug!(
-							"Render chapter in {}",
+							"Render current chapter {} in {}",
+							current_loc.spine,
 							Instant::now().duration_since(start).as_secs_f64()
 						);
 					}
 
+					let percent_read = self.estimate_percent_read(&spine_bytes, current_loc);
+
 					*self.state.lock().unwrap() = BookState {
 						location: current_loc,
-						percent_read: current_percent_read,
+						percent_read,
 					};
-					log::debug!("Save location {current_loc} in {}", book.id);
 					bell.content_ready(book.id, current_loc);
+					records.record_book_state(book.id, current_loc, percent_read)?;
+					self.working.store(false, Ordering::Release);
 
-					if spine_cache.is_none() {
-						let start = Instant::now();
-						let spine = count_spine_elements(package.clone(), &mut archive)?;
+					let start = Instant::now();
+					let (load_next, load_prev) = {
+						let cache = self.cache.lock().unwrap();
+						let load_next = current_loc.spine as usize + 1 < package.spine.len()
+							&& matches!(
+								cache.next_page(current_loc),
+								Err(NavigateError::LoadNextChapter)
+							);
+						let load_prev = matches!(
+							cache.previous_page(current_loc),
+							Err(NavigateError::LoadPreviousChapter)
+						);
+						(load_next, load_prev)
+					};
+					if load_next {
+						let next_spine = current_loc.spine + 1;
+						log::debug!("Load chapter {next_spine} into cache");
+						let settings = StyleSettings::new(&settings, &params);
+						reusable_layouter = self.load_chapter_to_cache(
+							reusable_layouter,
+							&mut archive,
+							&package,
+							&settings,
+							next_spine,
+						)?;
+					}
+					if load_prev {
+						let prev_spine = current_loc.spine.saturating_sub(1);
+						log::debug!("Load chapter {prev_spine} into cache");
+						let settings = StyleSettings::new(&settings, &params);
+						reusable_layouter = self.load_chapter_to_cache(
+							reusable_layouter,
+							&mut archive,
+							&package,
+							&settings,
+							prev_spine,
+						)?;
+					}
+					if load_prev || load_next {
 						log::debug!(
-							"Load spine count in {}",
+							"Completed pre-render in {}",
 							Instant::now().duration_since(start).as_secs_f64()
 						);
-						let spine = spine_cache.insert(spine).as_slice();
+					}
 
-						// Recalculate as we know this is a newly opened book
-						current_percent_read = calculate_percent_read(spine, current_loc);
-						*self.state.lock().unwrap() = BookState {
-							location: current_loc,
-							percent_read: current_percent_read,
-						};
-					};
-
-					records.record_book_state(book.id, current_loc, current_percent_read)?;
-
-					self.working.store(false, Ordering::Release);
 					match req_rx.recv() {
 						Ok(req) => {
 							self.working.store(true, Ordering::Release);
@@ -414,59 +444,80 @@ impl Worker {
 					clear_cache = true;
 					params.page_width = width;
 					params.page_height = height;
-					continue;
 				}
 				Request::Rescale { scale } => {
 					clear_cache = true;
 					params.scale = scale;
-					continue;
 				}
-				_ => {}
-			}
-
-			let spine = if let Some(spine) = &spine_cache {
-				spine
-			} else {
-				let start = Instant::now();
-				let spine = count_spine_elements(package.clone(), &mut archive)?;
-				log::debug!(
-					"Load spine count in {}",
-					Instant::now().duration_since(start).as_secs_f64()
-				);
-				spine_cache.insert(spine)
-			};
-
-			match req {
 				Request::NextPage => {
-					current_loc = self.cache.lock().unwrap().next_page(spine, current_loc);
-					current_percent_read = calculate_percent_read(spine, current_loc);
+					// Assume next chapter is loaded into cache if needed
+					current_loc = self
+						.cache
+						.lock()
+						.unwrap()
+						.next_page(current_loc)
+						.unwrap_or(current_loc);
 				}
 				Request::PreviousPage => {
-					current_loc = self.cache.lock().unwrap().previous_page(spine, current_loc);
-					current_percent_read = calculate_percent_read(spine, current_loc);
+					// Assume previous chapter is loaded into cache if needed
+					current_loc = self
+						.cache
+						.lock()
+						.unwrap()
+						.previous_page(current_loc)
+						.unwrap_or(current_loc);
 				}
 				Request::Goto(loc) => {
 					current_loc = loc;
-					current_percent_read = calculate_percent_read(spine, current_loc);
 				}
-				_ => {}
 			}
 		}
 
 		Ok(())
 	}
-}
 
-fn calculate_percent_read(spine: &[BookSpineItem], current_loc: Location) -> u32 {
-	let mut el_read = current_loc.element;
-	let mut el_total = U26F6::ZERO;
-	for s in spine {
-		if s.index <= current_loc.spine {
-			el_read += s.elements.end;
+	fn estimate_percent_read(&self, spine_bytes: &[u64], current_loc: Location) -> u32 {
+		let mut bytes_total = 0;
+		let mut bytes_read = 0;
+		for (idx, b) in spine_bytes.iter().enumerate() {
+			if idx < current_loc.spine as usize {
+				bytes_read += b;
+			} else if idx == current_loc.spine as usize
+				&& let Some((_, meta)) = self.cache.lock().unwrap().page(current_loc)
+			{
+				bytes_read += (*b * meta.page) / meta.pages;
+			}
+			bytes_total += b;
 		}
-		el_total += s.elements.end;
+		(100 * bytes_read / bytes_total) as u32
 	}
-	((el_read / el_total) * 100).round().to_num()
+
+	fn load_chapter_to_cache<'layout, 'settings, R: io::Seek + io::Read + Send + Sync>(
+		&self,
+		layouter: PageLayouter<'layout>,
+		archive: &mut ZipArchive<R>,
+		package: &Package,
+		settings: &StyleSettings<'settings>,
+		spine_index: u32,
+	) -> Result<PageLayouter<'layout>, IllustratorWorkerError> {
+		let resource = package
+			.metadata_by_spine(spine_index as usize)
+			.expect("Unexpected missing resource");
+		let layouter = layouter.load(
+			archive,
+			package.package_root.as_path(),
+			resource.as_path(),
+			settings,
+		)?;
+		let (mut layouter, pages) = layouter.layout(settings)?;
+
+		let mut cache = self.cache.lock().unwrap();
+		cache.insert(spine_index, pages);
+		layouter.write_glyph_atlas(cache.atlas_mut())?;
+		drop(cache);
+
+		Ok(layouter)
+	}
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -535,33 +586,4 @@ pub fn create_illustrator(
 		state,
 		cache,
 	})
-}
-
-#[derive(Debug)]
-struct BookSpineItem {
-	index: u32,
-	elements: Range<U26F6>,
-}
-
-fn count_spine_elements<R: io::Seek + io::Read>(
-	package: Arc<epub::Package>,
-	archive: &mut ZipArchive<R>,
-) -> Result<Vec<BookSpineItem>, IllustratorWorkerError> {
-	let mut builder = NodeTreeBuilder::new();
-	let mut items = Vec::new();
-	for (index, item) in package.spine.iter().enumerate() {
-		let resource = package
-			.manifest
-			.get(item)
-			.ok_or_else(|| IllustratorWorkerError::MissingResource(item.clone()))?;
-		let file = archive.by_path(resource.as_path())?;
-		let tree = builder.read_from(file)?;
-		let node_count = tree.tree.node_count();
-		items.push(BookSpineItem {
-			index: index as u32,
-			elements: U26F6::ZERO..U26F6::from_num(node_count),
-		});
-		builder = tree.into_builder();
-	}
-	Ok(items)
 }
