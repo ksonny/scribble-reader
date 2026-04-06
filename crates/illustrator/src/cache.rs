@@ -32,9 +32,9 @@ impl Default for PageContentCache {
 
 pub struct PageMetadata {
 	/// Page number, starting from 1
-	pub page: usize,
+	pub page: u64,
 	/// Total number of pages for chapter
-	pub pages: usize,
+	pub pages: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -172,7 +172,7 @@ impl PageContentCache {
 		let (page, meta) = if loc.element == I26F6::ZERO {
 			let meta = PageMetadata {
 				page: 1,
-				pages: entry.pages.len(),
+				pages: entry.pages.len() as u64,
 			};
 			(entry.pages.first()?, meta)
 		} else {
@@ -183,8 +183,8 @@ impl PageContentCache {
 				.find(|(_, p)| p.elements.contains(&loc.element))
 				.or_else(|| entry.pages.last().map(|p| (entry.pages.len() - 1, p)))?;
 			let meta = PageMetadata {
-				page: index + 1,
-				pages: entry.pages.len(),
+				page: index as u64 + 1,
+				pages: entry.pages.len() as u64,
 			};
 			(page, meta)
 		};

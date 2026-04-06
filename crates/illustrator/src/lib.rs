@@ -36,7 +36,6 @@ use zip::ZipArchive;
 
 use crate::cache::NavigateError;
 use crate::cache::PageContentCache;
-use crate::html_parser::TreeBuilderError;
 use crate::layout::IllustratorLayoutError;
 use crate::layout::PageLayouter;
 use crate::layout::StyleSettings;
@@ -248,10 +247,6 @@ pub enum IllustratorWorkerError {
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
 	#[error("epub error: {0}")]
 	Epub(#[from] epub::EpubError),
-	#[error(transparent)]
-	TreeBuilder(#[from] TreeBuilderError),
-	#[error("Missing resource {0}")]
-	MissingResource(epub::ResourceId),
 }
 
 impl From<std::io::Error> for IllustratorWorkerError {
@@ -297,6 +292,21 @@ impl Worker {
 			Instant::now().duration_since(start).as_secs_f64()
 		);
 
+		let start = Instant::now();
+		let mut spine_bytes = Vec::new();
+		for resource in package.spine.iter().map(|id| package.manifest.get(id)) {
+			if let Some(resource) = resource {
+				let file = archive.by_path(resource.as_path())?;
+				spine_bytes.push(file.size());
+			} else {
+				spine_bytes.push(0);
+			}
+		}
+		log::debug!(
+			"Loaded spine byte sizes in {}",
+			Instant::now().duration_since(start).as_secs_f64()
+		);
+
 		let book_loc = book.location();
 		let mut current_loc = if package.spine.get(book_loc.spine as usize).is_some() {
 			book_loc
@@ -307,7 +317,6 @@ impl Worker {
 				element: U26F6::ZERO,
 			}
 		};
-		let mut current_percent_read = book.percent_read.unwrap_or(0);
 
 		let start = Instant::now();
 		let settings = self.config.illustrator()?;
@@ -360,15 +369,16 @@ impl Worker {
 						);
 					}
 
+					let percent_read = self.estimate_percent_read(&spine_bytes, current_loc);
+
 					*self.state.lock().unwrap() = BookState {
 						location: current_loc,
-						percent_read: current_percent_read,
+						percent_read,
 					};
 					bell.content_ready(book.id, current_loc);
-					records.record_book_state(book.id, current_loc, current_percent_read)?;
+					records.record_book_state(book.id, current_loc, percent_read)?;
 					self.working.store(false, Ordering::Release);
 
-					// TODO: Calculate read percentage
 					let start = Instant::now();
 					let (load_next, load_prev) = {
 						let cache = self.cache.lock().unwrap();
@@ -464,6 +474,22 @@ impl Worker {
 		}
 
 		Ok(())
+	}
+
+	fn estimate_percent_read(&self, spine_bytes: &[u64], current_loc: Location) -> u32 {
+		let mut bytes_total = 0;
+		let mut bytes_read = 0;
+		for (idx, b) in spine_bytes.iter().enumerate() {
+			if idx < current_loc.spine as usize {
+				bytes_read += b;
+			} else if idx == current_loc.spine as usize
+				&& let Some((_, meta)) = self.cache.lock().unwrap().page(current_loc)
+			{
+				bytes_read += (*b * meta.page) / meta.pages;
+			}
+			bytes_total += b;
+		}
+		(100 * bytes_read / bytes_total) as u32
 	}
 
 	fn load_chapter_to_cache<'layout, 'settings, R: io::Seek + io::Read + Send + Sync>(
