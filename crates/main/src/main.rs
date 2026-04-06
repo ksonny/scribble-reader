@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use scribble_reader::Paths;
 use scribble_reader::start;
-use scribe::ScribeConfig;
-use scribe::settings::Paths;
+use scribe::config::ScribeConfig;
 use winit::event_loop::EventLoop;
 use wrangler::DocumentTree;
 use wrangler::create_wrangler;
@@ -17,22 +17,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let xdg_dirs = xdg::BaseDirectories::with_prefix("scribble-reader");
 	let paths = Paths {
-		cache_path: xdg_dirs.get_cache_home().unwrap().into(),
-		config_path: xdg_dirs.get_config_home().unwrap().into(),
-		data_path: xdg_dirs.get_data_home().unwrap().into(),
+		cache_path: xdg_dirs.get_cache_home().unwrap(),
+		config_path: xdg_dirs.get_config_home().unwrap(),
+		data_path: xdg_dirs.get_data_home().unwrap(),
 	};
-	let config = ScribeConfig::new(Arc::new(paths));
 
+	// TODO: Figuring out library path should be moved to wrangler
+	let config = ScribeConfig::load(paths.config_path.as_path())?;
 	let lib_path = config
-		.library()?
+		.library
 		.path
-		.unwrap_or(Arc::new("~/Documents/ebook/".to_string()))
+		.as_ref()
+		.map(|p| p.as_str())
+		.unwrap_or("~/Documents/ebook/")
 		.to_string();
 	let (system, handle) = create_wrangler(DocumentTree::new(Arc::new(lib_path)));
 
 	let event_loop = EventLoop::with_user_event().build().unwrap();
 
-	start(config, system.clone(), event_loop)?;
+	start(paths, system.clone(), event_loop)?;
 
 	system.send(wrangler::WranglerCommand::Shutdown);
 	handle.join().unwrap();

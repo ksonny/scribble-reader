@@ -1656,6 +1656,7 @@ dependencies = [
  "pollster",
  "resvg",
  "scribe",
+ "scribe-epub",
  "sculpter",
  "taffy",
  "thiserror 2.0.18",
@@ -3472,11 +3473,22 @@ dependencies = [
  "quick-xml",
  "rusqlite",
  "rusqlite_migration",
+ "scribe-epub",
  "serde",
  "serde_rusqlite",
  "thiserror 2.0.18",
  "toml",
  "wrangler",
+ "zip",
+]
+
+[[package]]
+name = "scribe-epub"
+version = "0.1.5"
+dependencies = [
+ "log",
+ "quick-xml",
+ "thiserror 2.0.18",
  "zip",
 ]
 

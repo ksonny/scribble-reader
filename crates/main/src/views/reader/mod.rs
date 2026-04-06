@@ -7,7 +7,7 @@ use egui::Rect;
 use egui::RichText;
 use illustrator::IllustratorAssistant;
 use lucide_icons::Icon;
-use scribe::library::Location;
+use scribe::Location;
 
 use crate::AppBell;
 use crate::AppEvent;

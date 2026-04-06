@@ -19,14 +19,13 @@ use egui::RichText;
 use egui::Vec2;
 use egui::load::Bytes;
 use lucide_icons::Icon;
-use scribe::ScribeAssistant;
-use scribe::library;
-use scribe::library::Book;
-use scribe::library::BookId;
-use scribe::library::Thumbnail;
-use scribe::record_keeper::RecordKeeper;
-use scribe::record_keeper::RecordKeeperAssistant;
-use scribe::record_keeper::RecordKeeperError;
+use scribe::Book;
+use scribe::BookId;
+use scribe::LibraryScribeAssistant;
+use scribe::RecordKeeper;
+use scribe::RecordKeeperAssistant;
+use scribe::RecordKeeperError;
+use scribe::Thumbnail;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -83,7 +82,7 @@ enum SortKey {
 }
 
 impl SortBy {
-	fn select(self, book: &library::Book) -> SortKey {
+	fn select(self, book: &Book) -> SortKey {
 		use SortKey::*;
 		match self {
 			SortBy::Modified => Date(book.modified_at),
@@ -116,7 +115,7 @@ impl Shelves {
 		shelves
 	}
 
-	fn update(&mut self, book: library::Book) {
+	fn update(&mut self, book: Book) {
 		self.thumbnails.remove(&book.id);
 		self.books.insert(book.id, book);
 		self.sort_books();
@@ -163,7 +162,7 @@ impl Shelves {
 pub(crate) struct LibraryView {
 	bell: AppBell,
 	records: RecordKeeperAssistant,
-	scribe: ScribeAssistant,
+	scribe: LibraryScribeAssistant,
 	shelves: Shelves,
 	page: u32,
 	cards: [Option<BookCard>; LIBRARY_LIST_SIZE],
@@ -174,7 +173,7 @@ impl LibraryView {
 	pub(crate) fn create(
 		bell: AppBell,
 		records: RecordKeeper,
-		scribe: ScribeAssistant,
+		scribe: LibraryScribeAssistant,
 	) -> Result<Self, RecordKeeperError> {
 		// TODO: Preserve page somewhere
 		let page = 0;
@@ -458,7 +457,7 @@ impl ViewHandle for LibraryView {
 }
 
 impl BookCard {
-	fn new(book: library::Book, thumbnail: library::Thumbnail, sort_by: SortBy) -> Self {
+	fn new(book: Book, thumbnail: Thumbnail, sort_by: SortBy) -> Self {
 		BookCard {
 			id: book.id,
 			title: book.title,
@@ -490,7 +489,8 @@ impl egui::Widget for BookCardUi<'_> {
 					ui.centered_and_justified(|ui| match &card.thumbnail {
 						Thumbnail::Bytes { bytes } => {
 							ui.add(egui::Image::new(egui::ImageSource::Bytes {
-								uri: format!("bytes://thumbnail_{}.png", card.id.value()).into(),
+								uri: format!("bytes://thumbnail_{}.png", card.id.into_inner())
+									.into(),
 								bytes: Bytes::Shared(bytes.clone()),
 							}))
 						}
@@ -565,7 +565,7 @@ impl egui::Widget for BookCardUi<'_> {
 			});
 			ui.interact(
 				ui.min_rect(),
-				ui.id().with(card.id.value()),
+				ui.id().with(card.id.into_inner()),
 				egui::Sense::click(),
 			)
 		})

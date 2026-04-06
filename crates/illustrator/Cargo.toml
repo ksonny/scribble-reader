@@ -14,6 +14,7 @@ imagesize.workspace = true
 log.workspace = true
 pollster.workspace = true
 resvg.workspace = true
+scribe-epub.workspace = true
 scribe.workspace = true
 sculpter.workspace = true
 taffy.workspace = true

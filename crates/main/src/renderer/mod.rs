@@ -57,7 +57,6 @@ impl<'window> SurfaceState<'window> {
 	}
 }
 
-#[allow(unused)]
 pub(crate) struct Renderer<'window> {
 	instance: wgpu::Instance,
 	adapter: wgpu::Adapter,

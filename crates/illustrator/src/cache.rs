@@ -1,5 +1,5 @@
 use fixed::types::I26F6;
-use scribe::library::Location;
+use scribe::Location;
 use sculpter::AtlasImage;
 
 use crate::PageContent;

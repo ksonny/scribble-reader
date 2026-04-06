@@ -5,8 +5,8 @@ mod reader;
 use std::sync::Arc;
 
 use illustrator::IllustratorAssistant;
-use scribe::ScribeAssistant;
-use scribe::record_keeper::RecordKeeper;
+use scribe::LibraryScribeAssistant;
+use scribe::RecordKeeper;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -66,7 +66,7 @@ impl AppView {
 		}
 	}
 
-	pub(crate) fn library(&mut self, records: RecordKeeper, scribe: ScribeAssistant) {
+	pub(crate) fn library(&mut self, records: RecordKeeper, scribe: LibraryScribeAssistant) {
 		match library::LibraryView::create(self.bell.clone(), records, scribe) {
 			Ok(view) => self.view = Views::Library(view),
 			Err(e) => {

@@ -17,9 +17,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::library;
-use crate::library::Location;
-use crate::settings::Paths;
+use crate::Book;
+use crate::BookId;
+use crate::Location;
 
 const MIGRATIONS_SLICE: &[M<'_>] = &[
 	M::up(
@@ -118,10 +118,10 @@ struct SecretBook {
 	percent_read: Option<u32>,
 }
 
-impl From<SecretBook> for library::Book {
+impl From<SecretBook> for Book {
 	fn from(value: SecretBook) -> Self {
-		library::Book {
-			id: library::BookId(value.id),
+		Book {
+			id: BookId(value.id),
 			path: value.path,
 			title: value.title.map(Arc::new),
 			author: value.author.map(Arc::new),
@@ -185,8 +185,8 @@ pub struct RecordKeeper {
 }
 
 impl RecordKeeper {
-	pub fn new(paths: &Paths) -> Self {
-		let db_path = paths.data_path.join("state.db");
+	pub fn new(data_path: &Path) -> Self {
+		let db_path = data_path.join("state.db");
 		Self {
 			db_path: Arc::new(db_path),
 		}
@@ -206,7 +206,7 @@ impl RecordKeeper {
 }
 
 impl RecordKeeperAssistant {
-	pub fn fetch_book(&self, id: library::BookId) -> Result<library::Book, RecordKeeperError> {
+	pub fn fetch_book(&self, id: BookId) -> Result<Book, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
 				bo.id,
@@ -227,13 +227,11 @@ impl RecordKeeperAssistant {
 			",
 		)?;
 		Ok(stmt
-			.query_one([id.value()], |row| Ok(from_row::<SecretBook>(row)))??
+			.query_one([id.into_inner()], |row| Ok(from_row::<SecretBook>(row)))??
 			.into())
 	}
 
-	pub fn fetch_books(
-		&self,
-	) -> Result<BTreeMap<library::BookId, library::Book>, RecordKeeperError> {
+	pub fn fetch_books(&self) -> Result<BTreeMap<BookId, Book>, RecordKeeperError> {
 		let mut stmt = self.conn.prepare(
 			"select
 				bo.id,
@@ -253,11 +251,11 @@ impl RecordKeeperAssistant {
 			",
 		)?;
 		Ok(from_rows::<SecretBook>(stmt.query([])?)
-			.map(|b| b.map(|b| (library::BookId(b.id), b.into())))
+			.map(|b| b.map(|b| (BookId(b.id), b.into())))
 			.collect::<Result<_, _>>()?)
 	}
 
-	pub fn upsert_book(&mut self, book: InsertBook) -> Result<library::BookId, RecordKeeperError> {
+	pub fn upsert_book(&mut self, book: InsertBook) -> Result<BookId, RecordKeeperError> {
 		let mut insert_stmt = self.conn.prepare(
 			"insert into books (path, title, author, size, modified_at, added_at, exist)
 				values (:path, :title, :author, :size, :modified_at, :added_at, true)
@@ -274,18 +272,18 @@ impl RecordKeeperAssistant {
 		let params = params.to_slice();
 		let book_id: i64 = insert_stmt.query_one(params.as_slice(), |row| row.get(0))?;
 
-		Ok(library::BookId(book_id))
+		Ok(BookId(book_id))
 	}
 
 	pub fn unexist_books<'a>(
 		&mut self,
-		book_ids: impl IntoIterator<Item = &'a library::BookId>,
+		book_ids: impl IntoIterator<Item = &'a BookId>,
 	) -> Result<(), RecordKeeperError> {
 		let tx = self.conn.transaction()?;
 		let mut unexist_stmt = tx.prepare("update books set exist = false where id = ?1")?;
 		for id in book_ids {
 			log::info!("Unexist book {:?}", id);
-			unexist_stmt.execute([id.value()])?;
+			unexist_stmt.execute([id.into_inner()])?;
 		}
 		drop(unexist_stmt);
 		tx.commit()?;
@@ -307,7 +305,7 @@ impl RecordKeeperAssistant {
 			where id = ?1;
 			",
 		)?;
-		from_rows::<QueryThumbnail>(stmt.query([id.value()])?)
+		from_rows::<QueryThumbnail>(stmt.query([id.into_inner()])?)
 			.next()
 			.transpose()
 			.map_err(|e| e.into())
@@ -342,7 +340,7 @@ impl RecordKeeperAssistant {
 			",
 		)?;
 		let thumbnail = InsertThumbnail {
-			book_id: id.value(),
+			book_id: id.into_inner(),
 			added_at: Utc::now(),
 			path,
 		};
@@ -368,7 +366,7 @@ impl RecordKeeperAssistant {
 			",
 		)?;
 		let state = InsertBookState {
-			book_id: id.value(),
+			book_id: id.into_inner(),
 			opened_at: Utc::now(),
 			spine: loc.spine,
 			element: loc.element.to_bits(),

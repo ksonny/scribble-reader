@@ -7,18 +7,21 @@ mod views;
 
 use std::fs;
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use config::ConfigError;
 use illustrator::create_illustrator;
-use scribe::Scribe;
-use scribe::ScribeAssistant;
-use scribe::ScribeConfig;
-use scribe::library::Location;
-use scribe::record_keeper::RecordKeeper;
-use scribe::record_keeper::RecordKeeperError;
+use scribe::BookId;
+use scribe::LibraryBell;
+use scribe::LibraryScribe;
+use scribe::LibraryScribeAssistant;
+use scribe::Location;
+use scribe::RecordKeeper;
+use scribe::RecordKeeperError;
+use scribe::config::ScribeConfig;
 use sculpter::SculpterFontErrors;
 use sculpter::SculpterFonts;
 use sculpter::SculpterFontsBuilder;
@@ -40,8 +43,6 @@ use crate::ui::UiInput;
 use crate::views::AppView;
 use crate::views::EventResult;
 use crate::views::ViewHandle;
-use scribe::library;
-use scribe::library::BookId;
 
 struct App<'window> {
 	input: UiInput,
@@ -55,7 +56,7 @@ struct App<'window> {
 	config: ScribeConfig,
 	fonts: Arc<SculpterFonts>,
 	keeper: RecordKeeper,
-	scribe: ScribeAssistant,
+	scribe: LibraryScribeAssistant,
 	content: ContentWranglerAssistant,
 }
 
@@ -321,12 +322,12 @@ impl AppBell {
 }
 
 impl illustrator::Bell for AppBell {
-	fn content_ready(&self, id: library::BookId, loc: Location) {
+	fn content_ready(&self, id: BookId, loc: Location) {
 		self.send_event(AppEvent::BookContentReady(id, loc))
 	}
 }
 
-impl scribe::Bell for AppBell {
+impl LibraryBell for AppBell {
 	fn book_updated(&self, book_id: BookId) {
 		self.send_event(AppEvent::BookUpdated(book_id));
 	}
@@ -346,14 +347,21 @@ pub enum Error {
 	Config(#[from] ConfigError),
 }
 
+#[derive(Debug)]
+pub struct Paths {
+	pub cache_path: PathBuf,
+	pub config_path: PathBuf,
+	pub data_path: PathBuf,
+}
+
 pub fn start(
-	config: ScribeConfig,
+	paths: Paths,
 	system: WranglerSystem,
 	event_loop: EventLoop<AppEvent>,
 ) -> Result<(), Error> {
-	fs::create_dir_all(config.paths().cache_path.as_ref())?;
-	fs::create_dir_all(config.paths().config_path.as_ref())?;
-	fs::create_dir_all(config.paths().data_path.as_ref())?;
+	fs::create_dir_all(paths.cache_path.as_path())?;
+	fs::create_dir_all(paths.config_path.as_path())?;
+	fs::create_dir_all(paths.data_path.as_path())?;
 
 	let bell = AppBell::new(event_loop.create_proxy());
 	let view = AppView::new(bell.clone());
@@ -361,12 +369,13 @@ pub fn start(
 	let input = UiInput::new(egui_ctx.clone());
 	let fps = FpsCalculator::new();
 	let gestures = GestureTracker::<_>::new();
-	let keeper = RecordKeeper::new(config.paths());
-	let scribe = Scribe::create(
+	let config = ScribeConfig::load(paths.config_path.as_path())?;
+	let keeper = RecordKeeper::new(paths.data_path.as_path());
+	let scribe = LibraryScribe::create(
 		system.clone(),
 		bell.clone(),
 		keeper.assistant()?,
-		config.paths(),
+		paths.config_path.as_path(),
 	);
 	let content = ContentWrangler::create(system);
 

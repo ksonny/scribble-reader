@@ -4,6 +4,7 @@ use std::fs;
 use std::io;
 use std::mem::ManuallyDrop;
 use std::os::fd::FromRawFd;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -25,10 +26,8 @@ use jni::sys::jint;
 use jni::sys::jlong;
 use jni::vm::JavaVM;
 use scribble_reader::AppEvent;
+use scribble_reader::Paths;
 use scribble_reader::start;
-use scribe::ScribeConfig;
-use scribe::settings;
-use scribe::settings::Paths;
 use winit::event_loop::EventLoop;
 use winit::platform::android::EventLoopBuilderExtAndroid;
 use winit::platform::android::activity::AndroidApp;
@@ -277,7 +276,7 @@ fn send_document_fail(ticket: Ticket, err: impl ToString) {
 	}
 }
 
-fn create_wrangler(app: &AndroidApp, config: ScribeConfig) -> (WranglerSystem, JoinHandle<()>) {
+fn create_wrangler(app: &AndroidApp, config_path: &Path) -> (WranglerSystem, JoinHandle<()>) {
 	let (sender, receiver) = channel();
 	let wranglers = WRANGLERS
 		.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
@@ -286,6 +285,7 @@ fn create_wrangler(app: &AndroidApp, config: ScribeConfig) -> (WranglerSystem, J
 	WRANGLER_SENDER.get_or_init(|| sender.clone());
 
 	let system = WranglerSystem::new(sender, wranglers.clone());
+	let document_tree_path = config_path.join("android-document-tree");
 
 	let app = app.clone();
 	let handle = thread::spawn(move || {
@@ -298,36 +298,61 @@ fn create_wrangler(app: &AndroidApp, config: ScribeConfig) -> (WranglerSystem, J
 		};
 		let activity: jni::sys::jobject = app.activity_as_ptr() as _;
 
-		let mut document_tree = loop {
-			match receiver.recv() {
-				Ok(WranglerCommand::SetTree(tree)) => {
-					match config.clone().set_library(settings::Library {
-						path: Some(tree.clone().into_inner()),
-					}) {
-						Ok(_) => {}
-						Err(e) => {
-							log::error!("Failed to save config: {e}");
-						}
-					};
-					log::info!("Set tree {tree}");
-					break tree;
-				}
-				Ok(WranglerCommand::Shutdown) => {
-					log::info!("Wrangler shutdown");
-					return;
-				}
-				Ok(cmd) => {
-					log::warn!("Wrangler not initialized, ignore cmd: {cmd:?}");
-				}
-				Err(e) => {
-					log::error!("Wrangler error, exit: {e}");
-					return;
+		let document_tree = fs::read_to_string(&document_tree_path).ok();
+		if document_tree.is_none() {
+			if let Err(e) = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+				let activity = unsafe { env.as_cast_raw::<Global<MainActivity>>(&activity)? };
+				MainActivity::discover_open_tree(activity.as_ref(), env)?;
+				Ok(())
+			}) {
+				log::error!("Failed to interact with vm: {e}");
+			}
+		};
+
+		let mut document_tree = if let Some(tree) = document_tree {
+			DocumentTree::new(Arc::new(tree))
+		} else {
+			loop {
+				match receiver.recv() {
+					Ok(WranglerCommand::SetTree(tree)) => {
+						match fs::write(&document_tree_path, tree.as_ref()) {
+							Ok(_) => {}
+							Err(e) => {
+								log::error!(
+									"Failed to write document tree to {}: {e}",
+									document_tree_path.display()
+								);
+							}
+						};
+						log::info!("Set tree {tree}");
+						break tree;
+					}
+					Ok(WranglerCommand::Shutdown) => {
+						log::info!("Wrangler shutdown");
+						return;
+					}
+					Ok(cmd) => {
+						log::warn!("Wrangler not initialized, ignore cmd: {cmd:?}");
+					}
+					Err(e) => {
+						log::error!("Wrangler error, exit: {e}");
+						return;
+					}
 				}
 			}
 		};
 		for cmd in receiver.into_iter() {
 			match cmd {
 				WranglerCommand::SetTree(tree) => {
+					match fs::write(&document_tree_path, tree.as_ref()) {
+						Ok(_) => {}
+						Err(e) => {
+							log::error!(
+								"Failed to write document tree to {}: {e}",
+								document_tree_path.display()
+							);
+						}
+					};
 					log::info!("Set tree {tree}");
 					document_tree = tree;
 				}
@@ -415,47 +440,20 @@ fn android_main(app: AndroidApp) {
 			.with_max_level(log::LevelFilter::Debug)
 			.with_filter(
 				android_logger::FilterBuilder::new()
-					.parse("info,naga=warn,wgpu=warn,scribble-reader=debug,illustrator=debug")
+					.parse(
+						"info,naga=warn,wgpu=warn,scribble-reader=debug,illustrator=debug,scribe=debug",
+					)
 					.build(),
 			),
 	);
 
 	let ext_data_path = app.external_data_path().unwrap();
 	let paths = Paths {
-		cache_path: Arc::new(ext_data_path.parent().unwrap().join("cache")),
-		config_path: Arc::new(ext_data_path.join("config")),
-		data_path: Arc::new(ext_data_path.join("data")),
+		cache_path: ext_data_path.parent().unwrap().join("cache"),
+		config_path: ext_data_path.join("config"),
+		data_path: ext_data_path.join("data"),
 	};
-	let config = ScribeConfig::new(Arc::new(paths));
-
-	let (system, handle) = create_wrangler(&app, config.clone());
-
-	let library = match config.library() {
-		Ok(l) => l,
-		Err(e) => {
-			log::error!("Failed to read library config: {e}");
-			return;
-		}
-	};
-	if let Some(tree) = library.path {
-		system.send(WranglerCommand::SetTree(DocumentTree::new(tree)));
-	} else {
-		let vm = match JavaVM::singleton() {
-			Ok(vm) => vm,
-			Err(e) => {
-				log::error!("Failed to get vm: {e}");
-				return;
-			}
-		};
-		let activity: jni::sys::jobject = app.activity_as_ptr() as _;
-		if let Err(e) = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-			let activity = unsafe { env.as_cast_raw::<Global<MainActivity>>(&activity)? };
-			MainActivity::discover_open_tree(activity.as_ref(), env)?;
-			Ok(())
-		}) {
-			log::error!("Failed to interact with vm: {e}");
-		}
-	};
+	let (system, handle) = create_wrangler(&app, &paths.config_path);
 
 	let event_loop = EventLoop::with_user_event()
 		.with_android_app(app)
@@ -466,7 +464,7 @@ fn android_main(app: AndroidApp) {
 	let event_loop_proxy = event_loop.create_proxy();
 	EVENT_LOOP_PROXY.get_or_init(|| event_loop_proxy);
 
-	if let Err(e) = start(config, system.clone(), event_loop) {
+	if let Err(e) = start(paths, system.clone(), event_loop) {
 		log::error!("App error: {e}")
 	};
 

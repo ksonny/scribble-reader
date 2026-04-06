@@ -977,10 +977,10 @@ pub fn parse_ncx<R: BufRead>(
 mod tests {
 	use std::path::Path;
 
-	use crate::epub::parse_container;
-	use crate::epub::parse_nav;
-	use crate::epub::parse_ncx;
-	use crate::epub::parse_package;
+	use crate::parse_container;
+	use crate::parse_nav;
+	use crate::parse_ncx;
+	use crate::parse_package;
 
 	#[test]
 	fn test_container_parse() -> Result<(), quick_xml::de::DeError> {
