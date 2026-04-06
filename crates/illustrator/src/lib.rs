@@ -21,12 +21,14 @@ use std::time::Instant;
 use bitflags::bitflags;
 use fixed::types::I26F6;
 use fixed::types::U26F6;
-use scribe::ScribeConfig;
-use scribe::epub;
-use scribe::epub::Package;
-use scribe::library;
-use scribe::library::Location;
-use scribe::record_keeper::RecordKeeper;
+use scribe::Book;
+use scribe::BookId;
+use scribe::Location;
+use scribe::RecordKeeper;
+use scribe::config::ScribeConfig;
+use scribe_epub::EpubMetadata;
+use scribe_epub::Navigation;
+use scribe_epub::Package;
 use sculpter::SculpterFonts;
 use sculpter::SculpterOptions;
 use sculpter::TextBlock;
@@ -55,7 +57,7 @@ pub struct IllustratorAssistant {
 	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
 	working: Arc<AtomicBool>,
-	navigation: Arc<Mutex<Option<Arc<epub::Navigation>>>>,
+	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	state: Arc<Mutex<BookState>>,
 	cache: Arc<Mutex<PageContentCache>>,
 }
@@ -75,7 +77,7 @@ impl IllustratorAssistant {
 		self.state.lock().unwrap().clone()
 	}
 
-	pub fn navigation(&self) -> Option<Arc<epub::Navigation>> {
+	pub fn navigation(&self) -> Option<Arc<Navigation>> {
 		self.navigation.lock().unwrap().clone()
 	}
 
@@ -199,7 +201,7 @@ pub struct Params {
 }
 
 pub trait Bell {
-	fn content_ready(&self, id: library::BookId, loc: Location);
+	fn content_ready(&self, id: BookId, loc: Location);
 }
 
 #[derive(Clone)]
@@ -222,7 +224,7 @@ struct Worker {
 	config: ScribeConfig,
 	fonts: Arc<SculpterFonts>,
 	cache: Arc<Mutex<PageContentCache>>,
-	navigation: Arc<Mutex<Option<Arc<epub::Navigation>>>>,
+	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	state: Arc<Mutex<BookState>>,
 	working: Arc<AtomicBool>,
 	record_keeper: RecordKeeper,
@@ -232,7 +234,7 @@ struct Worker {
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorWorkerError {
 	#[error("record keeper error: {0}")]
-	RecordKeeper(#[from] scribe::record_keeper::RecordKeeperError),
+	RecordKeeper(#[from] scribe::RecordKeeperError),
 	#[error("zip error: {0}")]
 	Zip(#[from] zip::result::ZipError),
 	#[error("io error at {1}: {0}")]
@@ -246,7 +248,7 @@ pub enum IllustratorWorkerError {
 	#[error("sculpter print error: {0}")]
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
 	#[error("epub error: {0}")]
-	Epub(#[from] epub::EpubError),
+	Epub(#[from] scribe_epub::EpubError),
 }
 
 impl From<std::io::Error> for IllustratorWorkerError {
@@ -261,7 +263,7 @@ impl Worker {
 		self,
 		bell: impl Bell + Send + 'static,
 		req_rx: Receiver<Request>,
-		book: library::Book,
+		book: Book,
 	) -> Result<(), IllustratorWorkerError> {
 		let mut params = Params {
 			page_width: 800,
@@ -281,7 +283,7 @@ impl Worker {
 		let start = Instant::now();
 		let mut archive = ZipArchive::new(Cursor::new(bytes.clone()))?;
 		let package = {
-			let mut epub = epub::EpubMetadata::new(&mut archive);
+			let mut epub = EpubMetadata::new(&mut archive);
 			let package = epub.package()?;
 			let navigation = Arc::new(epub.navigation()?);
 			*self.navigation.lock().unwrap() = Some(navigation);
@@ -319,7 +321,7 @@ impl Worker {
 		};
 
 		let start = Instant::now();
-		let settings = self.config.illustrator()?;
+		let settings = &self.config.illustrator;
 		let sculpter = sculpter::create_sculpter(
 			&self.fonts,
 			&[
@@ -353,7 +355,7 @@ impl Worker {
 							clear_cache = false;
 						}
 
-						let settings = StyleSettings::new(&settings, &params);
+						let settings = StyleSettings::new(settings, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -396,7 +398,7 @@ impl Worker {
 					if load_next {
 						let next_spine = current_loc.spine + 1;
 						log::debug!("Load chapter {next_spine} into cache");
-						let settings = StyleSettings::new(&settings, &params);
+						let settings = StyleSettings::new(settings, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -408,7 +410,7 @@ impl Worker {
 					if load_prev {
 						let prev_spine = current_loc.spine.saturating_sub(1);
 						log::debug!("Load chapter {prev_spine} into cache");
-						let settings = StyleSettings::new(&settings, &params);
+						let settings = StyleSettings::new(settings, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -523,7 +525,7 @@ impl Worker {
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorCreateError {
 	#[error(transparent)]
-	RecordKeeper(#[from] scribe::record_keeper::RecordKeeperError),
+	RecordKeeper(#[from] scribe::RecordKeeperError),
 }
 
 #[must_use = "Must track handle or illustrator dies"]
@@ -533,7 +535,7 @@ pub fn create_illustrator(
 	content: ContentWranglerAssistant,
 	fonts: Arc<SculpterFonts>,
 	bell: impl Bell + Send + 'static,
-	book_id: library::BookId,
+	book_id: BookId,
 ) -> Result<IllustratorAssistant, IllustratorCreateError> {
 	log::debug!("Open book {book_id}");
 

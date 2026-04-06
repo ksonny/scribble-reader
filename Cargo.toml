@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/main", "crates/illustrator", "crates/scribe", "crates/sculpter", "crates/app-android", "crates/wrangler"]
+members = ["crates/main", "crates/illustrator", "crates/scribe", "crates/sculpter", "crates/app-android", "crates/wrangler", "crates/scribe-epub"]
 
 [workspace.package]
 version = "0.1.5"
@@ -51,6 +51,7 @@ zip = "8.5.0"
 illustrator = { path = "./crates/illustrator" }
 scribble-reader = { path = "./crates/main" }
 scribe = {  path = "./crates/scribe" }
+scribe-epub = {  path = "./crates/scribe-epub" }
 sculpter = {  path = "./crates/sculpter" }
 wrangler = { path = "./crates/wrangler" }
 

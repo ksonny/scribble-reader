@@ -1,8 +1,42 @@
-use std::path::PathBuf;
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::Deserialize;
 use serde::Serialize;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigEditError {
+	#[error("at {1}: {0}")]
+	Io(io::Error, &'static std::panic::Location<'static>),
+}
+
+impl From<io::Error> for ConfigEditError {
+	#[track_caller]
+	fn from(err: std::io::Error) -> Self {
+		Self::Io(err, std::panic::Location::caller())
+	}
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScribeConfig {
+	pub library: Arc<Library>,
+	pub illustrator: Arc<Illustrator>,
+}
+
+impl ScribeConfig {
+	pub fn load(config_path: &Path) -> Result<Self, config::ConfigError> {
+		let config_path = config_path.join("config.toml");
+		let config_builder = config::Config::builder()
+			.add_source(config::File::from_str(
+				DEFAULT_SCRIBE_CONFIG,
+				config::FileFormat::Toml,
+			))
+			.add_source(config::File::from(config_path.as_path()).required(false))
+			.add_source(config::Environment::with_prefix("SCRAPE").separator("_"));
+		config_builder.build()?.try_deserialize()
+	}
+}
 
 #[cfg(not(target_os = "android"))]
 pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
@@ -148,17 +182,4 @@ pub struct Illustrator {
 	pub h4: H4TextConfig,
 	pub h5: H5TextConfig,
 	pub padding: PaddingConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Settings {
-	pub library: Library,
-	pub illustrator: Illustrator,
-}
-
-#[derive(Debug)]
-pub struct Paths {
-	pub cache_path: Arc<PathBuf>,
-	pub config_path: Arc<PathBuf>,
-	pub data_path: Arc<PathBuf>,
 }

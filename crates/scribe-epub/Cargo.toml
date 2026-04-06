@@ -1,0 +1,11 @@
+[package]
+name = "scribe-epub"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+log.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true
+zip.workspace = true
