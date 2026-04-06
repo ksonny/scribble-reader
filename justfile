@@ -7,13 +7,15 @@ _build profile:
 	#!/usr/bin/env bash
 	set -e
 	cd crates/app-android/
+	VERSION=$(cargo pkgid | cut -d '@' -f2)
+	echo "Build v$VERSION"
 	cargo ndk \
 		--target aarch64-linux-android \
 		--target x86_64-linux-android \
 		--output-dir app/src/main/jniLibs/ \
 		build \
 		--profile {{profile}}
-	./gradlew build
+	./gradlew -PversionName=$VERSION build
 	cd -
 
 build target="dev-opt": (_build target)

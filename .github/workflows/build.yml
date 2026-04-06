@@ -48,10 +48,16 @@ jobs:
           echo "$SIGNING_KEYSTORE" | base64 -di > "$SIGNING_STORE_FILE"
         if: ${{ github.actor != 'dependabot[bot]' }}
 
+      - uses: hudsonm62/toml-action@v1
+        with:
+          file: Cargo.toml
+          field: workspace.package.version
+        id: cargo_version
+
       - name: build app
         run: |
           cd crates/app-android/
-          ./gradlew build
+          ./gradlew -PversionName=$${{ steps.cargo_version.outputs.value }} build
           cd -
           mkdir -p apk
           mv crates/app-android/app/build/outputs/apk/release/app-release.apk apk/scribblereader.apk
@@ -61,12 +67,6 @@ jobs:
         with:
           name: scribblereader
           path: apk/*
-
-      - uses: hudsonm62/toml-action@v1
-        with:
-          file: Cargo.toml
-          field: workspace.package.version
-        id: cargo_version
 
       - uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' && github.repository == 'ksonny/scribble-reader'

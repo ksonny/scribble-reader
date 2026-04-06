@@ -6,6 +6,8 @@ def propsFile = rootProject.file("keystore.properties")
 def props = new Properties()
 props.load(new FileInputStream(propsFile))
 
+def projectVersionName = project.hasProperty('versionName') ? versionName : "0.1.0"
+
 android {
     namespace = "org.lotrax.scribblereader"
     compileSdk = 34
@@ -14,7 +16,7 @@ android {
         minSdk = 33
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = projectVersionName
     }
 
     signingConfigs {
