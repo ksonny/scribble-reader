@@ -2,7 +2,6 @@ use fixed::types::I26F6;
 use scribe::library::Location;
 use sculpter::AtlasImage;
 
-use crate::BookSpineItem;
 use crate::PageContent;
 use crate::PageFlags;
 
@@ -38,6 +37,18 @@ pub struct PageMetadata {
 	pub pages: usize,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NavigateError {
+	#[error("Must load next chapter for navigation")]
+	LoadNextChapter,
+	#[error("Must load previous chapter for navigation")]
+	LoadPreviousChapter,
+	#[error("Current chapter not cached")]
+	CurrentChapterNotCached,
+	#[error("Location is start of book")]
+	StartOfBook,
+}
+
 impl PageContentCache {
 	pub fn atlas(&self) -> &AtlasImage {
 		&self.atlas
@@ -51,59 +62,79 @@ impl PageContentCache {
 		self.entry(loc).map(|(_, page, meta)| (page, meta))
 	}
 
-	pub(crate) fn next_page(&self, spine: &[BookSpineItem], loc: Location) -> Location {
-		self.entry(loc)
-			.map(|(entry, page, _)| {
-				if page.flags.contains(PageFlags::Last) {
-					spine
-						.get(entry.spine as usize + 1)
-						.map(|item| Location {
-							spine: item.index,
-							element: item.elements.start,
-						})
-						// End of book
-						.unwrap_or(loc)
-				} else {
-					entry
-						.pages
-						.iter()
-						.find(|p| p.elements.start > page.elements.start)
-						.or(entry.pages.last())
-						.map(|p| Location {
-							spine: entry.spine,
-							element: p.elements.start,
-						})
-						.expect("Programmer error, not last page but nothing after")
-				}
+	pub(crate) fn next_page(&self, loc: Location) -> Result<Location, NavigateError> {
+		let Some((entry, page, _)) = self.entry(loc) else {
+			return Err(NavigateError::CurrentChapterNotCached);
+		};
+
+		if page.flags.contains(PageFlags::Last) {
+			let next_spine = loc.spine + 1;
+			let entry = self
+				.entries
+				.iter()
+				.flatten()
+				.find(|e| e.spine == next_spine)
+				.ok_or(NavigateError::LoadNextChapter)?;
+
+			Ok(Location {
+				spine: next_spine,
+				element: entry
+					.pages
+					.first()
+					.map(|p| p.elements.start)
+					.unwrap_or_default(),
 			})
-			.unwrap_or(loc)
+		} else {
+			let page = entry
+				.pages
+				.iter()
+				.find(|p| p.elements.start > page.elements.start)
+				.expect("Programmer error, not last page but nothing after");
+
+			Ok(Location {
+				spine: loc.spine,
+				element: page.elements.start,
+			})
+		}
 	}
 
-	pub(crate) fn previous_page(&self, spine: &[BookSpineItem], loc: Location) -> Location {
-		self.entry(loc)
-			.map(|(entry, page, _)| {
-				if page.flags.contains(PageFlags::First) {
-					spine
-						.get(entry.spine.saturating_sub(1) as usize)
-						.map(|item| Location {
-							spine: item.index,
-							element: item.elements.end,
-						})
-						// Start of book
-						.unwrap_or(loc)
-				} else {
-					entry
-						.pages
-						.iter()
-						.rfind(|p| p.elements.start < page.elements.start)
-						.map(|p| Location {
-							spine: entry.spine,
-							element: p.elements.start,
-						})
-						.expect("Programmer error, not first page but nothing before")
-				}
+	pub(crate) fn previous_page(&self, loc: Location) -> Result<Location, NavigateError> {
+		let Some((entry, page, _)) = self.entry(loc) else {
+			return Err(NavigateError::CurrentChapterNotCached);
+		};
+		if page.flags.contains(PageFlags::First) && loc.spine == 0 {
+			return Err(NavigateError::StartOfBook);
+		}
+
+		if page.flags.contains(PageFlags::First) {
+			let prev_spine = loc.spine.saturating_sub(1);
+			let entry = self
+				.entries
+				.iter()
+				.flatten()
+				.find(|e| e.spine == prev_spine)
+				.ok_or(NavigateError::LoadPreviousChapter)?;
+
+			Ok(Location {
+				spine: prev_spine,
+				element: entry
+					.pages
+					.last()
+					.map(|p| p.elements.start)
+					.unwrap_or_default(),
 			})
-			.unwrap_or(loc)
+		} else {
+			let page = entry
+				.pages
+				.iter()
+				.rfind(|p| p.elements.start < page.elements.start)
+				.expect("Programmer error, not first page but nothing before");
+
+			Ok(Location {
+				spine: loc.spine,
+				element: page.elements.start,
+			})
+		}
 	}
 
 	pub(crate) fn is_cached(&self, loc: Location) -> bool {
