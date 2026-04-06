@@ -134,15 +134,6 @@ impl<'a> Iterator for StyledLines<'a> {
 			self.styles,
 		);
 		for (s, g) in &mut iter {
-			if matches!(g.br, BreakpointType::Newline) {
-				let used = self.cursor;
-				self.cursor = idx + 1;
-				return Some(StyledGlyphs::new(
-					self.offset + used,
-					&self.glyphs[used..self.cursor],
-					self.styles,
-				));
-			}
 			let width = g.pos.x_advance * s.font_scale;
 			if segment_width + width > self.max_line_width {
 				let used = self.cursor;
@@ -306,7 +297,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_lines_hyphen_break_newline() {
+	fn test_lines_dont_break_newline() {
 		let styles = vec![mock_style(usize::MAX)];
 		let glyphs = vec![
 			mock_glyph(I26F6::ONE, 0, BreakpointType::No),
@@ -315,6 +306,6 @@ mod tests {
 		];
 
 		let lines = StyledLines::new(0, &styles, &glyphs, 20 * PX_PER_PT);
-		assert_eq!(lines.count(), 2);
+		assert_eq!(lines.count(), 1);
 	}
 }
