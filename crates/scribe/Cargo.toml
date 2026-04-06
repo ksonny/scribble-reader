@@ -17,6 +17,7 @@ rusqlite.workspace = true
 rusqlite_migration.workspace = true
 scribe-epub.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde_rusqlite.workspace = true
 thiserror.workspace = true
 toml.workspace = true

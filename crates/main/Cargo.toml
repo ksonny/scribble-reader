@@ -26,6 +26,7 @@ lucide-icons.workspace = true
 pollster.workspace = true
 scribe.workspace = true
 sculpter.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 winit.workspace = true
