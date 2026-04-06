@@ -3475,6 +3475,7 @@ dependencies = [
  "rusqlite_migration",
  "scribe-epub",
  "serde",
+ "serde_json",
  "serde_rusqlite",
  "thiserror 2.0.18",
  "toml",

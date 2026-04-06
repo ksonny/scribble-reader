@@ -3,10 +3,13 @@ use chrono::Utc;
 use chrono::serde::ts_seconds;
 use chrono::serde::ts_seconds_option;
 use fixed::types::U26F6;
+use rusqlite::OptionalExtension;
+use rusqlite::named_params;
 use rusqlite_migration::M;
 use rusqlite_migration::Migrations;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_rusqlite::from_row;
 use serde_rusqlite::from_rows;
 use serde_rusqlite::to_params_named;
@@ -60,6 +63,15 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
 			add column percent_read integer;
 		",
 	),
+	M::up(
+		"create table view_states (
+			key text not null primary key,
+			value text not null,
+			modified_at integer not null,
+			added_at integer not null
+		) strict;
+		",
+	),
 ];
 const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
 
@@ -74,6 +86,8 @@ pub enum RecordKeeperError {
 	),
 	#[error(transparent)]
 	SerdeRusqlite(#[from] serde_rusqlite::Error),
+	#[error(transparent)]
+	SerdeJson(#[from] serde_json::Error),
 }
 
 impl From<rusqlite::Error> for RecordKeeperError {
@@ -374,5 +388,47 @@ impl RecordKeeperAssistant {
 		};
 		stmt.execute(to_params_named(state)?.to_slice().as_slice())?;
 		Ok(())
+	}
+
+	pub fn record_view_state<T: Serialize>(
+		&self,
+		key: &'static str,
+		value: &T,
+	) -> Result<(), RecordKeeperError> {
+		let mut stmt = self.conn.prepare(
+			"insert into view_states (key, value, modified_at, added_at)
+				values (:key, :value, :now, :now)
+			on conflict (key)
+			do update set
+				value = :value,
+				modified_at = :now
+			",
+		)?;
+		stmt.execute(named_params! {
+			":key": key,
+			":value": &serde_json::to_string(value)?,
+			":now": Utc::now().timestamp(),
+		})?;
+		Ok(())
+	}
+
+	pub fn fetch_view_state<T: DeserializeOwned>(
+		&self,
+		key: &'static str,
+	) -> Result<Option<T>, RecordKeeperError> {
+		let mut stmt = self.conn.prepare(
+			"select
+				vs.value
+			from view_states vs
+			where vs.key = ?1
+			",
+		)?;
+		let value = stmt
+			.query_one([key], |row| {
+				Ok(serde_json::from_str(row.get_ref(0)?.as_str()?))
+			})
+			.optional()?
+			.transpose()?;
+		Ok(value)
 	}
 }
