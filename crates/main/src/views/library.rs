@@ -109,12 +109,12 @@ struct Shelves {
 }
 
 impl Shelves {
-	fn open(books: BTreeMap<BookId, Book>) -> Self {
+	fn open(books: BTreeMap<BookId, Book>, sort_by: SortBy) -> Self {
 		let books_len = books.len();
 		log::info!("Open library with {books_len} books");
 		let mut shelves = Self {
 			books,
-			sort_by: SortBy::Opened,
+			sort_by,
 			sorted: Vec::new(),
 			thumbnails: BTreeMap::new(),
 		};
@@ -197,7 +197,7 @@ impl LibraryView {
 				BTreeMap::new()
 			}
 		};
-		let mut shelves = Shelves::open(books);
+		let mut shelves = Shelves::open(books, state.sort_by);
 		let cards = read_cards(&mut shelves, &records, state.page);
 
 		Ok(Self {
@@ -425,7 +425,6 @@ impl ViewHandle for LibraryView {
 				let height = ui.available_height()
 					- (LIBRARY_LIST_SIZE as f32 - 1.0) * ui.spacing().item_spacing.y;
 				let card_height = height / LIBRARY_LIST_SIZE as f32;
-
 				ui.vertical(|ui| {
 					for card in self.cards.iter().flatten() {
 						ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
