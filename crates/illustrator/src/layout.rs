@@ -95,7 +95,7 @@ impl TextStyle {
 }
 
 pub(crate) struct StyleSettings<'a> {
-	config: &'a IllustratorProfile,
+	profile: &'a IllustratorProfile,
 
 	font_regular: FontOptions<'a>,
 	font_italic: FontOptions<'a>,
@@ -107,13 +107,13 @@ pub(crate) struct StyleSettings<'a> {
 }
 
 impl<'a> StyleSettings<'a> {
-	pub(crate) fn new(config: &'a IllustratorProfile, params: &Params) -> Self {
-		let font_regular = into_font_options(&config.font_regular);
-		let font_italic = into_font_options(&config.font_italic);
-		let font_bold = into_font_options(&config.font_bold);
+	pub(crate) fn new(profile: &'a IllustratorProfile, params: &Params) -> Self {
+		let font_regular = into_font_options(&profile.font_regular);
+		let font_italic = into_font_options(&profile.font_italic);
+		let font_bold = into_font_options(&profile.font_bold);
 
 		Self {
-			config,
+			profile,
 
 			font_regular,
 			font_italic,
@@ -129,7 +129,7 @@ impl<'a> StyleSettings<'a> {
 		use sculpter::Fixed;
 
 		let font_size = Fixed::from_num(self.font_size());
-		let line_height_em = Fixed::from_num(self.config.line_height);
+		let line_height_em = Fixed::from_num(self.profile.line_height);
 
 		match style {
 			TextStyle::Body => FontStyle {
@@ -149,71 +149,112 @@ impl<'a> StyleSettings<'a> {
 			},
 			TextStyle::H1 => FontStyle {
 				font_opts: &self.font_regular,
-				font_size: font_size * Fixed::from_num(self.config.h1.font_size_em),
+				font_size: font_size * Fixed::from_num(self.profile.h1.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H2 => FontStyle {
 				font_opts: &self.font_regular,
-				font_size: font_size * Fixed::from_num(self.config.h2.font_size_em),
+				font_size: font_size * Fixed::from_num(self.profile.h2.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H3 => FontStyle {
 				font_opts: &self.font_regular,
-				font_size: font_size * Fixed::from_num(self.config.h3.font_size_em),
+				font_size: font_size * Fixed::from_num(self.profile.h3.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H4 => FontStyle {
 				font_opts: &self.font_regular,
-				font_size: font_size * Fixed::from_num(self.config.h4.font_size_em),
+				font_size: font_size * Fixed::from_num(self.profile.h4.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H5 => FontStyle {
 				font_opts: &self.font_regular,
-				font_size: font_size * Fixed::from_num(self.config.h5.font_size_em),
+				font_size: font_size * Fixed::from_num(self.profile.h5.font_size_em),
 				line_height_em,
 			},
 		}
 	}
 
 	fn font_size(&self) -> f32 {
-		self.config.font_size * self.scale
+		self.profile.font_size * self.scale
 	}
 
 	fn min_line_height(&self) -> f32 {
-		self.config.line_height * self.config.font_size * self.scale
+		self.profile.line_height * self.profile.font_size * self.scale
 	}
 
 	fn page_height_padded(&self) -> f32 {
 		(self.page_height as f32
-			- self.config.padding.top_em * self.font_size()
-			- self.config.padding.bottom_em * self.font_size())
+			- self.profile.padding.top_em * self.font_size()
+			- self.profile.padding.bottom_em * self.font_size())
 		.floor()
 	}
 	fn page_width_padded(&self) -> f32 {
 		(self.page_width as f32
-			- self.config.padding.left_em * self.font_size()
-			- self.config.padding.right_em * self.font_size())
+			- self.profile.padding.left_em * self.font_size()
+			- self.profile.padding.right_em * self.font_size())
 		.floor()
 	}
 
 	fn padding_top(&self) -> f32 {
-		self.config.padding.top_em * self.font_size()
+		self.profile.padding.top_em * self.font_size()
 	}
 
 	fn padding_left(&self) -> f32 {
-		self.config.padding.left_em * self.font_size()
-	}
-
-	fn paragraph_padding(&self) -> f32 {
-		self.config.padding.paragraph_em * self.font_size()
+		self.profile.padding.left_em * self.font_size()
 	}
 
 	fn element_style(&self, name: &LocalName) -> Style {
 		match *name {
+			local_name!("h1") => Style {
+				padding: Rect {
+					top: zero(),
+					bottom: length(self.profile.h1.padding_em * self.font_size()),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
+			local_name!("h2") => Style {
+				padding: Rect {
+					top: zero(),
+					bottom: length(self.profile.h2.padding_em * self.font_size()),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
+			local_name!("h3") => Style {
+				padding: Rect {
+					top: zero(),
+					bottom: length(self.profile.h3.padding_em * self.font_size()),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
+			local_name!("h4") => Style {
+				padding: Rect {
+					top: zero(),
+					bottom: length(self.profile.h4.padding_em * self.font_size()),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
+			local_name!("h5") => Style {
+				padding: Rect {
+					top: zero(),
+					bottom: length(self.profile.h5.padding_em * self.font_size()),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
 			local_name!("p") => Style {
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.paragraph_padding()),
+					bottom: length(self.profile.padding.paragraph_em * self.font_size()),
 					left: zero(),
 					right: zero(),
 				},
