@@ -233,8 +233,6 @@ pub fn create_sculpter<'a>(
 		shaper,
 		printer,
 		glyphs: Vec::new(),
-		#[cfg(debug_assertions)]
-		glyph_set_id: 0,
 		styles: Vec::new(),
 		options,
 	})
@@ -250,8 +248,6 @@ pub struct SculpterInput<'a> {
 pub struct SculpterHandle {
 	glyphs_start: usize,
 	glyphs_end: usize,
-	#[cfg(debug_assertions)]
-	glyph_set_id: u32,
 }
 
 impl SculpterHandle {
@@ -290,8 +286,6 @@ pub struct Sculpter<'font> {
 	shaper: SculptureShaper<'font>,
 	printer: SculpterPrinter<'font>,
 	glyphs: Vec<GlyphPlan>,
-	#[cfg(debug_assertions)]
-	glyph_set_id: u32,
 	styles: Vec<Style>,
 	options: SculpterOptions,
 }
@@ -332,7 +326,6 @@ impl Sculpter<'_> {
 		let glyphs_end = self.glyphs.len();
 
 		Ok(SculpterHandle {
-			glyph_set_id: self.glyph_set_id,
 			glyphs_start,
 			glyphs_end,
 		})
@@ -352,11 +345,6 @@ impl Sculpter<'_> {
 		width_px: u32,
 		empty_line_height_px: I26F6,
 	) -> MeasureResult {
-		debug_assert_eq!(
-			self.glyph_set_id, handle.glyph_set_id,
-			"Glyph set missmatch"
-		);
-
 		let empty_line_height = empty_line_height_px.round();
 
 		let mut measure_height = I26F6::ZERO;
@@ -429,11 +417,6 @@ impl Sculpter<'_> {
 		height_px: u32,
 		empty_line_height_px: I26F6,
 	) -> Result<TextBlock, SculpterPrinterError> {
-		debug_assert_eq!(
-			self.glyph_set_id, handle.glyph_set_id,
-			"Glyph set missmatch"
-		);
-
 		let empty_line_height = empty_line_height_px.round();
 
 		let mut output = Vec::new();
@@ -495,8 +478,6 @@ impl Sculpter<'_> {
 			shaper,
 			printer,
 			mut glyphs,
-			#[cfg(debug_assertions)]
-			glyph_set_id,
 			mut styles,
 			options,
 		} = self;
@@ -509,8 +490,6 @@ impl Sculpter<'_> {
 			shaper,
 			printer,
 			glyphs,
-			#[cfg(debug_assertions)]
-			glyph_set_id: glyph_set_id + 1,
 			styles,
 			options,
 		}
