@@ -1,5 +1,4 @@
 use std::iter;
-use std::sync::Arc;
 
 use egui::Panel;
 use image::ImageBuffer;
@@ -36,7 +35,7 @@ pub(crate) struct ExperimentsView {
 	screen_width: u32,
 	screen_height: u32,
 	scale_factor: f32,
-	fonts: Arc<SculpterFonts>,
+	fonts: SculpterFonts,
 	render_items: Vec<(AtlasImage, Vec<DisplayGlyph>)>,
 	show_atlas: bool,
 }
@@ -44,7 +43,7 @@ pub(crate) struct ExperimentsView {
 impl ExperimentsView {
 	pub(crate) fn create(
 		bell: AppBell,
-		fonts: Arc<SculpterFonts>,
+		fonts: SculpterFonts,
 		screen_width: u32,
 		screen_height: u32,
 		scale_factor: f32,

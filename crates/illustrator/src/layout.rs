@@ -9,6 +9,7 @@ use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
 use scribe::config::FontConfig;
+use scribe::config::IllustratorProfile;
 use sculpter::AtlasImage;
 use sculpter::Axis;
 use sculpter::Family;
@@ -94,7 +95,7 @@ impl TextStyle {
 }
 
 pub(crate) struct StyleSettings<'a> {
-	config: &'a scribe::config::Illustrator,
+	config: &'a IllustratorProfile,
 
 	font_regular: FontOptions<'a>,
 	font_italic: FontOptions<'a>,
@@ -106,7 +107,7 @@ pub(crate) struct StyleSettings<'a> {
 }
 
 impl<'a> StyleSettings<'a> {
-	pub(crate) fn new(config: &'a scribe::config::Illustrator, params: &Params) -> Self {
+	pub(crate) fn new(config: &'a IllustratorProfile, params: &Params) -> Self {
 		let font_regular = into_font_options(&config.font_regular);
 		let font_italic = into_font_options(&config.font_italic);
 		let font_bold = into_font_options(&config.font_bold);

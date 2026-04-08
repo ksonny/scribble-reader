@@ -2,11 +2,12 @@ mod experiments;
 mod library;
 mod reader;
 
-use std::sync::Arc;
-
-use illustrator::IllustratorAssistant;
+use scribe::BookId;
 use scribe::LibraryScribeAssistant;
 use scribe::RecordKeeper;
+use scribe::config::IllustratorConfig;
+use sculpter::SculpterFonts;
+use wrangler::content::ContentWranglerAssistant;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -75,20 +76,34 @@ impl AppView {
 		};
 	}
 
-	pub(crate) fn reader(&mut self, illustrator: IllustratorAssistant) {
-		let _ = illustrator.rescale(self.scale_factor);
-		let _ = illustrator.resize(self.screen_width, self.screen_height);
-
-		self.view = Views::Reader(reader::ReaderView::create(
-			self.bell.clone(),
-			illustrator,
+	pub(crate) fn reader(
+		&mut self,
+		config: IllustratorConfig,
+		keeper: RecordKeeper,
+		fonts: SculpterFonts,
+		content: ContentWranglerAssistant,
+		bell: AppBell,
+		book_id: BookId,
+	) {
+		match reader::ReaderView::create(
+			config,
+			keeper,
+			fonts,
+			content,
+			bell,
+			book_id,
 			self.screen_width,
 			self.screen_height,
 			self.scale_factor,
-		))
+		) {
+			Ok(view) => self.view = Views::Reader(view),
+			Err(e) => {
+				log::error!("Failed to create reader: {e}");
+			}
+		};
 	}
 
-	pub(crate) fn experiments(&mut self, fonts: Arc<sculpter::SculpterFonts>) {
+	pub(crate) fn experiments(&mut self, fonts: sculpter::SculpterFonts) {
 		self.view = Views::Experiments(experiments::ExperimentsView::create(
 			self.bell.clone(),
 			fonts,

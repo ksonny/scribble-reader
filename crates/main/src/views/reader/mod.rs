@@ -6,8 +6,16 @@ use std::sync::Arc;
 use egui::Rect;
 use egui::RichText;
 use illustrator::IllustratorAssistant;
+use illustrator::IllustratorCreateError;
+use illustrator::IllustratorRequestError;
+use illustrator::create_illustrator;
 use lucide_icons::Icon;
+use scribe::BookId;
 use scribe::Location;
+use scribe::RecordKeeper;
+use scribe::config::IllustratorConfig;
+use sculpter::SculpterFonts;
+use wrangler::content::ContentWranglerAssistant;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -30,6 +38,14 @@ use crate::views::reader::active_areas::ActiveAreaAction;
 use crate::views::reader::active_areas::ActiveAreas;
 
 pub const CHAPTER_LIST_SIZE: u32 = 12;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReaderViewCreateError {
+	#[error(transparent)]
+	IllustratorCreate(#[from] IllustratorCreateError),
+	#[error(transparent)]
+	IllustratorRequest(#[from] IllustratorRequestError),
+}
 
 enum ReaderMode {
 	ReadNoUi,
@@ -62,16 +78,35 @@ pub(crate) struct ReaderView {
 }
 
 impl ReaderView {
+	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn create(
+		config: IllustratorConfig,
+		keeper: RecordKeeper,
+		fonts: SculpterFonts,
+		content: ContentWranglerAssistant,
 		bell: AppBell,
-		illustrator: IllustratorAssistant,
+		book_id: BookId,
 		screen_width: u32,
 		screen_height: u32,
 		scale_factor: f32,
-	) -> Self {
-		Self {
+	) -> Result<Self, ReaderViewCreateError> {
+		// TODO: Read state and get current profile
+		let profile = config.as_ref().get("serif").cloned().unwrap_or_default();
+		let illustrator = create_illustrator(
+			keeper.clone(),
+			fonts.clone(),
+			content.clone(),
+			bell.clone(),
+			profile,
+			book_id,
+		)?;
+		illustrator.rescale(scale_factor)?;
+		illustrator.resize(screen_width, screen_height)?;
+
+		Ok(Self {
 			bell,
 			illustrator,
+
 			screen_width,
 			screen_height,
 			scale_factor,
@@ -80,7 +115,7 @@ impl ReaderView {
 			chapters_page: 0,
 			chapters_cards: Default::default(),
 			statusline: String::new().into(),
-		}
+		})
 	}
 
 	fn toggle_ui(&mut self) {

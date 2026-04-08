@@ -25,7 +25,7 @@ use scribe::Book;
 use scribe::BookId;
 use scribe::Location;
 use scribe::RecordKeeper;
-use scribe::config::ScribeConfig;
+use scribe::config::IllustratorProfile;
 use scribe_epub::EpubMetadata;
 use scribe_epub::Navigation;
 use scribe_epub::Package;
@@ -221,14 +221,14 @@ pub struct BookState {
 }
 
 struct Worker {
-	config: ScribeConfig,
-	fonts: Arc<SculpterFonts>,
+	profile: Arc<IllustratorProfile>,
+	fonts: SculpterFonts,
+	record_keeper: RecordKeeper,
+	content: ContentWranglerAssistant,
 	cache: Arc<Mutex<PageContentCache>>,
 	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	state: Arc<Mutex<BookState>>,
 	working: Arc<AtomicBool>,
-	record_keeper: RecordKeeper,
-	content: ContentWranglerAssistant,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -239,8 +239,6 @@ pub enum IllustratorWorkerError {
 	Zip(#[from] zip::result::ZipError),
 	#[error("io error at {1}: {0}")]
 	Io(std::io::Error, &'static std::panic::Location<'static>),
-	#[error("config error: {0}")]
-	Config(#[from] config::ConfigError),
 	#[error("layout error: {0}")]
 	Layout(#[from] IllustratorLayoutError),
 	#[error("create sculpter error: {0}")]
@@ -321,13 +319,12 @@ impl Worker {
 		};
 
 		let start = Instant::now();
-		let settings = &self.config.illustrator;
 		let sculpter = sculpter::create_sculpter(
 			&self.fonts,
 			&[
-				&into_font_options(&settings.font_regular),
-				&into_font_options(&settings.font_bold),
-				&into_font_options(&settings.font_italic),
+				&into_font_options(&self.profile.font_regular),
+				&into_font_options(&self.profile.font_bold),
+				&into_font_options(&self.profile.font_italic),
 			],
 			SculpterOptions {
 				atlas_sub_pixel_mask: I26F6::from_bits(!0b1),
@@ -355,7 +352,7 @@ impl Worker {
 							clear_cache = false;
 						}
 
-						let settings = StyleSettings::new(settings, &params);
+						let settings = StyleSettings::new(&self.profile, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -398,7 +395,7 @@ impl Worker {
 					if load_next {
 						let next_spine = current_loc.spine + 1;
 						log::debug!("Load chapter {next_spine} into cache");
-						let settings = StyleSettings::new(settings, &params);
+						let settings = StyleSettings::new(&self.profile, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -410,7 +407,7 @@ impl Worker {
 					if load_prev {
 						let prev_spine = current_loc.spine.saturating_sub(1);
 						log::debug!("Load chapter {prev_spine} into cache");
-						let settings = StyleSettings::new(settings, &params);
+						let settings = StyleSettings::new(&self.profile, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -530,11 +527,11 @@ pub enum IllustratorCreateError {
 
 #[must_use = "Must track handle or illustrator dies"]
 pub fn create_illustrator(
-	config: ScribeConfig,
 	record_keeper: RecordKeeper,
+	fonts: SculpterFonts,
 	content: ContentWranglerAssistant,
-	fonts: Arc<SculpterFonts>,
 	bell: impl Bell + Send + 'static,
+	profile: Arc<IllustratorProfile>,
 	book_id: BookId,
 ) -> Result<IllustratorAssistant, IllustratorCreateError> {
 	log::debug!("Open book {book_id}");
@@ -542,7 +539,6 @@ pub fn create_illustrator(
 	let records = record_keeper.assistant()?;
 	let book = records.fetch_book(book_id)?;
 
-	let config = config.clone();
 	let fonts = fonts.clone();
 
 	let cache = Arc::new(Mutex::new(PageContentCache::default()));
@@ -556,14 +552,14 @@ pub fn create_illustrator(
 	let (req_tx, req_rx) = channel();
 
 	let worker = Worker {
-		config,
+		profile,
 		fonts,
+		record_keeper,
+		content,
 		cache: cache.clone(),
 		navigation: navigation.clone(),
 		state: state.clone(),
 		working: working.clone(),
-		record_keeper,
-		content,
 	};
 
 	let handle = std::thread::spawn(move || -> Result<(), IllustratorWorkerError> {
