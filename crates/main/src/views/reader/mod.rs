@@ -13,8 +13,12 @@ use lucide_icons::Icon;
 use scribe::BookId;
 use scribe::Location;
 use scribe::RecordKeeper;
+use scribe::RecordKeeperAssistant;
+use scribe::RecordKeeperError;
 use scribe::config::IllustratorConfig;
 use sculpter::SculpterFonts;
+use serde::Deserialize;
+use serde::Serialize;
 use wrangler::content::ContentWranglerAssistant;
 
 use crate::AppBell;
@@ -46,6 +50,8 @@ pub(crate) enum ReaderViewCreateError {
 	IllustratorCreate(#[from] IllustratorCreateError),
 	#[error(transparent)]
 	IllustratorRequest(#[from] IllustratorRequestError),
+	#[error(transparent)]
+	RecordKeeper(#[from] RecordKeeperError),
 }
 
 enum ReaderMode {
@@ -55,19 +61,27 @@ enum ReaderMode {
 	Settings,
 }
 
-#[derive(Debug)]
-pub(crate) struct ChapterCard {
-	location: Location,
-	title: Arc<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ViewState {
+	profile: String,
+}
+
+impl Default for ViewState {
+	fn default() -> Self {
+		Self {
+			profile: "serif".to_string(),
+		}
+	}
 }
 
 pub(crate) struct ReaderView {
-	bell: AppBell,
+	config: IllustratorConfig,
 	illustrator: IllustratorAssistant,
-
+	records: RecordKeeperAssistant,
+	bell: AppBell,
 	viewport: Viewport,
+	state: ViewState,
 	mode: ReaderMode,
-	/// Keeps track of where taps/clicks should go through to activy areas.
 	active_rects: Vec<Rect>,
 	chapters_page: u32,
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
@@ -75,6 +89,8 @@ pub(crate) struct ReaderView {
 }
 
 impl ReaderView {
+	const STATE_KEY: &str = "reader_view_state";
+
 	pub(crate) fn create(
 		config: IllustratorConfig,
 		keeper: RecordKeeper,
@@ -84,10 +100,19 @@ impl ReaderView {
 		book_id: BookId,
 		viewport: Viewport,
 	) -> Result<Self, ReaderViewCreateError> {
+		let records = keeper.assistant()?;
+		let state: ViewState = records
+			.fetch_view_state(Self::STATE_KEY)?
+			.unwrap_or_default();
+
 		// TODO: Read state and get current profile
-		let profile = config.as_ref().get("serif").cloned().unwrap_or_default();
+		let profile = config
+			.as_ref()
+			.get(&state.profile)
+			.cloned()
+			.unwrap_or_default();
 		let illustrator = create_illustrator(
-			keeper.clone(),
+			keeper.assistant()?,
 			fonts.clone(),
 			content.clone(),
 			bell.clone(),
@@ -98,9 +123,11 @@ impl ReaderView {
 		illustrator.resize(viewport.screen_width, viewport.screen_height)?;
 
 		Ok(Self {
-			bell,
+			config,
 			illustrator,
-
+			records,
+			bell,
+			state,
 			viewport,
 			mode: ReaderMode::ReadNoUi,
 			active_rects: Vec::new(),
@@ -445,6 +472,18 @@ impl ViewHandle for ReaderView {
 					if is_open {
 						ui.disable();
 					}
+					ui.vertical(|ui| {
+						for (profile, _) in self.config.as_ref().iter() {
+							if ui.button(profile.as_str()).clicked() {
+								log::info!("Profile clicked");
+								self.state.profile = profile.clone();
+								let _ = self
+									.records
+									.record_view_state(Self::STATE_KEY, &self.state)
+									.inspect_err(|e| log::warn!("Error saving state: {e}"));
+							}
+						}
+					})
 
 					// TODO: Settings
 				});
@@ -516,6 +555,12 @@ impl ViewHandle for ReaderView {
 		self.viewport.screen_height = height;
 		let _ = self.illustrator.resize(width, height);
 	}
+}
+
+#[derive(Debug)]
+pub(crate) struct ChapterCard {
+	location: Location,
+	title: Arc<String>,
 }
 
 impl ChapterCard {

@@ -23,8 +23,7 @@ pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
 [library]
 path = "~/Documents/ebooks"
 
-[illustrator.serif]
-name = "Serif"
+[illustrator."Serif"]
 font_size = 16.0
 line_height = 1.5
 h1 = { font_size_em = 1.8, padding_em = 1.5 }
@@ -33,28 +32,27 @@ h3 = { font_size_em = 1.2, padding_em = 1.5 }
 h4 = { font_size_em = 1.0, padding_em = 1.5 }
 h5 = { font_size_em = 1.0, padding_em = 1.5 }
 
-[illustrator.default.font_regular]
+[illustrator."Serif".font_regular]
 family = "serif"
 variation.wght = 400
 
-[illustrator.default.font_italic]
+[illustrator."Serif".font_italic]
 family = "serif"
 variation.wght = 400
 variation.ital = 1.0
 
-[illustrator.default.font_bold]
+[illustrator."Serif".font_bold]
 family = "serif"
 variation.wght = 600
 
-[illustrator.default.padding]
+[illustrator."Serif".padding]
 top_em = 2.0
 left_em = 2.0
 right_em = 2.0
 bottom_em = 2.0
 paragraph_em = 1.2
 
-[illustrator.sansserif]
-name = "Sans Serif"
+[illustrator."Sans-serif"]
 font_size = 16.0
 line_height = 1.5
 h1 = { font_size_em = 1.8, padding_em = 1.5 }
@@ -63,20 +61,20 @@ h3 = { font_size_em = 1.2, padding_em = 1.5 }
 h4 = { font_size_em = 1.0, padding_em = 1.5 }
 h5 = { font_size_em = 1.0, padding_em = 1.5 }
 
-[illustrator.default.font_regular]
-family = "sansserif"
+[illustrator."Sans-serif".font_regular]
+family = "sans-serif"
 variation.wght = 400
 
-[illustrator.default.font_italic]
-family = "sansserif"
+[illustrator."Sans-serif".font_italic]
+family = "sans-serif"
 variation.wght = 400
 variation.ital = 1.0
 
-[illustrator.default.font_bold]
-family = "sansserif"
+[illustrator."Sans-serif".font_bold]
+family = "sans-serif"
 variation.wght = 600
 
-[illustrator.default.padding]
+[illustrator."Sans-serif".padding]
 top_em = 2.0
 left_em = 2.0
 right_em = 2.0
@@ -128,8 +126,6 @@ impl AsRef<Map<String, Arc<IllustratorProfile>>> for IllustratorConfig {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct IllustratorProfile {
-	pub name: String,
-
 	#[serde(default = "default_font_regular")]
 	pub font_regular: FontConfig,
 	#[serde(default = "default_font_italic")]
@@ -160,7 +156,6 @@ pub struct IllustratorProfile {
 impl Default for IllustratorProfile {
 	fn default() -> Self {
 		Self {
-			name: Default::default(),
 			font_regular: default_font_regular(),
 			font_italic: default_font_italic(),
 			font_bold: default_font_bold(),

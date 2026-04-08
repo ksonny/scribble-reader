@@ -24,7 +24,7 @@ use fixed::types::U26F6;
 use scribe::Book;
 use scribe::BookId;
 use scribe::Location;
-use scribe::RecordKeeper;
+use scribe::RecordKeeperAssistant;
 use scribe::config::IllustratorProfile;
 use scribe_epub::EpubMetadata;
 use scribe_epub::Navigation;
@@ -223,7 +223,7 @@ pub struct BookState {
 struct Worker {
 	profile: Arc<IllustratorProfile>,
 	fonts: SculpterFonts,
-	record_keeper: RecordKeeper,
+	records: RecordKeeperAssistant,
 	content: ContentWranglerAssistant,
 	cache: Arc<Mutex<PageContentCache>>,
 	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
@@ -338,8 +338,6 @@ impl Worker {
 		let mut reusable_layouter = PageLayouter::new(sculpter);
 		let mut clear_cache = true;
 
-		let records = self.record_keeper.assistant()?;
-
 		loop {
 			let req = match req_rx.try_recv() {
 				Ok(req) => req,
@@ -375,7 +373,8 @@ impl Worker {
 						percent_read,
 					};
 					bell.content_ready(book.id, current_loc);
-					records.record_book_state(book.id, current_loc, percent_read)?;
+					self.records
+						.record_book_state(book.id, current_loc, percent_read)?;
 					self.working.store(false, Ordering::Release);
 
 					let start = Instant::now();
@@ -527,7 +526,7 @@ pub enum IllustratorCreateError {
 
 #[must_use = "Must track handle or illustrator dies"]
 pub fn create_illustrator(
-	record_keeper: RecordKeeper,
+	records: RecordKeeperAssistant,
 	fonts: SculpterFonts,
 	content: ContentWranglerAssistant,
 	bell: impl Bell + Send + 'static,
@@ -536,7 +535,6 @@ pub fn create_illustrator(
 ) -> Result<IllustratorAssistant, IllustratorCreateError> {
 	log::debug!("Open book {book_id}");
 
-	let records = record_keeper.assistant()?;
 	let book = records.fetch_book(book_id)?;
 
 	let fonts = fonts.clone();
@@ -554,7 +552,7 @@ pub fn create_illustrator(
 	let worker = Worker {
 		profile,
 		fonts,
-		record_keeper,
+		records,
 		content,
 		cache: cache.clone(),
 		navigation: navigation.clone(),
