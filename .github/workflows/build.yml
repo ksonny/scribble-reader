@@ -29,7 +29,7 @@ jobs:
       - name: build jni
         run: |
           cd crates/app-android/
-          cargo ndk -t aarch64-linux-android -t x86_64-linux-android -o app/src/main/jniLibs/ build
+          cargo ndk -t aarch64-linux-android -t x86_64-linux-android -o app/src/main/jniLibs/ build --release
 
       - env:
           KEYSTORE_PROPERTIES: ${{ github.workspace }}/crates/app-android/keystore.properties
@@ -57,7 +57,7 @@ jobs:
       - name: build app
         run: |
           cd crates/app-android/
-          ./gradlew -PversionName=$${{ steps.cargo_version.outputs.value }} build
+          ./gradlew -PversionName=$${{ steps.cargo_version.outputs.value }} assembleRelease
           cd -
           mkdir -p apk
           mv crates/app-android/app/build/outputs/apk/release/app-release.apk apk/scribblereader.apk
