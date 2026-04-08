@@ -8,7 +8,6 @@ use ab_glyph::VariableFont;
 use fixed::types::I26F6;
 use ttf_parser::Tag;
 
-use crate::fonts::FontEntry;
 pub use crate::fonts::SculpterFontErrors;
 pub use crate::fonts::SculpterFonts;
 pub use crate::fonts::SculpterFontsBuilder;
@@ -203,7 +202,7 @@ pub fn create_sculpter<'a>(
 			printer_font.set_variation(v.axis.as_bytes(), v.value.to_num());
 		}
 
-		let shaper_ref = shaper.add(shaper_face, false);
+		let shaper_ref = shaper.add(shaper_face, font.units_per_em, false);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
 
@@ -215,7 +214,6 @@ pub fn create_sculpter<'a>(
 		faces.push(SculpterFace {
 			hash,
 			face_ref: shaper_ref,
-			font,
 		});
 	}
 
@@ -225,7 +223,7 @@ pub fn create_sculpter<'a>(
 		let printer_font =
 			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
 
-		let shaper_ref = shaper.add(shaper_face, true);
+		let shaper_ref = shaper.add(shaper_face, font.units_per_em, true);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
 	}
@@ -270,7 +268,6 @@ impl SculpterHandle {
 struct Style {
 	face_ref: ShapeFaceRef,
 	font_size: I26F6,
-	font_scale: I26F6,
 	line_height_em: I26F6,
 	end_index: usize,
 }
@@ -283,14 +280,13 @@ pub enum SculpterShapeError {
 	FaceNotFound,
 }
 
-pub struct SculpterFace<'font> {
+pub struct SculpterFace {
 	hash: u64,
 	face_ref: ShapeFaceRef,
-	font: &'font FontEntry,
 }
 
 pub struct Sculpter<'font> {
-	faces: Vec<SculpterFace<'font>>,
+	faces: Vec<SculpterFace>,
 	shaper: SculptureShaper<'font>,
 	printer: SculpterPrinter<'font>,
 	glyphs: Vec<GlyphPlan>,
@@ -316,17 +312,12 @@ impl Sculpter<'_> {
 				font_opts.hash(&mut s);
 				s.finish()
 			};
-			let (face_ref, units_per_em) = self
+			let face_ref = self
 				.faces
 				.iter()
-				.find_map(
-					|SculpterFace {
-					     hash,
-					     face_ref,
-					     font,
-					     ..
-					 }| { (*hash == font_opts_h).then_some((*face_ref, font.units_per_em)) },
-				)
+				.find_map(|SculpterFace { hash, face_ref, .. }| {
+					(*hash == font_opts_h).then_some(*face_ref)
+				})
 				.ok_or(SculpterShapeError::FaceNotFound)?;
 
 			self.shaper.shape(face_ref, input, &mut self.glyphs)?;
@@ -334,7 +325,6 @@ impl Sculpter<'_> {
 			self.styles.push(Style {
 				face_ref,
 				font_size,
-				font_scale: font_size / units_per_em,
 				line_height_em,
 				end_index: self.glyphs.len(),
 			});

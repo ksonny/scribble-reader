@@ -15,13 +15,13 @@ pub(crate) struct GlyphPosition {
 	pub(crate) y_offset: I26F6,
 }
 
-impl From<&rustybuzz::GlyphPosition> for GlyphPosition {
-	fn from(value: &rustybuzz::GlyphPosition) -> Self {
+impl GlyphPosition {
+	fn from(value: &rustybuzz::GlyphPosition, em_per_unit: I26F6) -> Self {
 		Self {
-			x_advance: I26F6::from_bits(value.x_advance),
-			x_offset: I26F6::from_bits(value.x_offset),
-			y_advance: I26F6::from_bits(value.y_advance),
-			y_offset: I26F6::from_bits(value.y_offset),
+			x_advance: I26F6::from_bits(value.x_advance) * em_per_unit,
+			x_offset: I26F6::from_bits(value.x_offset) * em_per_unit,
+			y_advance: I26F6::from_bits(value.y_advance) * em_per_unit,
+			y_offset: I26F6::from_bits(value.y_offset) * em_per_unit,
 		}
 	}
 }
@@ -57,14 +57,19 @@ pub struct ShapeFaceRef(pub(crate) u16);
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 struct PlanKey(ShapeFaceRef, rustybuzz::Script);
 
-pub struct SculptureShaper<'a> {
-	faces: Vec<rustybuzz::Face<'a>>,
+struct SculpterFace<'font> {
+	face: rustybuzz::Face<'font>,
+	em_per_unit: I26F6,
+}
+
+pub struct SculptureShaper<'font> {
+	faces: Vec<SculpterFace<'font>>,
 	plans: BTreeMap<PlanKey, rustybuzz::ShapePlan>,
 	fallback: Vec<ShapeFaceRef>,
 	buffer: Option<rustybuzz::UnicodeBuffer>,
 }
 
-impl<'a> SculptureShaper<'a> {
+impl<'font> SculptureShaper<'font> {
 	pub(crate) fn new() -> Self {
 		Self {
 			faces: Vec::new(),
@@ -74,9 +79,17 @@ impl<'a> SculptureShaper<'a> {
 		}
 	}
 
-	pub(crate) fn add(&mut self, face: rustybuzz::Face<'a>, fallback: bool) -> ShapeFaceRef {
+	pub(crate) fn add(
+		&mut self,
+		face: rustybuzz::Face<'font>,
+		units_per_em: I26F6,
+		fallback: bool,
+	) -> ShapeFaceRef {
 		let face_ref = ShapeFaceRef(self.faces.len() as u16);
-		self.faces.push(face);
+		self.faces.push(SculpterFace {
+			face,
+			em_per_unit: I26F6::ONE / units_per_em,
+		});
 		if fallback {
 			self.fallback.push(face_ref);
 		}
@@ -103,8 +116,7 @@ impl<'a> SculptureShaper<'a> {
 
 		let (face, shape_plan) =
 			get_or_create_shape_plan(&mut self.plans, &self.faces, &buffer, face_ref)?;
-		let shaped = shape_with_plan(face, shape_plan, buffer);
-
+		let shaped = shape_with_plan(&face.face, shape_plan, buffer);
 		let glyphs_start = glyphs.len();
 		let glyphs_added = shaped.len();
 		glyphs.reserve(shaped.len());
@@ -137,7 +149,7 @@ impl<'a> SculptureShaper<'a> {
 			glyphs.push(GlyphPlan {
 				face_ref,
 				glyph_id: info.glyph_id as u16,
-				pos: pos.into(),
+				pos: GlyphPosition::from(pos, face.em_per_unit),
 				br,
 			});
 		}
@@ -179,10 +191,16 @@ impl<'a> SculptureShaper<'a> {
 
 			let (face, shape_plan) =
 				get_or_create_shape_plan(&mut self.plans, &self.faces, &buffer, face_ref)?;
-			let shaped = shape_with_plan(face, shape_plan, buffer);
+			let shaped = shape_with_plan(&face.face, shape_plan, buffer);
 
 			for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
 				if info.glyph_id > 0 {
+					log::debug!(
+						"Found fallback for cluster {}, width {}",
+						info.cluster,
+						pos.x_advance
+					);
+
 					let idx = invalid
 						.remove(&info.cluster)
 						.expect("Keys should be preserved");
@@ -191,7 +209,7 @@ impl<'a> SculptureShaper<'a> {
 					glyphs[idx] = GlyphPlan {
 						face_ref,
 						glyph_id: info.glyph_id as u16,
-						pos: pos.into(),
+						pos: GlyphPosition::from(pos, face.em_per_unit),
 						br: glyphs[idx].br,
 					};
 				}
@@ -219,12 +237,12 @@ impl<'a> SculptureShaper<'a> {
 	}
 }
 
-fn get_or_create_shape_plan<'a, 'b>(
+fn get_or_create_shape_plan<'a, 'font>(
 	plans: &'a mut BTreeMap<PlanKey, rustybuzz::ShapePlan>,
-	faces: &'a [rustybuzz::Face<'b>],
+	faces: &'a [SculpterFace<'font>],
 	buffer: &rustybuzz::UnicodeBuffer,
 	face_ref: ShapeFaceRef,
-) -> Result<(&'a rustybuzz::Face<'b>, &'a rustybuzz::ShapePlan), SculpterShapeError> {
+) -> Result<(&'a SculpterFace<'font>, &'a rustybuzz::ShapePlan), SculpterShapeError> {
 	let face = faces
 		.get(face_ref.0 as usize)
 		.ok_or(SculpterShapeError::FaceNotFound)?;
@@ -234,7 +252,7 @@ fn get_or_create_shape_plan<'a, 'b>(
 		let dir = buffer.direction();
 		let script = Some(buffer.script());
 		let language = buffer.language();
-		rustybuzz::ShapePlan::new(face, dir, script, language.as_ref(), &[])
+		rustybuzz::ShapePlan::new(&face.face, dir, script, language.as_ref(), &[])
 	});
 
 	Ok((face, plan))

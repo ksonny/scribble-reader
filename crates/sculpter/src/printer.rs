@@ -141,9 +141,9 @@ impl<'a> SculpterPrinter<'a> {
 
 		let mut x_pos = x_origin;
 		for (style, glyph) in styled_glyphs {
-			let x_advance = glyph.pos.x_advance * style.font_scale * PX_PER_PT;
-			let x_offset = glyph.pos.x_offset * style.font_scale * PX_PER_PT;
-			let y_offset = glyph.pos.y_offset * style.font_scale * PX_PER_PT;
+			let x_advance = glyph.pos.x_advance * style.font_size * PX_PER_PT;
+			let x_offset = glyph.pos.x_offset * style.font_size * PX_PER_PT;
+			let y_offset = glyph.pos.y_offset * style.font_size * PX_PER_PT;
 
 			let font_size = style.font_size * PX_PER_PT;
 			let sub_pixel = (x_pos + x_offset).frac();
