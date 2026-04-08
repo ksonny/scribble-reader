@@ -375,7 +375,7 @@ pub fn start(
 		system.clone(),
 		bell.clone(),
 		keeper.assistant()?,
-		paths.config_path.as_path(),
+		paths.cache_path.as_path(),
 	);
 	let content = ContentWrangler::create(system);
 
