@@ -134,7 +134,7 @@ impl<'a> Iterator for StyledLines<'a> {
 			self.styles,
 		);
 		for (s, g) in &mut iter {
-			let width = g.pos.x_advance * s.font_scale;
+			let width = g.pos.x_advance * s.font_size;
 			if segment_width + width > self.max_line_width {
 				let used = self.cursor;
 				self.cursor = last_line_break.unwrap_or(idx);
@@ -181,7 +181,6 @@ mod tests {
 		Style {
 			face_ref: crate::shaper::ShapeFaceRef(0),
 			font_size: I26F6::ONE,
-			font_scale: I26F6::ONE,
 			line_height_em: I26F6::ONE,
 			end_index,
 		}
