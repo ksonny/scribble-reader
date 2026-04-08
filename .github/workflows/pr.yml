@@ -1,0 +1,72 @@
+on:
+  push:
+    branches:
+      - '**'
+      - '!main'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'gradle'
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-linux-android,aarch64-linux-android
+          rustflags: "--deny warnings"
+
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-ndk
+
+      - name: build jni
+        run: |
+          cd crates/app-android/
+          cargo ndk -t aarch64-linux-android -t x86_64-linux-android -o app/src/main/jniLibs/ build
+
+      - env:
+          KEYSTORE_PROPERTIES: ${{ github.workspace }}/crates/app-android/keystore.properties
+          SIGNING_STORE_FILE: ${{ github.workspace }}/scribblereader.keystore
+          SIGNING_STORE_PASSWD: ${{ secrets.SIGNING_STORE_PASSWD }}
+          SIGNING_KEY_ALIAS: scribblereader
+          SIGNING_KEY_PASSWD: ${{ secrets.SIGNING_KEY_PASSWD }}
+          SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
+        run: |
+          cat << EOF > $KEYSTORE_PROPERTIES
+          storeFile=$SIGNING_STORE_FILE
+          storePassword=$SIGNING_STORE_PASSWD
+          keyAlias=$SIGNING_KEY_ALIAS
+          keyPassword=$SIGNING_KEY_PASSWD
+          EOF
+          echo "$SIGNING_KEYSTORE" | base64 -di > "$SIGNING_STORE_FILE"
+        if: ${{ github.actor != 'dependabot[bot]' }}
+
+      - uses: hudsonm62/toml-action@v1
+        with:
+          file: Cargo.toml
+          field: workspace.package.version
+        id: cargo_version
+
+      - name: build app
+        run: |
+          cd crates/app-android/
+          ./gradlew -PversionName=$${{ steps.cargo_version.outputs.value }} assembleDebug
+          cd -
+          mkdir -p apk
+          mv crates/app-android/app/build/outputs/apk/debug/app-debug.apk apk/scribblereader-debug.apk
+        if: ${{ github.actor != 'dependabot[bot]' }}
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: scribblereader
+          path: apk/*
