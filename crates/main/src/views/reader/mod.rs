@@ -3,6 +3,7 @@ mod active_areas;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use egui::Color32;
 use egui::Rect;
 use egui::RichText;
 use illustrator::IllustratorAssistant;
@@ -34,6 +35,7 @@ use crate::ui::MenuItem;
 use crate::ui::OnAction;
 use crate::ui::ToolBar;
 use crate::ui::ToolItem;
+use crate::ui::UiIcon;
 use crate::ui::theme;
 use crate::views::EventResult;
 use crate::views::GestureResult;
@@ -47,6 +49,14 @@ pub const CHAPTER_LIST_SIZE: u32 = 12;
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReaderViewCreateError {
 	#[error(transparent)]
+	Illustrator(#[from] ReaderIllustratorError),
+	#[error(transparent)]
+	RecordKeeper(#[from] RecordKeeperError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReaderIllustratorError {
+	#[error(transparent)]
 	IllustratorCreate(#[from] IllustratorCreateError),
 	#[error(transparent)]
 	IllustratorRequest(#[from] IllustratorRequestError),
@@ -54,11 +64,16 @@ pub(crate) enum ReaderViewCreateError {
 	RecordKeeper(#[from] RecordKeeperError),
 }
 
+enum EditState {
+	Unchanged,
+	Changed,
+}
+
 enum ReaderMode {
 	ReadNoUi,
 	Read,
 	Navigation,
-	Settings,
+	Settings(EditState),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,11 +91,17 @@ impl Default for ViewState {
 
 pub(crate) struct ReaderView {
 	config: IllustratorConfig,
-	records: RecordKeeperAssistant,
+	keeper: RecordKeeper,
+	fonts: SculpterFonts,
+	content: ContentWranglerAssistant,
 	bell: AppBell,
-	illustrator: Option<IllustratorAssistant>,
-	viewport: Viewport,
+	book_id: BookId,
+
+	records: RecordKeeperAssistant,
 	state: ViewState,
+	viewport: Viewport,
+
+	illustrator: Option<IllustratorAssistant>,
 	mode: ReaderMode,
 	active_rects: Vec<Rect>,
 	chapters_page: u32,
@@ -105,36 +126,57 @@ impl ReaderView {
 			.fetch_view_state(Self::STATE_KEY)?
 			.unwrap_or_default();
 
-		// TODO: Read state and get current profile
-		let profile = config
-			.as_ref()
-			.get(&state.profile)
-			.cloned()
-			.unwrap_or_default();
-		let illustrator = create_illustrator(
-			keeper.assistant()?,
-			fonts.clone(),
-			content.clone(),
-			bell.clone(),
-			profile,
-			book_id,
-		)?;
-		illustrator.rescale(viewport.scale_factor)?;
-		illustrator.resize(viewport.screen_width, viewport.screen_height)?;
-
-		Ok(Self {
+		let mut view = Self {
 			config,
-			records,
+			keeper,
+			fonts,
+			content,
 			bell,
-			illustrator: Some(illustrator),
+			book_id,
+
+			records,
 			state,
 			viewport,
+
+			illustrator: None,
 			mode: ReaderMode::ReadNoUi,
 			active_rects: Vec::new(),
 			chapters_page: 0,
 			chapters_cards: Default::default(),
 			statusline: String::new().into(),
-		})
+		};
+
+		view.create_illustrator()?;
+
+		Ok(view)
+	}
+
+	fn create_illustrator(&mut self) -> Result<(), ReaderIllustratorError> {
+		if let Some(illustrator) = self.illustrator.take() {
+			log::debug!("Stop running illustrator");
+			illustrator.shutdown();
+		}
+		let profile = self
+			.config
+			.as_ref()
+			.get(&self.state.profile)
+			.cloned()
+			.unwrap_or_default();
+		log::debug!("Create with profile {}", &self.state.profile);
+		let illustrator = create_illustrator(
+			self.keeper.assistant()?,
+			self.fonts.clone(),
+			self.content.clone(),
+			self.bell.clone(),
+			profile,
+			self.book_id,
+		)?;
+		illustrator.rescale(self.viewport.scale_factor)?;
+		illustrator.resize(self.viewport.screen_width, self.viewport.screen_height)?;
+
+		self.illustrator = Some(illustrator);
+
+		Ok(())
 	}
 
 	fn toggle_ui(&mut self) {
@@ -176,10 +218,23 @@ impl ReaderView {
 	}
 
 	fn toggle_settings(&mut self) {
-		if matches!(self.mode, ReaderMode::Settings) {
-			self.mode = ReaderMode::Read;
-		} else {
-			self.mode = ReaderMode::Settings;
+		match self.mode {
+			ReaderMode::Read => {
+				self.mode = ReaderMode::Settings(EditState::Unchanged);
+			}
+			ReaderMode::Settings(EditState::Changed) => {
+				if let Err(e) = self.create_illustrator() {
+					log::error!("Failed to create illustrator: {e}");
+				}
+				if let Err(e) = self.records.record_view_state(Self::STATE_KEY, &self.state) {
+					log::warn!("Error saving state: {e}");
+				}
+				self.mode = ReaderMode::Read;
+			}
+			ReaderMode::Settings(EditState::Unchanged) => {
+				self.mode = ReaderMode::Read;
+			}
+			_ => {}
 		}
 	}
 
@@ -214,7 +269,7 @@ impl ReaderView {
 					}
 				}
 			}
-			ReaderMode::Settings => {}
+			ReaderMode::Settings(_) => {}
 		};
 	}
 
@@ -252,7 +307,7 @@ impl ReaderView {
 					self.chapters_page = page;
 				}
 			}
-			ReaderMode::Settings => {}
+			ReaderMode::Settings(_) => {}
 		};
 	}
 }
@@ -408,7 +463,7 @@ impl ViewHandle for ReaderView {
 				Some(ToolItem {
 					icon: Icon::Cog,
 					description: "Settings",
-					active: matches!(self.mode, ReaderMode::Settings),
+					active: matches!(self.mode, ReaderMode::Settings(_)),
 					action: ToolAction::Settings,
 				}),
 				None,
@@ -472,25 +527,36 @@ impl ViewHandle for ReaderView {
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
 				}
-			} else if matches!(self.mode, ReaderMode::Settings) {
+			} else if matches!(self.mode, ReaderMode::Settings(_)) {
 				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
-					ui.vertical(|ui| {
+					ui.vertical_centered_justified(|ui| {
+						ui.spacing_mut().item_spacing.y = 12.;
+						ui.spacing_mut().button_padding.y = 6.;
+						ui.heading("Profiles");
 						for (profile, _) in self.config.as_ref().iter() {
-							if ui.button(profile.as_str()).clicked() {
-								log::info!("Profile clicked");
+							let is_active = self.state.profile.as_str() == profile;
+							if ui
+								.button(
+									UiIcon::new(Icon::FileSliders)
+										.large()
+										.text(profile)
+										.color(if is_active {
+											theme::ACCENT_COLOR
+										} else {
+											Color32::BLACK
+										})
+										.build(),
+								)
+								.clicked()
+							{
+								self.mode = ReaderMode::Settings(EditState::Changed);
 								self.state.profile = profile.clone();
-								let _ = self
-									.records
-									.record_view_state(Self::STATE_KEY, &self.state)
-									.inspect_err(|e| log::warn!("Error saving state: {e}"));
 							}
 						}
 					})
-
-					// TODO: Settings
 				});
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
