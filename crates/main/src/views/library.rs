@@ -478,6 +478,14 @@ impl ViewHandle for LibraryView {
 			_ => GestureResult::Unhandled,
 		}
 	}
+
+	fn resize(&mut self, width: u32, height: u32) {
+		let _ = (width, height);
+	}
+
+	fn rescale(&mut self, scale_factor: f32) {
+		let _ = scale_factor;
+	}
 }
 
 impl BookCard {

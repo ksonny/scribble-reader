@@ -76,9 +76,9 @@ impl Default for ViewState {
 
 pub(crate) struct ReaderView {
 	config: IllustratorConfig,
-	illustrator: IllustratorAssistant,
 	records: RecordKeeperAssistant,
 	bell: AppBell,
+	illustrator: Option<IllustratorAssistant>,
 	viewport: Viewport,
 	state: ViewState,
 	mode: ReaderMode,
@@ -124,9 +124,9 @@ impl ReaderView {
 
 		Ok(Self {
 			config,
-			illustrator,
 			records,
 			bell,
+			illustrator: Some(illustrator),
 			state,
 			viewport,
 			mode: ReaderMode::ReadNoUi,
@@ -149,8 +149,9 @@ impl ReaderView {
 		if matches!(self.mode, ReaderMode::Navigation) {
 			self.mode = ReaderMode::Read;
 		} else {
-			let state = self.illustrator.state();
-			let navigation = self.illustrator.navigation();
+			let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+			let state = illustrator.state();
+			let navigation = illustrator.navigation();
 			let nav_points = navigation
 				.as_ref()
 				.map(|n| n.nav_points.as_slice())
@@ -185,8 +186,8 @@ impl ReaderView {
 	fn prev_page(&mut self) {
 		match self.mode {
 			ReaderMode::Read | ReaderMode::ReadNoUi => {
-				let _ = self
-					.illustrator
+				let illustrator = self.illustrator.as_mut().expect("Illustrator not running");
+				let _ = illustrator
 					.previous_page()
 					.inspect_err(|err| log::error!("Previous page error: {err}"));
 			}
@@ -194,7 +195,8 @@ impl ReaderView {
 				self.chapters_page = self.chapters_page.saturating_sub(1);
 				let offset = self.chapters_page * CHAPTER_LIST_SIZE;
 
-				let navigation = self.illustrator.navigation();
+				let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+				let navigation = illustrator.navigation();
 				let nav_points = navigation
 					.as_ref()
 					.map(|n| n.nav_points.as_slice())
@@ -219,8 +221,8 @@ impl ReaderView {
 	fn next_page(&mut self) {
 		match self.mode {
 			ReaderMode::Read | ReaderMode::ReadNoUi => {
-				let _ = self
-					.illustrator
+				let illustrator = self.illustrator.as_mut().expect("Illustrator not running");
+				let _ = illustrator
 					.next_page()
 					.inspect_err(|err| log::error!("Next page error: {err}"));
 			}
@@ -228,7 +230,8 @@ impl ReaderView {
 				let page = self.chapters_page + 1;
 				let offset = (page * CHAPTER_LIST_SIZE) as usize;
 
-				let navigation = self.illustrator.navigation();
+				let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+				let navigation = illustrator.navigation();
 				let nav_points = navigation
 					.as_ref()
 					.map(|n| n.nav_points.as_slice())
@@ -298,10 +301,11 @@ impl ViewHandle for ReaderView {
 
 		let mut statusline = self.statusline.take().unwrap_or_default();
 		statusline.clear();
+		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
 
 		let painter = if matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
-			let state = self.illustrator.state();
-			let cache = self.illustrator.cache();
+			let state = illustrator.state();
+			let cache = illustrator.cache();
 			let page = cache.page(state.location);
 			if let Some((content, meta)) = page {
 				let _ = write!(
@@ -366,6 +370,7 @@ impl ViewHandle for ReaderView {
 			painter.draw_pixmap([].into_iter())
 		};
 
+		let working = illustrator.working();
 		painter.draw_ui(|ui| {
 			if matches!(self.mode, ReaderMode::ReadNoUi) {
 				return;
@@ -416,7 +421,6 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
-			let working = self.illustrator.working();
 			let top_panel = egui::Panel::top("top").show_inside(ui, |ui| {
 				MainMenuBar::new(self, menu_items)
 					.with_loading(working)
@@ -451,8 +455,9 @@ impl ViewHandle for ReaderView {
 						for card in self.chapters_cards.iter().flatten() {
 							ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
 								if ui.add(card.ui()).clicked() {
-									let _ = self
-										.illustrator
+									let illustrator =
+										self.illustrator.as_mut().expect("Illustrator not running");
+									let _ = illustrator
 										.goto(card.location)
 										.inspect_err(|err| log::error!("Goto error: {err}"));
 									untoggle = true;
@@ -547,13 +552,21 @@ impl ViewHandle for ReaderView {
 
 	fn rescale(&mut self, scale_factor: f32) {
 		self.viewport.scale_factor = scale_factor;
-		let _ = self.illustrator.rescale(scale_factor);
+		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+		let _ = illustrator.rescale(scale_factor);
 	}
 
 	fn resize(&mut self, width: u32, height: u32) {
 		self.viewport.screen_width = width;
 		self.viewport.screen_height = height;
-		let _ = self.illustrator.resize(width, height);
+		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+		let _ = illustrator.resize(width, height);
+	}
+
+	fn close(&mut self) {
+		if let Some(illustrator) = self.illustrator.take() {
+			illustrator.shutdown();
+		}
 	}
 }
 

@@ -183,6 +183,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 			}
 			AppEvent::Exit => {
 				log::debug!("Exit");
+				self.view.close();
 				event_loop.exit();
 			}
 			event => {
@@ -381,6 +382,8 @@ pub fn start(
 		.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
 		.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
 		.build();
+
+	bell.send_event(AppEvent::OpenLibrary);
 
 	let mut app = App {
 		input,

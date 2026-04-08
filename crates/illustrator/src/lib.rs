@@ -50,12 +50,12 @@ pub enum Request {
 	PreviousPage,
 	Resize { width: u32, height: u32 },
 	Rescale { scale: f32 },
+	Shutdown,
 }
 
 pub struct IllustratorAssistant {
-	req_tx: Sender<Request>,
-	#[allow(unused)]
 	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
+	req_tx: Sender<Request>,
 	working: Arc<AtomicBool>,
 	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	state: Arc<Mutex<BookState>>,
@@ -113,6 +113,13 @@ impl IllustratorAssistant {
 		self.req_tx
 			.send(Request::Resize { width, height })
 			.map_err(|_| IllustratorRequestError::NotRunning)
+	}
+
+	pub fn shutdown(self) {
+		let _ = self.req_tx.send(Request::Shutdown);
+		if let Err(e) = self.handle.join().unwrap() {
+			log::error!("Illustrator error: {e}");
+		}
 	}
 }
 
@@ -468,6 +475,10 @@ impl Worker {
 				Request::Goto(loc) => {
 					current_loc = loc;
 				}
+				Request::Shutdown => {
+					log::debug!("Illustrator shutdown requested");
+					break;
+				}
 			}
 		}
 
@@ -561,22 +572,13 @@ pub fn create_illustrator(
 	};
 
 	let handle = std::thread::spawn(move || -> Result<(), IllustratorWorkerError> {
-		log::trace!("Launching illustrator");
-		match worker.launch(bell, req_rx, book) {
-			Ok(()) => {
-				log::info!("Illustrator worker terminated");
-				Ok(())
-			}
-			Err(err) => {
-				log::error!("Error in illustrator: {err}");
-				Err(err)
-			}
-		}
+		log::debug!("Launch illustrator");
+		worker.launch(bell, req_rx, book)
 	});
 
 	Ok(IllustratorAssistant {
-		req_tx,
 		handle,
+		req_tx,
 		working,
 		navigation,
 		state,
