@@ -34,6 +34,7 @@ use crate::ui::theme;
 use crate::views::EventResult;
 use crate::views::GestureResult;
 use crate::views::ViewHandle;
+use crate::views::Viewport;
 use crate::views::reader::active_areas::ActiveAreaAction;
 use crate::views::reader::active_areas::ActiveAreas;
 
@@ -63,22 +64,17 @@ pub(crate) struct ChapterCard {
 pub(crate) struct ReaderView {
 	bell: AppBell,
 	illustrator: IllustratorAssistant,
-	screen_width: u32,
-	screen_height: u32,
-	scale_factor: f32,
-	mode: ReaderMode,
 
+	viewport: Viewport,
+	mode: ReaderMode,
 	/// Keeps track of where taps/clicks should go through to activy areas.
 	active_rects: Vec<Rect>,
-
 	chapters_page: u32,
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
-
 	statusline: Option<String>,
 }
 
 impl ReaderView {
-	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn create(
 		config: IllustratorConfig,
 		keeper: RecordKeeper,
@@ -86,9 +82,7 @@ impl ReaderView {
 		content: ContentWranglerAssistant,
 		bell: AppBell,
 		book_id: BookId,
-		screen_width: u32,
-		screen_height: u32,
-		scale_factor: f32,
+		viewport: Viewport,
 	) -> Result<Self, ReaderViewCreateError> {
 		// TODO: Read state and get current profile
 		let profile = config.as_ref().get("serif").cloned().unwrap_or_default();
@@ -100,16 +94,14 @@ impl ReaderView {
 			profile,
 			book_id,
 		)?;
-		illustrator.rescale(scale_factor)?;
-		illustrator.resize(screen_width, screen_height)?;
+		illustrator.rescale(viewport.scale_factor)?;
+		illustrator.resize(viewport.screen_width, viewport.screen_height)?;
 
 		Ok(Self {
 			bell,
 			illustrator,
 
-			screen_width,
-			screen_height,
-			scale_factor,
+			viewport,
 			mode: ReaderMode::ReadNoUi,
 			active_rects: Vec::new(),
 			chapters_page: 0,
@@ -483,11 +475,13 @@ impl ViewHandle for ReaderView {
 	fn gesture(&mut self, event: &GestureEvent) -> GestureResult {
 		match event.gesture {
 			Gesture::Tap => {
-				let pos = egui::pos2(event.loc.x as f32, event.loc.y as f32) / self.scale_factor;
+				let pos =
+					egui::pos2(event.loc.x as f32, event.loc.y as f32) / self.viewport.scale_factor;
 				if self.active_rects.iter().any(|r| r.contains(pos)) {
 					GestureResult::Unhandled
 				} else {
-					let areas = ActiveAreas::new(self.screen_width, self.screen_height);
+					let areas =
+						ActiveAreas::new(self.viewport.screen_width, self.viewport.screen_height);
 					if let Some(action) = areas.action(event.loc) {
 						match action {
 							ActiveAreaAction::ToggleUi => self.toggle_ui(),
@@ -513,13 +507,13 @@ impl ViewHandle for ReaderView {
 	}
 
 	fn rescale(&mut self, scale_factor: f32) {
-		self.scale_factor = scale_factor;
+		self.viewport.scale_factor = scale_factor;
 		let _ = self.illustrator.rescale(scale_factor);
 	}
 
 	fn resize(&mut self, width: u32, height: u32) {
-		self.screen_width = width;
-		self.screen_height = height;
+		self.viewport.screen_width = width;
+		self.viewport.screen_height = height;
 		let _ = self.illustrator.resize(width, height);
 	}
 }

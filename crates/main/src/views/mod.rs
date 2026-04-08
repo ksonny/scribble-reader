@@ -24,6 +24,13 @@ pub(crate) enum GestureResult {
 	Consumed,
 }
 
+#[derive(Clone)]
+struct Viewport {
+	screen_width: u32,
+	screen_height: u32,
+	scale_factor: f32,
+}
+
 pub(crate) trait ViewHandle {
 	fn draw(&mut self, painter: Painter<'_>);
 
@@ -49,20 +56,21 @@ enum Views {
 
 pub(crate) struct AppView {
 	bell: AppBell,
-	scale_factor: f32,
-	screen_width: u32,
-	screen_height: u32,
+	viewport: Viewport,
 	view: Views,
 }
 
 impl AppView {
 	pub(crate) fn new(bell: AppBell) -> Self {
 		bell.send_event(AppEvent::OpenLibrary);
-		Self {
-			bell,
-			scale_factor: 1.0,
+		let viewport = Viewport {
 			screen_width: 800,
 			screen_height: 600,
+			scale_factor: 1.0,
+		};
+		Self {
+			bell,
+			viewport,
 			view: Views::Loading,
 		}
 	}
@@ -92,9 +100,7 @@ impl AppView {
 			content,
 			bell,
 			book_id,
-			self.screen_width,
-			self.screen_height,
-			self.scale_factor,
+			self.viewport.clone(),
 		) {
 			Ok(view) => self.view = Views::Reader(view),
 			Err(e) => {
@@ -107,9 +113,7 @@ impl AppView {
 		self.view = Views::Experiments(experiments::ExperimentsView::create(
 			self.bell.clone(),
 			fonts,
-			self.screen_width,
-			self.screen_height,
-			self.scale_factor,
+			self.viewport.clone(),
 		))
 	}
 }
@@ -143,8 +147,8 @@ impl ViewHandle for AppView {
 	}
 
 	fn resize(&mut self, width: u32, height: u32) {
-		self.screen_width = width;
-		self.screen_height = height;
+		self.viewport.screen_width = width;
+		self.viewport.screen_height = height;
 
 		match &mut self.view {
 			Views::Loading => {}
@@ -155,7 +159,7 @@ impl ViewHandle for AppView {
 	}
 
 	fn rescale(&mut self, scale_factor: f32) {
-		self.scale_factor = scale_factor;
+		self.viewport.scale_factor = scale_factor;
 
 		match &mut self.view {
 			Views::Loading => {}
