@@ -15,14 +15,14 @@ _build profile:
 		--output-dir app/src/main/jniLibs/ \
 		build \
 		--profile {{profile}}
-	./gradlew -PversionName=$VERSION build
+	./gradlew -PversionName=$VERSION assembleDebug
 	cd -
 
 build target="dev-opt": (_build target)
 	@echo "Build {{target}}"
 
 install target="dev-opt": (_build target)
-	adb install ./crates//app-android/app/build/outputs/apk/release/app-release.apk
+	adb install ./crates//app-android/app/build/outputs/apk/debug/app-debug.apk
 
 profile:
 	cargo build --profile dev-opt
