@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use scribble_reader::Paths;
 use scribble_reader::start;
 use scribe::config::ScribeConfig;
@@ -24,14 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	// TODO: Figuring out library path should be moved to wrangler
 	let config = ScribeConfig::load(paths.config_path.as_path())?;
-	let lib_path = config
-		.library
-		.path
-		.as_ref()
-		.map(|p| p.as_str())
-		.unwrap_or("~/Documents/ebook/")
-		.to_string();
-	let (system, handle) = create_wrangler(DocumentTree::new(Arc::new(lib_path)));
+	let lib_path = config.library.path.clone();
+	let (system, handle) = create_wrangler(DocumentTree::new(lib_path));
 
 	let event_loop = EventLoop::with_user_event().build().unwrap();
 

@@ -3,11 +3,24 @@ mod active_areas;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use egui::Color32;
 use egui::Rect;
 use egui::RichText;
 use illustrator::IllustratorAssistant;
+use illustrator::IllustratorCreateError;
+use illustrator::IllustratorRequestError;
+use illustrator::create_illustrator;
 use lucide_icons::Icon;
+use scribe::BookId;
 use scribe::Location;
+use scribe::RecordKeeper;
+use scribe::RecordKeeperAssistant;
+use scribe::RecordKeeperError;
+use scribe::config::IllustratorConfig;
+use sculpter::SculpterFonts;
+use serde::Deserialize;
+use serde::Serialize;
+use wrangler::content::ContentWranglerAssistant;
 
 use crate::AppBell;
 use crate::AppEvent;
@@ -22,65 +35,148 @@ use crate::ui::MenuItem;
 use crate::ui::OnAction;
 use crate::ui::ToolBar;
 use crate::ui::ToolItem;
+use crate::ui::UiIcon;
 use crate::ui::theme;
 use crate::views::EventResult;
 use crate::views::GestureResult;
 use crate::views::ViewHandle;
+use crate::views::Viewport;
 use crate::views::reader::active_areas::ActiveAreaAction;
 use crate::views::reader::active_areas::ActiveAreas;
 
 pub const CHAPTER_LIST_SIZE: u32 = 12;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReaderViewCreateError {
+	#[error(transparent)]
+	Illustrator(#[from] ReaderIllustratorError),
+	#[error(transparent)]
+	RecordKeeper(#[from] RecordKeeperError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReaderIllustratorError {
+	#[error(transparent)]
+	IllustratorCreate(#[from] IllustratorCreateError),
+	#[error(transparent)]
+	IllustratorRequest(#[from] IllustratorRequestError),
+	#[error(transparent)]
+	RecordKeeper(#[from] RecordKeeperError),
+}
+
+enum EditState {
+	Unchanged,
+	Changed,
+}
+
 enum ReaderMode {
 	ReadNoUi,
 	Read,
 	Navigation,
-	Settings,
+	Settings(EditState),
 }
 
-#[derive(Debug)]
-pub(crate) struct ChapterCard {
-	location: Location,
-	title: Arc<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ViewState {
+	profile: String,
+}
+
+impl Default for ViewState {
+	fn default() -> Self {
+		Self {
+			profile: "serif".to_string(),
+		}
+	}
 }
 
 pub(crate) struct ReaderView {
+	config: IllustratorConfig,
+	keeper: RecordKeeper,
+	fonts: SculpterFonts,
+	content: ContentWranglerAssistant,
 	bell: AppBell,
-	illustrator: IllustratorAssistant,
-	screen_width: u32,
-	screen_height: u32,
-	scale_factor: f32,
+	book_id: BookId,
+
+	records: RecordKeeperAssistant,
+	state: ViewState,
+	viewport: Viewport,
+
+	illustrator: Option<IllustratorAssistant>,
 	mode: ReaderMode,
-
-	/// Keeps track of where taps/clicks should go through to activy areas.
 	active_rects: Vec<Rect>,
-
 	chapters_page: u32,
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
-
 	statusline: Option<String>,
 }
 
 impl ReaderView {
+	const STATE_KEY: &str = "reader_view_state";
+
 	pub(crate) fn create(
+		config: IllustratorConfig,
+		keeper: RecordKeeper,
+		fonts: SculpterFonts,
+		content: ContentWranglerAssistant,
 		bell: AppBell,
-		illustrator: IllustratorAssistant,
-		screen_width: u32,
-		screen_height: u32,
-		scale_factor: f32,
-	) -> Self {
-		Self {
+		book_id: BookId,
+		viewport: Viewport,
+	) -> Result<Self, ReaderViewCreateError> {
+		let records = keeper.assistant()?;
+		let state: ViewState = records
+			.fetch_view_state(Self::STATE_KEY)?
+			.unwrap_or_default();
+
+		let mut view = Self {
+			config,
+			keeper,
+			fonts,
+			content,
 			bell,
-			illustrator,
-			screen_width,
-			screen_height,
-			scale_factor,
+			book_id,
+
+			records,
+			state,
+			viewport,
+
+			illustrator: None,
 			mode: ReaderMode::ReadNoUi,
 			active_rects: Vec::new(),
 			chapters_page: 0,
 			chapters_cards: Default::default(),
 			statusline: String::new().into(),
+		};
+
+		view.create_illustrator()?;
+
+		Ok(view)
+	}
+
+	fn create_illustrator(&mut self) -> Result<(), ReaderIllustratorError> {
+		if let Some(illustrator) = self.illustrator.take() {
+			log::debug!("Stop running illustrator");
+			illustrator.shutdown();
 		}
+		let profile = self
+			.config
+			.as_ref()
+			.get(&self.state.profile)
+			.cloned()
+			.unwrap_or_default();
+		log::debug!("Create with profile {}", &self.state.profile);
+		let illustrator = create_illustrator(
+			self.keeper.assistant()?,
+			self.fonts.clone(),
+			self.content.clone(),
+			self.bell.clone(),
+			profile,
+			self.book_id,
+		)?;
+		illustrator.rescale(self.viewport.scale_factor)?;
+		illustrator.resize(self.viewport.screen_width, self.viewport.screen_height)?;
+
+		self.illustrator = Some(illustrator);
+
+		Ok(())
 	}
 
 	fn toggle_ui(&mut self) {
@@ -95,8 +191,9 @@ impl ReaderView {
 		if matches!(self.mode, ReaderMode::Navigation) {
 			self.mode = ReaderMode::Read;
 		} else {
-			let state = self.illustrator.state();
-			let navigation = self.illustrator.navigation();
+			let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+			let state = illustrator.state();
+			let navigation = illustrator.navigation();
 			let nav_points = navigation
 				.as_ref()
 				.map(|n| n.nav_points.as_slice())
@@ -121,18 +218,31 @@ impl ReaderView {
 	}
 
 	fn toggle_settings(&mut self) {
-		if matches!(self.mode, ReaderMode::Settings) {
-			self.mode = ReaderMode::Read;
-		} else {
-			self.mode = ReaderMode::Settings;
+		match self.mode {
+			ReaderMode::Read => {
+				self.mode = ReaderMode::Settings(EditState::Unchanged);
+			}
+			ReaderMode::Settings(EditState::Changed) => {
+				if let Err(e) = self.create_illustrator() {
+					log::error!("Failed to create illustrator: {e}");
+				}
+				if let Err(e) = self.records.record_view_state(Self::STATE_KEY, &self.state) {
+					log::warn!("Error saving state: {e}");
+				}
+				self.mode = ReaderMode::Read;
+			}
+			ReaderMode::Settings(EditState::Unchanged) => {
+				self.mode = ReaderMode::Read;
+			}
+			_ => {}
 		}
 	}
 
 	fn prev_page(&mut self) {
 		match self.mode {
 			ReaderMode::Read | ReaderMode::ReadNoUi => {
-				let _ = self
-					.illustrator
+				let illustrator = self.illustrator.as_mut().expect("Illustrator not running");
+				let _ = illustrator
 					.previous_page()
 					.inspect_err(|err| log::error!("Previous page error: {err}"));
 			}
@@ -140,7 +250,8 @@ impl ReaderView {
 				self.chapters_page = self.chapters_page.saturating_sub(1);
 				let offset = self.chapters_page * CHAPTER_LIST_SIZE;
 
-				let navigation = self.illustrator.navigation();
+				let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+				let navigation = illustrator.navigation();
 				let nav_points = navigation
 					.as_ref()
 					.map(|n| n.nav_points.as_slice())
@@ -158,15 +269,15 @@ impl ReaderView {
 					}
 				}
 			}
-			ReaderMode::Settings => {}
+			ReaderMode::Settings(_) => {}
 		};
 	}
 
 	fn next_page(&mut self) {
 		match self.mode {
 			ReaderMode::Read | ReaderMode::ReadNoUi => {
-				let _ = self
-					.illustrator
+				let illustrator = self.illustrator.as_mut().expect("Illustrator not running");
+				let _ = illustrator
 					.next_page()
 					.inspect_err(|err| log::error!("Next page error: {err}"));
 			}
@@ -174,7 +285,8 @@ impl ReaderView {
 				let page = self.chapters_page + 1;
 				let offset = (page * CHAPTER_LIST_SIZE) as usize;
 
-				let navigation = self.illustrator.navigation();
+				let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+				let navigation = illustrator.navigation();
 				let nav_points = navigation
 					.as_ref()
 					.map(|n| n.nav_points.as_slice())
@@ -195,7 +307,7 @@ impl ReaderView {
 					self.chapters_page = page;
 				}
 			}
-			ReaderMode::Settings => {}
+			ReaderMode::Settings(_) => {}
 		};
 	}
 }
@@ -244,10 +356,11 @@ impl ViewHandle for ReaderView {
 
 		let mut statusline = self.statusline.take().unwrap_or_default();
 		statusline.clear();
+		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
 
 		let painter = if matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
-			let state = self.illustrator.state();
-			let cache = self.illustrator.cache();
+			let state = illustrator.state();
+			let cache = illustrator.cache();
 			let page = cache.page(state.location);
 			if let Some((content, meta)) = page {
 				let _ = write!(
@@ -312,6 +425,7 @@ impl ViewHandle for ReaderView {
 			painter.draw_pixmap([].into_iter())
 		};
 
+		let working = illustrator.working();
 		painter.draw_ui(|ui| {
 			if matches!(self.mode, ReaderMode::ReadNoUi) {
 				return;
@@ -349,7 +463,7 @@ impl ViewHandle for ReaderView {
 				Some(ToolItem {
 					icon: Icon::Cog,
 					description: "Settings",
-					active: matches!(self.mode, ReaderMode::Settings),
+					active: matches!(self.mode, ReaderMode::Settings(_)),
 					action: ToolAction::Settings,
 				}),
 				None,
@@ -362,7 +476,6 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
-			let working = self.illustrator.working();
 			let top_panel = egui::Panel::top("top").show_inside(ui, |ui| {
 				MainMenuBar::new(self, menu_items)
 					.with_loading(working)
@@ -397,8 +510,9 @@ impl ViewHandle for ReaderView {
 						for card in self.chapters_cards.iter().flatten() {
 							ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
 								if ui.add(card.ui()).clicked() {
-									let _ = self
-										.illustrator
+									let illustrator =
+										self.illustrator.as_mut().expect("Illustrator not running");
+									let _ = illustrator
 										.goto(card.location)
 										.inspect_err(|err| log::error!("Goto error: {err}"));
 									untoggle = true;
@@ -413,13 +527,36 @@ impl ViewHandle for ReaderView {
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
 				}
-			} else if matches!(self.mode, ReaderMode::Settings) {
+			} else if matches!(self.mode, ReaderMode::Settings(_)) {
 				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
-
-					// TODO: Settings
+					ui.vertical_centered_justified(|ui| {
+						ui.spacing_mut().item_spacing.y = 12.;
+						ui.spacing_mut().button_padding.y = 6.;
+						ui.heading("Profiles");
+						for (profile, _) in self.config.as_ref().iter() {
+							let is_active = self.state.profile.as_str() == profile;
+							if ui
+								.button(
+									UiIcon::new(Icon::FileSliders)
+										.large()
+										.text(profile)
+										.color(if is_active {
+											theme::ACCENT_COLOR
+										} else {
+											Color32::BLACK
+										})
+										.build(),
+								)
+								.clicked()
+							{
+								self.mode = ReaderMode::Settings(EditState::Changed);
+								self.state.profile = profile.clone();
+							}
+						}
+					})
 				});
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
@@ -448,11 +585,13 @@ impl ViewHandle for ReaderView {
 	fn gesture(&mut self, event: &GestureEvent) -> GestureResult {
 		match event.gesture {
 			Gesture::Tap => {
-				let pos = egui::pos2(event.loc.x as f32, event.loc.y as f32) / self.scale_factor;
+				let pos =
+					egui::pos2(event.loc.x as f32, event.loc.y as f32) / self.viewport.scale_factor;
 				if self.active_rects.iter().any(|r| r.contains(pos)) {
 					GestureResult::Unhandled
 				} else {
-					let areas = ActiveAreas::new(self.screen_width, self.screen_height);
+					let areas =
+						ActiveAreas::new(self.viewport.screen_width, self.viewport.screen_height);
 					if let Some(action) = areas.action(event.loc) {
 						match action {
 							ActiveAreaAction::ToggleUi => self.toggle_ui(),
@@ -478,15 +617,29 @@ impl ViewHandle for ReaderView {
 	}
 
 	fn rescale(&mut self, scale_factor: f32) {
-		self.scale_factor = scale_factor;
-		let _ = self.illustrator.rescale(scale_factor);
+		self.viewport.scale_factor = scale_factor;
+		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+		let _ = illustrator.rescale(scale_factor);
 	}
 
 	fn resize(&mut self, width: u32, height: u32) {
-		self.screen_width = width;
-		self.screen_height = height;
-		let _ = self.illustrator.resize(width, height);
+		self.viewport.screen_width = width;
+		self.viewport.screen_height = height;
+		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+		let _ = illustrator.resize(width, height);
 	}
+
+	fn close(&mut self) {
+		if let Some(illustrator) = self.illustrator.take() {
+			illustrator.shutdown();
+		}
+	}
+}
+
+#[derive(Debug)]
+pub(crate) struct ChapterCard {
+	location: Location,
+	title: Arc<String>,
 }
 
 impl ChapterCard {

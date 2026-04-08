@@ -1,5 +1,4 @@
 use std::iter;
-use std::sync::Arc;
 
 use egui::Panel;
 use image::ImageBuffer;
@@ -30,30 +29,23 @@ use crate::ui::ToolItem;
 use crate::views::EventResult;
 use crate::views::GestureResult;
 use crate::views::ViewHandle;
+use crate::views::Viewport;
 
 pub(crate) struct ExperimentsView {
 	bell: AppBell,
-	screen_width: u32,
-	screen_height: u32,
-	scale_factor: f32,
-	fonts: Arc<SculpterFonts>,
+
+	viewport: Viewport,
+	fonts: SculpterFonts,
 	render_items: Vec<(AtlasImage, Vec<DisplayGlyph>)>,
 	show_atlas: bool,
 }
 
 impl ExperimentsView {
-	pub(crate) fn create(
-		bell: AppBell,
-		fonts: Arc<SculpterFonts>,
-		screen_width: u32,
-		screen_height: u32,
-		scale_factor: f32,
-	) -> Self {
+	pub(crate) fn create(bell: AppBell, fonts: SculpterFonts, viewport: Viewport) -> Self {
 		Self {
 			bell,
-			screen_width,
-			screen_height,
-			scale_factor,
+
+			viewport,
 			fonts,
 			render_items: Vec::new(),
 			show_atlas: false,
@@ -93,7 +85,7 @@ impl OnAction<ToolAction> for ExperimentsView {
 			ToolAction::TestA => {}
 			ToolAction::TestB => {
 				if self.render_items.is_empty() {
-					let scale_factor = Fixed::from_num(self.scale_factor);
+					let scale_factor = Fixed::from_num(self.viewport.scale_factor);
 
 					let font_regular = FontOptions {
 						family: sculpter::Family::SansSerif,
@@ -134,8 +126,8 @@ impl OnAction<ToolAction> for ExperimentsView {
 					let block = sculpter
 						.render_block(
 							&mut handle,
-							self.screen_width - 200,
-							self.screen_height,
+							self.viewport.screen_width - 200,
+							self.viewport.screen_height,
 							Fixed::lit("24."),
 						)
 						.inspect_err(|err| log::error!("Error: {err}"))
@@ -172,8 +164,8 @@ impl ViewHandle for ExperimentsView {
 					targets: vec![PixmapTargetInput {
 						pos: [0.; 2],
 						dim: [
-							self.screen_width as f32 / 2.,
-							self.screen_height as f32 / 2.,
+							self.viewport.screen_width as f32 / 2.,
+							self.viewport.screen_height as f32 / 2.,
 						],
 						tex_pos: [0; 2],
 						tex_dim: [32; 2],
@@ -260,11 +252,11 @@ impl ViewHandle for ExperimentsView {
 	}
 
 	fn resize(&mut self, width: u32, height: u32) {
-		self.screen_width = width;
-		self.screen_height = height;
+		self.viewport.screen_width = width;
+		self.viewport.screen_height = height;
 	}
 
 	fn rescale(&mut self, scale_factor: f32) {
-		self.scale_factor = scale_factor;
+		self.viewport.scale_factor = scale_factor;
 	}
 }

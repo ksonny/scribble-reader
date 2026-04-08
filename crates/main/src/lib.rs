@@ -8,12 +8,10 @@ mod views;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use config::ConfigError;
-use illustrator::create_illustrator;
 use scribe::BookId;
 use scribe::LibraryBell;
 use scribe::LibraryScribe;
@@ -54,7 +52,7 @@ struct App<'window> {
 	request_redraw: Instant,
 	gestures: GestureTracker<10>,
 	config: ScribeConfig,
-	fonts: Arc<SculpterFonts>,
+	fonts: SculpterFonts,
 	keeper: RecordKeeper,
 	scribe: LibraryScribeAssistant,
 	content: ContentWranglerAssistant,
@@ -170,21 +168,14 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 			}
 			AppEvent::OpenReader(book_id) => {
 				log::debug!("Open book {book_id:?}");
-				match create_illustrator(
-					self.config.clone(),
+				self.view.reader(
+					self.config.illustrator.clone(),
 					self.keeper.clone(),
-					self.content.clone(),
 					self.fonts.clone(),
+					self.content.clone(),
 					self.bell.clone(),
 					book_id,
-				) {
-					Ok(handle) => {
-						self.view.reader(handle);
-					}
-					Err(e) => {
-						log::error!("Error spawning illustrator: {e}");
-					}
-				};
+				);
 			}
 			AppEvent::OpenExperiments => {
 				log::debug!("Open experiments");
@@ -192,6 +183,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 			}
 			AppEvent::Exit => {
 				log::debug!("Exit");
+				self.view.close();
 				event_loop.exit();
 			}
 			event => {
@@ -379,20 +371,19 @@ pub fn start(
 	);
 	let content = ContentWrangler::create(system);
 
-	let fonts = {
-		let fonts = SculpterFontsBuilder::new("Literata", "Open Sans")
-			.add_font(fonts::EB_GARAMOND_VF_TTF)?
-			.add_font(fonts::EB_GARAMOND_ITALIC_VF_TTF)?
-			.add_font(fonts::OPEN_SANS_VF_TTF)?
-			.add_font(fonts::OPEN_SANS_ITALIC_VF_TTF)?
-			.add_font(fonts::LITERATA_VF_TTF)?
-			.add_font(fonts::LITERATA_ITALIC_VF_TTF)?
-			.add_fallback(fonts::NOTO_EMOJI_VF_TTF)?
-			.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
-			.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
-			.build();
-		Arc::new(fonts)
-	};
+	let fonts = SculpterFontsBuilder::new("Literata", "Open Sans")
+		.add_font(fonts::EB_GARAMOND_VF_TTF)?
+		.add_font(fonts::EB_GARAMOND_ITALIC_VF_TTF)?
+		.add_font(fonts::OPEN_SANS_VF_TTF)?
+		.add_font(fonts::OPEN_SANS_ITALIC_VF_TTF)?
+		.add_font(fonts::LITERATA_VF_TTF)?
+		.add_font(fonts::LITERATA_ITALIC_VF_TTF)?
+		.add_fallback(fonts::NOTO_EMOJI_VF_TTF)?
+		.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
+		.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
+		.build();
+
+	bell.send_event(AppEvent::OpenLibrary);
 
 	let mut app = App {
 		input,

@@ -2,6 +2,7 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
+use config::Map;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,10 +19,73 @@ impl From<io::Error> for ConfigEditError {
 	}
 }
 
+pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
+[library]
+path = "~/Documents/ebooks"
+
+[illustrator."Serif"]
+font_size = 16.0
+line_height = 1.5
+h1 = { font_size_em = 1.8, padding_em = 1.5 }
+h2 = { font_size_em = 1.4, padding_em = 1.5 }
+h3 = { font_size_em = 1.2, padding_em = 1.5 }
+h4 = { font_size_em = 1.0, padding_em = 1.5 }
+h5 = { font_size_em = 1.0, padding_em = 1.5 }
+
+[illustrator."Serif".font_regular]
+family = "serif"
+variation.wght = 400
+
+[illustrator."Serif".font_italic]
+family = "serif"
+variation.wght = 400
+variation.ital = 1.0
+
+[illustrator."Serif".font_bold]
+family = "serif"
+variation.wght = 600
+
+[illustrator."Serif".padding]
+top_em = 2.0
+left_em = 2.0
+right_em = 2.0
+bottom_em = 2.0
+paragraph_em = 1.2
+
+[illustrator."Sans-serif"]
+font_size = 16.0
+line_height = 1.5
+h1 = { font_size_em = 1.8, padding_em = 1.5 }
+h2 = { font_size_em = 1.4, padding_em = 1.5 }
+h3 = { font_size_em = 1.2, padding_em = 1.5 }
+h4 = { font_size_em = 1.0, padding_em = 1.5 }
+h5 = { font_size_em = 1.0, padding_em = 1.5 }
+
+[illustrator."Sans-serif".font_regular]
+family = "sans-serif"
+variation.wght = 400
+
+[illustrator."Sans-serif".font_italic]
+family = "sans-serif"
+variation.wght = 400
+variation.ital = 1.0
+
+[illustrator."Sans-serif".font_bold]
+family = "sans-serif"
+variation.wght = 600
+
+[illustrator."Sans-serif".padding]
+top_em = 2.0
+left_em = 2.0
+right_em = 2.0
+bottom_em = 2.0
+paragraph_em = 1.2
+"#;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScribeConfig {
-	pub library: Arc<Library>,
-	pub illustrator: Arc<Illustrator>,
+	pub library: Library,
+	pub illustrator: IllustratorConfig,
 }
 
 impl ScribeConfig {
@@ -38,76 +102,73 @@ impl ScribeConfig {
 	}
 }
 
-#[cfg(not(target_os = "android"))]
-pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
-[library]
-path = "~/Documents/ebooks"
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Library {
+	pub path: Arc<String>,
+}
 
-[illustrator]
-font_size = 16.0
-line_height = 1.5
-h1 = { font_size_em = 1.8 }
-h2 = { font_size_em = 1.4 }
-h3 = { font_size_em = 1.2 }
-h4 = { font_size_em = 1.0 }
-h5 = { font_size_em = 1.0 }
+impl Default for Library {
+	fn default() -> Self {
+		Self {
+			path: Arc::new("~/Documents/ebooks".to_string()),
+		}
+	}
+}
 
-[illustrator.font_regular]
-family = "serif"
-variation = { wght = 400 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IllustratorConfig(Arc<Map<String, Arc<IllustratorProfile>>>);
 
-[illustrator.font_italic]
-family = "serif"
-variation = { wght = 400, ital = 1 }
-
-[illustrator.font_bold]
-family = "serif"
-variation = { wght = 600 }
-
-[illustrator.padding]
-top_em = 2.0
-left_em = 2.0
-right_em = 2.0
-bottom_em = 2.0
-paragraph_em = 1.2
-"#;
-
-#[cfg(target_os = "android")]
-pub(crate) const DEFAULT_SCRIBE_CONFIG: &str = r#"
-[library]
-
-[illustrator]
-font_size = 16.0
-line_height = 1.5
-h1 = { font_size_em = 1.8 }
-h2 = { font_size_em = 1.4 }
-h3 = { font_size_em = 1.2 }
-h4 = { font_size_em = 1.0 }
-h5 = { font_size_em = 1.0 }
-
-[illustrator.font_regular]
-family = "serif"
-variation = { wght = 400 }
-
-[illustrator.font_italic]
-family = "serif"
-variation = { wght = 400, ital = 1 }
-
-[illustrator.font_bold]
-family = "serif"
-variation = { wght = 600 }
-
-[illustrator.padding]
-top_em = 2.0
-left_em = 2.0
-right_em = 2.0
-bottom_em = 2.0
-paragraph_em = 1.2
-"#;
+impl AsRef<Map<String, Arc<IllustratorProfile>>> for IllustratorConfig {
+	fn as_ref(&self) -> &Map<String, Arc<IllustratorProfile>> {
+		&self.0
+	}
+}
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Library {
-	pub path: Option<Arc<String>>,
+pub struct IllustratorProfile {
+	#[serde(default = "default_font_regular")]
+	pub font_regular: FontConfig,
+	#[serde(default = "default_font_italic")]
+	pub font_italic: FontConfig,
+	#[serde(default = "default_font_bold")]
+	pub font_bold: FontConfig,
+
+	#[serde(default = "default_font_size")]
+	pub font_size: f32,
+	#[serde(default = "default_line_height")]
+	pub line_height: f32,
+
+	#[serde(default = "default_h1")]
+	pub h1: HeaderConfig,
+	#[serde(default = "default_h2")]
+	pub h2: HeaderConfig,
+	#[serde(default = "default_h3")]
+	pub h3: HeaderConfig,
+	#[serde(default = "default_h4")]
+	pub h4: HeaderConfig,
+	#[serde(default = "default_h5")]
+	pub h5: HeaderConfig,
+
+	#[serde(default = "default_padding")]
+	pub padding: PaddingConfig,
+}
+
+impl Default for IllustratorProfile {
+	fn default() -> Self {
+		Self {
+			font_regular: default_font_regular(),
+			font_italic: default_font_italic(),
+			font_bold: default_font_bold(),
+			font_size: default_font_size(),
+			line_height: default_line_height(),
+			h1: default_h1(),
+			h2: default_h2(),
+			h3: default_h3(),
+			h4: default_h4(),
+			h5: default_h5(),
+			padding: default_padding(),
+		}
+	}
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -133,28 +194,9 @@ impl AsRef<FontConfig> for FontConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct H1TextConfig {
+pub struct HeaderConfig {
 	pub font_size_em: f32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct H2TextConfig {
-	pub font_size_em: f32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct H3TextConfig {
-	pub font_size_em: f32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct H4TextConfig {
-	pub font_size_em: f32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct H5TextConfig {
-	pub font_size_em: f32,
+	pub padding_em: f32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -163,23 +205,97 @@ pub struct PaddingConfig {
 	pub left_em: f32,
 	pub right_em: f32,
 	pub bottom_em: f32,
-
 	pub paragraph_em: f32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Illustrator {
-	pub font_regular: FontConfig,
-	pub font_italic: FontConfig,
-	pub font_bold: FontConfig,
+fn default_font_regular() -> FontConfig {
+	FontConfig {
+		family: "serif".to_string(),
+		variation: FontVariationConfig {
+			wght: Some(400.),
+			wdth: None,
+			ital: None,
+			slnt: None,
+			opzs: None,
+		},
+	}
+}
 
-	pub font_size: f32,
-	pub line_height: f32,
+fn default_font_italic() -> FontConfig {
+	FontConfig {
+		family: "serif".to_string(),
+		variation: FontVariationConfig {
+			wght: Some(400.),
+			wdth: None,
+			ital: Some(1.),
+			slnt: None,
+			opzs: None,
+		},
+	}
+}
 
-	pub h1: H1TextConfig,
-	pub h2: H2TextConfig,
-	pub h3: H3TextConfig,
-	pub h4: H4TextConfig,
-	pub h5: H5TextConfig,
-	pub padding: PaddingConfig,
+fn default_font_bold() -> FontConfig {
+	FontConfig {
+		family: "serif".to_string(),
+		variation: FontVariationConfig {
+			wght: Some(600.),
+			wdth: None,
+			ital: None,
+			slnt: None,
+			opzs: None,
+		},
+	}
+}
+
+fn default_font_size() -> f32 {
+	16.0
+}
+
+fn default_line_height() -> f32 {
+	1.5
+}
+
+fn default_h1() -> HeaderConfig {
+	HeaderConfig {
+		font_size_em: 1.8,
+		padding_em: 1.5,
+	}
+}
+
+fn default_h2() -> HeaderConfig {
+	HeaderConfig {
+		font_size_em: 1.4,
+		padding_em: 1.5,
+	}
+}
+
+fn default_h3() -> HeaderConfig {
+	HeaderConfig {
+		font_size_em: 1.2,
+		padding_em: 1.5,
+	}
+}
+
+fn default_h4() -> HeaderConfig {
+	HeaderConfig {
+		font_size_em: 1.0,
+		padding_em: 1.5,
+	}
+}
+
+fn default_h5() -> HeaderConfig {
+	HeaderConfig {
+		font_size_em: 1.0,
+		padding_em: 1.5,
+	}
+}
+
+fn default_padding() -> PaddingConfig {
+	PaddingConfig {
+		top_em: 2.0,
+		left_em: 2.0,
+		right_em: 2.0,
+		bottom_em: 2.0,
+		paragraph_em: 1.2,
+	}
 }
