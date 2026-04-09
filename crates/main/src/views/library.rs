@@ -1,6 +1,6 @@
 use std::array;
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
-use std::collections::BinaryHeap;
 use std::fmt::Display;
 use std::fmt::Write;
 use std::fs;
@@ -63,33 +63,41 @@ struct BookCard {
 enum SortBy {
 	#[default]
 	Modified,
-	Opened,
 	Added,
+	Opened,
 }
 
 impl Display for SortBy {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			SortBy::Modified => write!(f, "By Changed"),
-			SortBy::Opened => write!(f, "By Opened"),
-			SortBy::Added => write!(f, "By Added"),
+			SortBy::Modified => write!(f, "Modified order"),
+			SortBy::Added => write!(f, "Added order"),
+			SortBy::Opened => write!(f, "Opened order"),
 		}
 	}
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
-enum SortKey {
-	None,
-	Date(DateTime<Utc>),
+struct SortKey {
+	modified_at: i64,
+	added_at: i64,
+	opened_at: Option<i64>,
 }
 
-impl SortBy {
-	fn select(self, book: &Book) -> SortKey {
-		use SortKey::*;
-		match self {
-			SortBy::Modified => Date(book.modified_at),
-			SortBy::Opened => book.opened_at.map(Date).unwrap_or(None),
-			SortBy::Added => Date(book.added_at),
+impl SortKey {
+	fn new(book: &Book) -> Self {
+		Self {
+			modified_at: book.modified_at.timestamp(),
+			added_at: book.added_at.timestamp(),
+			opened_at: book.opened_at.as_ref().map(DateTime::timestamp),
+		}
+	}
+
+	fn select(&self, sort_by: SortBy) -> i64 {
+		match sort_by {
+			SortBy::Modified => self.modified_at,
+			SortBy::Added => self.added_at,
+			SortBy::Opened => self.opened_at.unwrap_or(0),
 		}
 	}
 }
@@ -103,19 +111,19 @@ struct ViewState {
 #[derive(Debug)]
 struct Shelves {
 	books: BTreeMap<BookId, Book>,
-	sorted: Vec<BookId>,
+	sorted: Vec<(BookId, SortKey)>,
 	sort_by: SortBy,
 	thumbnails: BTreeMap<BookId, Thumbnail>,
 }
 
 impl Shelves {
 	fn open(books: BTreeMap<BookId, Book>, sort_by: SortBy) -> Self {
-		let books_len = books.len();
-		log::info!("Open library with {books_len} books");
+		log::info!("Open library with {} books", books.len());
+		let sorted = books.iter().map(|(id, b)| (*id, SortKey::new(b))).collect();
 		let mut shelves = Self {
 			books,
 			sort_by,
-			sorted: Vec::new(),
+			sorted,
 			thumbnails: BTreeMap::new(),
 		};
 		shelves.sort_books();
@@ -125,44 +133,39 @@ impl Shelves {
 	fn update(&mut self, book: Book) {
 		self.thumbnails.remove(&book.id);
 		self.books.insert(book.id, book);
+		self.sorted
+			.splice(.., self.books.iter().map(|(id, b)| (*id, SortKey::new(b))));
 		self.sort_books();
 	}
 
 	fn remove(&mut self, book_id: BookId) {
 		self.thumbnails.remove(&book_id);
 		self.books.remove(&book_id);
+		self.sorted
+			.splice(.., self.books.iter().map(|(id, b)| (*id, SortKey::new(b))));
 		self.sort_books();
 	}
 
 	fn sort_books(&mut self) {
-		let then_by = SortBy::default();
-		self.sorted.splice(
-			..,
-			self.books
-				.values()
-				.map(|book| ((self.sort_by.select(book), then_by.select(book)), book.id))
-				.collect::<BinaryHeap<_>>()
-				.into_iter()
-				.map(|(_, id)| id),
-		);
+		self.sorted
+			.sort_by_key(|(_, k)| Reverse(k.select(self.sort_by)));
 	}
 
-	fn books(&self, n: std::ops::Range<u32>) -> Vec<Book> {
+	fn book(&self, id: BookId) -> Option<&Book> {
+		self.books.get(&id)
+	}
+
+	fn books(&self, n: std::ops::Range<u32>) -> Vec<BookId> {
 		let start = n.start as usize;
 		let end = (n.end as usize).min(self.sorted.len());
-		let books = self
-			.sorted
+
+		self.sorted
 			.get(start..end)
 			.into_iter()
 			.flatten()
-			.filter_map(|id| self.books.get(id).cloned())
-			.collect::<Vec<_>>();
-		log::trace!(
-			"Requested books {start}..{end}, received {} from all books {}",
-			books.len(),
-			self.sorted.len()
-		);
-		books
+			.map(|(id, _)| id)
+			.cloned()
+			.collect()
 	}
 }
 
@@ -257,13 +260,15 @@ fn read_cards(
 ) -> [Option<BookCard>; LIBRARY_LIST_SIZE] {
 	let start = page * LIBRARY_LIST_SIZE as u32;
 	let end = (1 + page) * LIBRARY_LIST_SIZE as u32;
-	let books = shelves.books(start..end);
-	let mut books_iter = books.into_iter().map(|b| {
-		let id = b.id;
+	let book_ids = shelves.books(start..end);
+
+	array::from_fn(|i| {
+		let id = book_ids.get(i)?;
+
 		let thumb = shelves
 			.thumbnails
-			.entry(id)
-			.or_insert_with(|| match load_thumbnail(records, id) {
+			.entry(*id)
+			.or_insert_with(|| match load_thumbnail(records, *id) {
 				Ok(thumb) => thumb,
 				Err(e) => {
 					log::error!("Error loading thumbnail: {e}");
@@ -271,13 +276,9 @@ fn read_cards(
 				}
 			})
 			.clone();
+		let book = shelves.book(*id)?;
 
-		(b, thumb)
-	});
-	array::from_fn(|_| {
-		books_iter
-			.next()
-			.map(|(b, tn)| BookCard::new(b, tn, shelves.sort_by))
+		Some(BookCard::new(book, thumb, shelves.sort_by))
 	})
 }
 
@@ -489,11 +490,11 @@ impl ViewHandle for LibraryView {
 }
 
 impl BookCard {
-	fn new(book: Book, thumbnail: Thumbnail, sort_by: SortBy) -> Self {
+	fn new(book: &Book, thumbnail: Thumbnail, sort_by: SortBy) -> Self {
 		BookCard {
 			id: book.id,
-			title: book.title,
-			author: book.author,
+			title: book.title.clone(),
+			author: book.author.clone(),
 			percent_read: book.percent_read.unwrap_or_default(),
 			sort_by,
 			opened_at: book.opened_at,
