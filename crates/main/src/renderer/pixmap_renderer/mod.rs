@@ -1,16 +1,18 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::mem;
 use std::num::NonZeroU64;
+use std::ops::Range;
 
+use wgpu::Buffer;
 use wgpu::Device;
 use wgpu::Queue;
 use wgpu::RenderPass;
+use wgpu::Texture;
 use wgpu::TextureFormat;
 use wgpu::util::DeviceExt;
 
 use bitflags::bitflags;
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum RenderError {}
 
 bitflags! {
 	#[repr(C)]
@@ -24,41 +26,186 @@ bitflags! {
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
 	screen_resolution: [u32; 2],
-	offset_pos: [u32; 2],
+	offset_pos: [f32; 2],
 	flags: Flags,
 	_unused: u32,
 }
 
+#[derive(Debug)]
+pub(crate) enum PixmapData<'data> {
+	RgbA(&'data [u8]),
+	Luma(&'data [u8]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PixmapId(u64);
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PixmapDimensions([u32; 2]);
+
+impl PixmapDimensions {
+	pub(crate) fn width(&self) -> u32 {
+		self.0[0]
+	}
+
+	pub(crate) fn height(&self) -> u32 {
+		self.0[1]
+	}
+}
+
+impl From<[u32; 2]> for PixmapDimensions {
+	fn from(value: [u32; 2]) -> Self {
+		Self(value)
+	}
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PaintPosition([f32; 2]);
+
+impl PaintPosition {
+	pub(crate) fn inner(&self) -> [f32; 2] {
+		self.0
+	}
+}
+
+impl From<[f32; 2]> for PaintPosition {
+	fn from(value: [f32; 2]) -> Self {
+		Self(value)
+	}
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct PixmapTargetInput {
+pub(crate) struct PixmapInstance {
 	pub(crate) pos: [f32; 2],
 	pub(crate) dim: [f32; 2],
-	pub(crate) tex_pos: [u32; 2],
-	pub(crate) tex_dim: [u32; 2],
+	pub(crate) uv_pos: [u32; 2],
+	pub(crate) uv_dim: [u32; 2],
 }
 
 #[derive(Debug)]
-pub(crate) enum Pixmap<'a> {
-	RgbA(&'a [u8]),
-	Luma(&'a [u8]),
+pub(crate) struct PixmapTexture {
+	pixmap_dim: PixmapDimensions,
+	flags: Flags,
+	texture: Texture,
 }
 
 #[derive(Debug)]
-pub(crate) struct PixmapInput<'a> {
-	pub(crate) pixmap: Pixmap<'a>,
-	pub(crate) pixmap_dim: [u32; 2],
-	pub(crate) offset_pos: [u32; 2],
-	pub(crate) targets: Vec<PixmapTargetInput>,
+pub(crate) struct PixmapSpan {
+	pixmap_id: PixmapId,
+	pos: PaintPosition,
+	range: Range<u32>,
 }
 
-#[allow(unused)]
-struct PixmapEntry {
-	texture: wgpu::Texture,
+pub(crate) struct PixmapBrush<'renderer> {
+	device: &'renderer Device,
+	queue: &'renderer Queue,
+
+	id_counter: &'renderer mut u64,
+	textures: &'renderer mut BTreeMap<PixmapId, PixmapTexture>,
+	spans: &'renderer mut Vec<PixmapSpan>,
+	instances: &'renderer mut Vec<PixmapInstance>,
+}
+
+impl PixmapBrush<'_> {
+	pub(crate) fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapId {
+		let pixmap_id = PixmapId(*self.id_counter);
+		*self.id_counter += 1;
+
+		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
+
+		self.textures.insert(
+			pixmap_id,
+			PixmapTexture {
+				pixmap_dim: dims,
+				flags,
+				texture,
+			},
+		);
+
+		pixmap_id
+	}
+
+	pub(crate) fn is_pixmap_active(&self, pixmap_id: PixmapId) -> bool {
+		self.textures.contains_key(&pixmap_id)
+	}
+
+	pub(crate) fn update(&mut self, pixmap_id: PixmapId, dims: PixmapDimensions, data: PixmapData) {
+		if let Some(entry) = self.textures.get_mut(&pixmap_id) {
+			let format = match data {
+				PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
+				PixmapData::Luma(_) => TextureFormat::R8Unorm,
+			};
+			if entry.pixmap_dim == dims && entry.texture.format() == format {
+				// Maches, write new data to texture
+				let (bytes, flags, data) = match data {
+					PixmapData::RgbA(data) => (4, Flags::empty(), data),
+					PixmapData::Luma(data) => (1, Flags::GRAYSCALE, data),
+				};
+				let size = wgpu::Extent3d {
+					width: dims.width(),
+					height: dims.height(),
+					depth_or_array_layers: 1,
+				};
+				self.queue.write_texture(
+					wgpu::TexelCopyTextureInfo {
+						texture: &entry.texture,
+						mip_level: 0,
+						origin: wgpu::Origin3d::ZERO,
+						aspect: wgpu::TextureAspect::All,
+					},
+					data,
+					wgpu::TexelCopyBufferLayout {
+						offset: 0,
+						bytes_per_row: Some(bytes * dims.width()),
+						rows_per_image: Some(dims.height()),
+					},
+					size,
+				);
+				entry.flags = flags;
+			} else {
+				// Missmatch, allocate new texture
+				let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
+				entry.texture = texture;
+				entry.flags = flags;
+			}
+		} else {
+			// Not active, reuse id
+			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
+
+			self.textures.insert(
+				pixmap_id,
+				PixmapTexture {
+					pixmap_dim: dims,
+					texture,
+					flags,
+				},
+			);
+		}
+	}
+
+	pub(crate) fn draw(
+		&mut self,
+		pixmap_id: PixmapId,
+		pos: PaintPosition,
+		instances: impl IntoIterator<Item = PixmapInstance>,
+	) {
+		let start = self.instances.len() as u32;
+		self.instances.extend(instances);
+		let end = self.instances.len() as u32;
+
+		self.spans.push(PixmapSpan {
+			pixmap_id,
+			pos,
+			range: start..end,
+		});
+	}
+}
+
+struct PixmapBatch {
 	bind_group: wgpu::BindGroup,
 	params_buffer: wgpu::Buffer,
-	instance_buffer: wgpu::Buffer,
-	instances: u32,
+	range: Range<u32>,
 }
 
 pub(crate) struct Renderer {
@@ -67,7 +214,15 @@ pub(crate) struct Renderer {
 	pipeline: wgpu::RenderPipeline,
 	screen_width: u32,
 	screen_height: u32,
-	entries: Vec<PixmapEntry>,
+
+	id_counter: u64,
+	textures: BTreeMap<PixmapId, PixmapTexture>,
+	spans: Vec<PixmapSpan>,
+	vertices: Vec<PixmapInstance>,
+
+	instance_buffer: Option<Buffer>,
+	batches_active: Vec<PixmapBatch>,
+	batches_inactive: Vec<PixmapBatch>,
 }
 
 impl Renderer {
@@ -169,13 +324,21 @@ impl Renderer {
 			pipeline,
 			screen_width,
 			screen_height,
-			entries: Vec::new(),
+
+			id_counter: 0,
+			textures: BTreeMap::new(),
+			spans: Vec::new(),
+			vertices: Vec::new(),
+
+			instance_buffer: None,
+			batches_active: Vec::new(),
+			batches_inactive: Vec::new(),
 		}
 	}
 
 	fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
 		wgpu::VertexBufferLayout {
-			array_stride: mem::size_of::<PixmapTargetInput>() as u64,
+			array_stride: mem::size_of::<PixmapInstance>() as u64,
 			step_mode: wgpu::VertexStepMode::Instance,
 			attributes: &[
 				wgpu::VertexAttribute {
@@ -207,68 +370,70 @@ impl Renderer {
 		self.screen_height = height;
 	}
 
-	pub(crate) fn prepare<'a>(
+	pub(crate) fn prepare(
 		&mut self,
 		device: &Device,
 		queue: &Queue,
-		inputs: impl Iterator<Item = PixmapInput<'a>>,
+		mut run_brush: impl FnMut(&mut PixmapBrush<'_>),
 	) {
-		// TODO: Reuse textures, and buffers
-		self.entries.clear();
-		for input in inputs {
-			if input.targets.is_empty() {
-				continue;
-			}
+		// Get new content to work with
+		self.spans.clear();
+		self.vertices.clear();
+		let mut brush = PixmapBrush {
+			device,
+			queue,
+			id_counter: &mut self.id_counter,
+			textures: &mut self.textures,
+			spans: &mut self.spans,
+			instances: &mut self.vertices,
+		};
+		run_brush(&mut brush);
 
-			let [pixmap_width, pixmap_height] = input.pixmap_dim;
-			let size = wgpu::Extent3d {
-				width: pixmap_width,
-				height: pixmap_height,
-				depth_or_array_layers: 1,
+		// Upload vertices
+		let contents = bytemuck::cast_slice(self.vertices.as_slice());
+		if let Some(buffer) = &self.instance_buffer
+			&& buffer.size() >= contents.len() as u64
+		{
+			queue.write_buffer(buffer, 0, contents);
+		} else {
+			let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("pixmap instance buffer"),
+				contents,
+				usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+			});
+			self.instance_buffer = Some(buffer);
+		}
+
+		// Create batches of textures and instance ranges
+		mem::swap(&mut self.batches_active, &mut self.batches_inactive);
+		let mut pixmap_id_set = self.textures.keys().cloned().collect::<BTreeSet<_>>();
+		let mut params_buffers = self.batches_inactive.drain(..).map(|e| e.params_buffer);
+		for span in &self.spans {
+			let Some(entry) = self.textures.get(&span.pixmap_id) else {
+				log::warn!("Span pointing at non-existing pixmap: {:?}", span.pixmap_id);
+				continue;
 			};
-			let (format, bs, flags, data) = match input.pixmap {
-				Pixmap::RgbA(data) => (wgpu::TextureFormat::Rgba8Unorm, 4, Flags::empty(), data),
-				Pixmap::Luma(data) => (wgpu::TextureFormat::R8Unorm, 1, Flags::GRAYSCALE, data),
-			};
+			pixmap_id_set.remove(&span.pixmap_id);
 
 			let params = Params {
 				screen_resolution: [self.screen_width, self.screen_height],
-				offset_pos: input.offset_pos,
-				flags,
+				offset_pos: span.pos.inner(),
+				flags: entry.flags,
 				_unused: 0,
 			};
-			let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-				label: Some("pixmap params buffer"),
-				contents: bytemuck::cast_slice(&[params]),
-				usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-			});
-
-			let texture = device.create_texture(&wgpu::TextureDescriptor {
-				label: Some("pixmap texture"),
-				size,
-				mip_level_count: 1,
-				sample_count: 1,
-				dimension: wgpu::TextureDimension::D2,
-				format,
-				usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-				view_formats: &[],
-			});
-			queue.write_texture(
-				wgpu::TexelCopyTextureInfo {
-					texture: &texture,
-					mip_level: 0,
-					origin: wgpu::Origin3d::ZERO,
-					aspect: wgpu::TextureAspect::All,
-				},
-				data,
-				wgpu::TexelCopyBufferLayout {
-					offset: 0,
-					bytes_per_row: Some(bs * pixmap_width),
-					rows_per_image: Some(pixmap_height),
-				},
-				size,
-			);
-			let texture_view = texture.create_view(&wgpu::wgt::TextureViewDescriptor::default());
+			let params_buffer = if let Some(buffer) = params_buffers.next() {
+				queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[params]));
+				buffer
+			} else {
+				device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+					label: Some("pixmap params buffer"),
+					contents: bytemuck::cast_slice(&[params]),
+					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+				})
+			};
+			let texture_view = entry
+				.texture
+				.create_view(&wgpu::wgt::TextureViewDescriptor::default());
 			let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 				label: Some("pixmap bind group"),
 				layout: &self.bind_group_layout,
@@ -287,36 +452,74 @@ impl Renderer {
 					},
 				],
 			});
-
-			let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-				label: Some("pixmap instance buffer"),
-				contents: bytemuck::cast_slice(input.targets.as_slice()),
-				usage: wgpu::BufferUsages::VERTEX,
-			});
-			let instances = input.targets.len() as u32;
-
-			self.entries.push(PixmapEntry {
-				texture,
+			self.batches_active.push(PixmapBatch {
 				bind_group,
 				params_buffer,
-				instance_buffer,
-				instances,
+				range: span.range.clone(),
 			});
+		}
+		drop(params_buffers);
+
+		// Drop unused textures
+		for pixmap_id in pixmap_id_set {
+			self.textures.remove(&pixmap_id);
 		}
 	}
 
-	pub(crate) fn render(
-		&self,
-		rpass: &mut RenderPass<'_>,
-	) -> std::result::Result<(), RenderError> {
-		if !self.entries.is_empty() {
+	pub(crate) fn render(&self, rpass: &mut RenderPass<'_>) {
+		if !self.batches_active.is_empty()
+			&& let Some(instance_buffer) = &self.instance_buffer
+		{
 			rpass.set_pipeline(&self.pipeline);
-			for entry in &self.entries {
-				rpass.set_bind_group(0, &entry.bind_group, &[]);
-				rpass.set_vertex_buffer(0, entry.instance_buffer.slice(..));
-				rpass.draw(0..4, 0..entry.instances);
+			rpass.set_vertex_buffer(0, instance_buffer.slice(..));
+
+			for batch in &self.batches_active {
+				rpass.set_bind_group(0, &batch.bind_group, &[]);
+				rpass.draw(0..4, batch.range.clone());
 			}
 		}
-		Ok(())
 	}
+}
+
+fn upload_texture(
+	device: &Device,
+	queue: &Queue,
+	dims: &PixmapDimensions,
+	data: PixmapData<'_>,
+) -> (Texture, Flags) {
+	let (format, bytes, flags, data) = match data {
+		PixmapData::RgbA(data) => (TextureFormat::Rgba8Unorm, 4, Flags::empty(), data),
+		PixmapData::Luma(data) => (TextureFormat::R8Unorm, 1, Flags::GRAYSCALE, data),
+	};
+	let size = wgpu::Extent3d {
+		width: dims.width(),
+		height: dims.height(),
+		depth_or_array_layers: 1,
+	};
+	let texture = device.create_texture(&wgpu::TextureDescriptor {
+		label: Some("pixmap texture"),
+		size,
+		mip_level_count: 1,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+		view_formats: &[],
+	});
+	queue.write_texture(
+		wgpu::TexelCopyTextureInfo {
+			texture: &texture,
+			mip_level: 0,
+			origin: wgpu::Origin3d::ZERO,
+			aspect: wgpu::TextureAspect::All,
+		},
+		data,
+		wgpu::TexelCopyBufferLayout {
+			offset: 0,
+			bytes_per_row: Some(bytes * dims.width()),
+			rows_per_image: Some(dims.height()),
+		},
+		size,
+	);
+	(texture, flags)
 }

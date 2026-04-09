@@ -28,8 +28,9 @@ use crate::gestures::Direction;
 use crate::gestures::Gesture;
 use crate::gestures::GestureEvent;
 use crate::renderer::Painter;
-use crate::renderer::pixmap_renderer;
-use crate::renderer::pixmap_renderer::PixmapTargetInput;
+use crate::renderer::pixmap_renderer::PixmapData;
+use crate::renderer::pixmap_renderer::PixmapId;
+use crate::renderer::pixmap_renderer::PixmapInstance;
 use crate::ui::MainMenuBar;
 use crate::ui::MenuItem;
 use crate::ui::OnAction;
@@ -107,6 +108,8 @@ pub(crate) struct ReaderView {
 	chapters_page: u32,
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
 	statusline: Option<String>,
+
+	atlas_pixmap_id: Option<PixmapId>,
 }
 
 impl ReaderView {
@@ -144,6 +147,8 @@ impl ReaderView {
 			chapters_page: 0,
 			chapters_cards: Default::default(),
 			statusline: String::new().into(),
+
+			atlas_pixmap_id: None,
 		};
 
 		view.create_illustrator()?;
@@ -358,72 +363,76 @@ impl ViewHandle for ReaderView {
 		statusline.clear();
 		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
 
-		let painter = if matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
+		let painter = painter.draw_pixmap(|brush| {
+			if !matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
+				return;
+			}
+
 			let state = illustrator.state();
 			let cache = illustrator.cache();
 			let page = cache.page(state.location);
-			if let Some((content, meta)) = page {
-				let _ = write!(
-					&mut statusline,
-					"Chapter {} / {} Book {}%",
-					meta.page, meta.pages, state.percent_read
-				);
+			let Some((content, meta)) = page else {
+				return;
+			};
+			let _ = write!(
+				&mut statusline,
+				"Chapter {} / {} Book {}%",
+				meta.page, meta.pages, state.percent_read
+			);
 
-				let mut glyph_targets = Vec::new();
-				for item in &content.items {
-					if let illustrator::DisplayItem {
+			let atlas = cache.atlas();
+			let pixmap_dims = [atlas.width(), atlas.height()].into();
+			let pixmap_data = PixmapData::Luma(atlas.as_raw());
+			let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id {
+				brush.update(pixmap_id, pixmap_dims, pixmap_data);
+				pixmap_id
+			} else {
+				brush.create(pixmap_dims, pixmap_data)
+			};
+			self.atlas_pixmap_id = Some(pixmap_id);
+
+			for item in &content.items {
+				match item {
+					illustrator::DisplayItem {
 						pos,
-						content: illustrator::DisplayContent::Text(block),
+						content: illustrator::DisplayContent::Text(content),
 						..
-					} = item
-					{
-						glyph_targets.extend(block.glyphs.iter().map(|g| PixmapTargetInput {
-							pos: [pos.x + g.pos[0], pos.y + g.pos[1]],
-							dim: g.size,
-							tex_pos: g.uv_pos,
-							tex_dim: g.uv_size,
-						}));
+					} => {
+						brush.draw(
+							pixmap_id,
+							[pos.x, pos.y].into(),
+							content.glyphs.iter().map(|g| PixmapInstance {
+								pos: g.pos,
+								dim: g.dim,
+								uv_pos: g.uv_pos,
+								uv_dim: g.uv_dim,
+							}),
+						);
 					}
-				}
-				let atlas_pixmap = if !glyph_targets.is_empty() {
-					// TODO: Allow texture reuse in pixmap renderer
-					let atlas = cache.atlas();
-					Some(pixmap_renderer::PixmapInput {
-						pixmap: pixmap_renderer::Pixmap::Luma(atlas.as_raw()),
-						pixmap_dim: [atlas.width(), atlas.height()],
-						offset_pos: [0; 2],
-						targets: glyph_targets,
-					})
-				} else {
-					None
-				};
-
-				let pixmaps = content.items.iter().filter_map(|it| match it {
 					illustrator::DisplayItem {
 						pos,
 						size,
-						content: illustrator::DisplayContent::Pixmap(item),
-					} => Some(pixmap_renderer::PixmapInput {
-						pixmap: pixmap_renderer::Pixmap::RgbA(&item.pixmap_rgba),
-						pixmap_dim: [item.pixmap_width, item.pixmap_height],
-						offset_pos: [0; 2],
-						targets: vec![pixmap_renderer::PixmapTargetInput {
-							pos: [pos.x, pos.y],
-							dim: [size.width, size.height],
-							tex_pos: [0; 2],
-							tex_dim: [item.pixmap_width, item.pixmap_height],
-						}],
-					}),
-					_ => None,
-				});
-
-				painter.draw_pixmap(pixmaps.chain(atlas_pixmap))
-			} else {
-				painter.draw_pixmap([].into_iter())
+						content: illustrator::DisplayContent::Pixmap(content),
+						..
+					} => {
+						// TODO: Reuse pixmap
+						let pixmap_dims = [content.pixmap_width, content.pixmap_height].into();
+						let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
+						let pixmap_id = brush.create(pixmap_dims, pixmap_data);
+						brush.draw(
+							pixmap_id,
+							[pos.x, pos.y].into(),
+							[PixmapInstance {
+								pos: [0.; 2],
+								dim: [size.width, size.height],
+								uv_pos: [0; 2],
+								uv_dim: [content.pixmap_width, content.pixmap_height],
+							}],
+						);
+					}
+				}
 			}
-		} else {
-			painter.draw_pixmap([].into_iter())
-		};
+		});
 
 		let working = illustrator.working();
 		painter.draw_ui(|ui| {

@@ -384,9 +384,9 @@ impl Sculpter<'_> {
 #[derive(Debug)]
 pub struct DisplayGlyph {
 	pub pos: [f32; 2],
-	pub size: [f32; 2],
+	pub dim: [f32; 2],
 	pub uv_pos: [u32; 2],
-	pub uv_size: [u32; 2],
+	pub uv_dim: [u32; 2],
 }
 
 #[derive(Debug)]

@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use crate::renderer::gui_renderer;
 use crate::renderer::pixmap_renderer;
+use crate::renderer::pixmap_renderer::PixmapBrush;
 use crate::ui::UiInput;
 
 pub(crate) struct PainterUIReady;
@@ -62,12 +63,12 @@ impl<'a, PainterPixmap> Painter<'a, PainterUIReady, PainterPixmap> {
 }
 
 impl<'a, PainterUI> Painter<'a, PainterUI, PainterPixmapReady> {
-	pub(crate) fn draw_pixmap<'i>(
+	pub(crate) fn draw_pixmap(
 		self,
-		inputs: impl Iterator<Item = pixmap_renderer::PixmapInput<'i>>,
+		run_brush: impl FnMut(&mut PixmapBrush<'_>),
 	) -> Painter<'a, PainterUI, PainterPixmapPainted> {
 		self.pixmap_renderer
-			.prepare(self.device, self.queue, inputs);
+			.prepare(self.device, self.queue, run_brush);
 		self.into()
 	}
 }

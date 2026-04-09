@@ -14,7 +14,7 @@ struct VertexOutput {
 
 struct Params {
 	screen_resolution: vec2<u32>,
-	offset_pos: vec2<u32>,
+	offset_pos: vec2<f32>,
 	flags: u32,
 	_pad: u32,
 }
@@ -33,7 +33,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 		in.idx & 1u,
 	);
 	let corner_offset = in.dim * vec2<f32>(corner);
-	let pos = vec2<f32>(params.offset_pos) + in.pos + corner_offset;
+	let pos = params.offset_pos + in.pos + corner_offset;
 
 	let tex_corner_offset = in.tex_dim * corner;
 	let tex_pos = in.tex_pos + tex_corner_offset;

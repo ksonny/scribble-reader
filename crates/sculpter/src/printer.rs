@@ -169,9 +169,9 @@ impl<'a> SculpterPrinter<'a> {
 
 				glyphs.push(DisplayGlyph {
 					pos: [x.to_num(), y.to_num()],
-					size: [w, h],
+					dim: [w, h],
 					uv_pos: [u as u32, v as u32],
-					uv_size: [uv_w as u32, uv_h as u32],
+					uv_dim: [uv_w as u32, uv_h as u32],
 				});
 			}
 			x_pos += x_advance;
@@ -202,9 +202,9 @@ impl<'a> SculpterPrinter<'a> {
 
 				glyphs.push(DisplayGlyph {
 					pos: [x.to_num(), y.to_num()],
-					size: [w, h],
+					dim: [w, h],
 					uv_pos: [u as u32, v as u32],
-					uv_size: [uv_w as u32, uv_h as u32],
+					uv_dim: [uv_w as u32, uv_h as u32],
 				});
 			}
 		}
