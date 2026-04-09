@@ -155,8 +155,6 @@ impl<B: LibraryBell> LibraryScribe<B> {
 					.push((doc.timestamp, book.id, doc.document.clone()));
 			} else {
 				log::trace!("Book is fresh: {file_name}");
-				self.stale_books
-					.push((doc.timestamp, book.id, doc.document.clone()));
 			}
 		} else {
 			let book = InsertBook {
