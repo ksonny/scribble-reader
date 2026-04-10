@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io;
 use std::mem;
 use std::path::Path;
@@ -8,6 +11,7 @@ use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
+use scribe::BookId;
 use scribe::config::FontConfig;
 use scribe::config::IllustratorProfile;
 use sculpter::AtlasImage;
@@ -608,6 +612,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 }
 
 struct PageBreaker {
+	book_id: BookId,
 	padding_left: f32,
 	padding_top: f32,
 	page_height: f32,
@@ -618,12 +623,13 @@ struct PageBreaker {
 }
 
 impl PageBreaker {
-	fn new(settings: &StyleSettings<'_>) -> Self {
+	fn new(settings: &StyleSettings<'_>, book_id: BookId) -> Self {
 		let padding_left = settings.padding_left();
 		let padding_top = settings.padding_top();
 		let page_height = settings.page_height_padded();
 
 		Self {
+			book_id,
 			padding_left,
 			padding_top,
 			page_height,
@@ -661,12 +667,18 @@ impl PageBreaker {
 			self.add_page(pos.y);
 		}
 
-		let local = crate::Position {
-			x: pos.x + self.padding_left,
-			y: pos.y - self.page_offset + self.padding_top,
+		let hash = {
+			let mut s = DefaultHasher::new();
+			self.book_id.0.hash(&mut s);
+			el.hash(&mut s);
+			s.finish()
 		};
 		self.page.items.push(DisplayItem {
-			pos: local,
+			hash,
+			pos: crate::Position {
+				x: pos.x + self.padding_left,
+				y: pos.y - self.page_offset + self.padding_top,
+			},
 			size: size.into(),
 			content: content.into(),
 		});
@@ -709,6 +721,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 	pub(crate) fn layout<'settings>(
 		self,
 		settings: &StyleSettings<'settings>,
+		book_id: BookId,
 	) -> Result<(PageLayouter<'layout, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError>
 	{
 		let Self {
@@ -724,7 +737,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 
 		let min_line_height = Fixed::from_num(settings.min_line_height());
 
-		let mut breaker = PageBreaker::new(settings);
+		let mut breaker = PageBreaker::new(settings, book_id);
 		let mut cursor = taffy::Point::ZERO;
 
 		for edge in TaffyTreeIter::new(&taffy_tree, content_id) {

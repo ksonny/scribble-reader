@@ -22,8 +22,6 @@ pub(crate) enum RendererError {
 	RequestDevice(#[from] wgpu::RequestDeviceError),
 	#[error(transparent)]
 	RequestAdapter(#[from] wgpu::wgt::RequestAdapterError),
-	#[error(transparent)]
-	PixmapRender(#[from] pixmap_renderer::RenderError),
 	#[error("Failed to get surface format")]
 	NoTextureFormat,
 	#[error("Failed to get surface alpha mode")]
@@ -240,7 +238,7 @@ impl Renderer<'_> {
 			})
 			.forget_lifetime();
 
-		self.pixmap_renderer.render(&mut rpass)?;
+		self.pixmap_renderer.render(&mut rpass);
 		self.gui_renderer.render(&mut rpass);
 
 		drop(rpass);

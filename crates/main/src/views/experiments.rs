@@ -1,5 +1,3 @@
-use std::iter;
-
 use egui::Panel;
 use image::ImageBuffer;
 use lucide_icons::Icon;
@@ -18,9 +16,9 @@ use crate::AppBell;
 use crate::AppEvent;
 use crate::gestures::GestureEvent;
 use crate::renderer::Painter;
-use crate::renderer::pixmap_renderer::Pixmap;
-use crate::renderer::pixmap_renderer::PixmapInput;
-use crate::renderer::pixmap_renderer::PixmapTargetInput;
+use crate::renderer::pixmap_renderer::PixmapData;
+use crate::renderer::pixmap_renderer::PixmapId;
+use crate::renderer::pixmap_renderer::PixmapInstance;
 use crate::ui::MainMenuBar;
 use crate::ui::MenuItem;
 use crate::ui::OnAction;
@@ -36,8 +34,11 @@ pub(crate) struct ExperimentsView {
 
 	viewport: Viewport,
 	fonts: SculpterFonts,
-	render_items: Vec<(AtlasImage, Vec<DisplayGlyph>)>,
 	show_atlas: bool,
+
+	block_pixmap_id: Option<PixmapId>,
+	atlas_pixmap_id: Option<PixmapId>,
+	render_items: Option<(AtlasImage, Vec<DisplayGlyph>)>,
 }
 
 impl ExperimentsView {
@@ -47,8 +48,11 @@ impl ExperimentsView {
 
 			viewport,
 			fonts,
-			render_items: Vec::new(),
 			show_atlas: false,
+
+			block_pixmap_id: None,
+			atlas_pixmap_id: None,
+			render_items: None,
 		}
 	}
 }
@@ -84,7 +88,7 @@ impl OnAction<ToolAction> for ExperimentsView {
 		match action {
 			ToolAction::TestA => {}
 			ToolAction::TestB => {
-				if self.render_items.is_empty() {
+				if self.render_items.is_none() {
 					let scale_factor = Fixed::from_num(self.viewport.scale_factor);
 
 					let font_regular = FontOptions {
@@ -139,9 +143,9 @@ impl OnAction<ToolAction> for ExperimentsView {
 						.inspect_err(|err| log::error!("Error: {err}"))
 						.unwrap();
 
-					self.render_items.push((atlas, block.glyphs));
+					self.render_items = Some((atlas, block.glyphs));
 				} else {
-					self.render_items.clear();
+					self.render_items.take();
 				}
 			}
 			ToolAction::TestC => {
@@ -154,47 +158,63 @@ impl OnAction<ToolAction> for ExperimentsView {
 impl ViewHandle for ExperimentsView {
 	fn draw(&mut self, painter: Painter<'_>) {
 		painter
-			.draw_pixmap(
-				iter::once(PixmapInput {
-					pixmap: Pixmap::RgbA(
-						ImageBuffer::from_pixel(32, 32, image::Rgba([128u8, 0, 0, 128])).as_raw(),
-					),
-					pixmap_dim: [32; 2],
-					offset_pos: [50; 2],
-					targets: vec![PixmapTargetInput {
+			.draw_pixmap(|brush| {
+				let pixmap_id = if let Some(pixmap_id) = self.block_pixmap_id.take() {
+					pixmap_id
+				} else {
+					let image = ImageBuffer::from_pixel(32, 32, image::Rgba([128u8, 0, 0, 128]));
+					brush.create([32; 2].into(), PixmapData::RgbA(image.as_raw()))
+				};
+				brush.draw(
+					&pixmap_id,
+					[50.; 2].into(),
+					[PixmapInstance {
 						pos: [0.; 2],
 						dim: [
 							self.viewport.screen_width as f32 / 2.,
 							self.viewport.screen_height as f32 / 2.,
 						],
-						tex_pos: [0; 2],
-						tex_dim: [32; 2],
+						uv_pos: [0; 2],
+						uv_dim: [32; 2],
 					}],
-				})
-				.chain(self.render_items.iter().map(|(atlas, glyphs)| PixmapInput {
-					pixmap: Pixmap::Luma(atlas.as_raw()),
-					pixmap_dim: [atlas.width(), atlas.height()],
-					offset_pos: [100; 2],
-					targets: if !self.show_atlas {
-						glyphs
-							.iter()
-							.map(|g| PixmapTargetInput {
-								pos: g.pos,
-								dim: g.size,
-								tex_pos: g.uv_pos,
-								tex_dim: g.uv_size,
-							})
-							.collect()
+				);
+				self.block_pixmap_id = Some(pixmap_id);
+
+				if let Some((atlas, glyphs)) = &self.render_items {
+					let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id.take() {
+						pixmap_id
 					} else {
-						vec![PixmapTargetInput {
-							pos: [0.; 2],
-							dim: [atlas.width() as f32, atlas.height() as f32],
-							tex_pos: [0; 2],
-							tex_dim: [atlas.width(), atlas.height()],
-						}]
-					},
-				})),
-			)
+						brush.create(
+							[atlas.width(), atlas.height()].into(),
+							PixmapData::Luma(atlas.as_raw()),
+						)
+					};
+					if self.show_atlas {
+						brush.draw(
+							&pixmap_id,
+							[100.; 2].into(),
+							[PixmapInstance {
+								pos: [0.; 2],
+								dim: [atlas.width() as f32, atlas.height() as f32],
+								uv_pos: [0; 2],
+								uv_dim: [atlas.width(), atlas.height()],
+							}],
+						);
+					} else {
+						brush.draw(
+							&pixmap_id,
+							[100.; 2].into(),
+							glyphs.iter().map(|g| PixmapInstance {
+								pos: g.pos,
+								dim: g.dim,
+								uv_pos: g.uv_pos,
+								uv_dim: g.uv_dim,
+							}),
+						);
+					}
+					self.atlas_pixmap_id = Some(pixmap_id);
+				}
+			})
 			.draw_ui(|ui| {
 				let menu_items = &[
 					MenuItem {

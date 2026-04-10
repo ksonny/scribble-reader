@@ -31,7 +31,6 @@ impl FontEntry {
 
 #[derive(Debug)]
 pub(crate) struct FontFallback {
-	#[allow(unused)]
 	pub(crate) units_per_em: I26F6,
 	pub(crate) data: Cow<'static, [u8]>,
 	pub(crate) font_index: u32,

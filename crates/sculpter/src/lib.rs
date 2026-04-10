@@ -13,6 +13,7 @@ pub use crate::fonts::SculpterFonts;
 pub use crate::fonts::SculpterFontsBuilder;
 use crate::lines::StyledLines;
 pub use crate::printer::AtlasImage;
+pub use crate::printer::AtlasVersion;
 use crate::printer::SculpterPrinter;
 use crate::shaper::GlyphPlan;
 use crate::shaper::SculptureShaper;
@@ -384,9 +385,9 @@ impl Sculpter<'_> {
 #[derive(Debug)]
 pub struct DisplayGlyph {
 	pub pos: [f32; 2],
-	pub size: [f32; 2],
+	pub dim: [f32; 2],
 	pub uv_pos: [u32; 2],
-	pub uv_size: [u32; 2],
+	pub uv_dim: [u32; 2],
 }
 
 #[derive(Debug)]

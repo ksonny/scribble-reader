@@ -180,6 +180,7 @@ impl From<DisplayPixmap> for DisplayContent {
 
 #[derive(Debug)]
 pub struct DisplayItem {
+	pub hash: u64,
 	pub pos: Position,
 	pub size: Size,
 	pub content: DisplayContent,
@@ -361,8 +362,9 @@ impl Worker {
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
-							&package,
 							&settings,
+							&package,
+							book.id,
 							current_loc.spine,
 						)?;
 
@@ -405,8 +407,9 @@ impl Worker {
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
-							&package,
 							&settings,
+							&package,
+							book.id,
 							next_spine,
 						)?;
 					}
@@ -417,8 +420,9 @@ impl Worker {
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
-							&package,
 							&settings,
+							&package,
+							book.id,
 							prev_spine,
 						)?;
 					}
@@ -505,8 +509,9 @@ impl Worker {
 		&self,
 		layouter: PageLayouter<'layout>,
 		archive: &mut ZipArchive<R>,
-		package: &Package,
 		settings: &StyleSettings<'settings>,
+		package: &Package,
+		book_id: BookId,
 		spine_index: u32,
 	) -> Result<PageLayouter<'layout>, IllustratorWorkerError> {
 		let resource = package
@@ -518,7 +523,7 @@ impl Worker {
 			resource.as_path(),
 			settings,
 		)?;
-		let (mut layouter, pages) = layouter.layout(settings)?;
+		let (mut layouter, pages) = layouter.layout(settings, book_id)?;
 
 		let mut cache = self.cache.lock().unwrap();
 		cache.insert(spine_index, pages);
