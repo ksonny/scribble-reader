@@ -13,6 +13,7 @@ pub use crate::fonts::SculpterFonts;
 pub use crate::fonts::SculpterFontsBuilder;
 use crate::lines::StyledLines;
 pub use crate::printer::AtlasImage;
+pub use crate::printer::AtlasVersion;
 use crate::printer::SculpterPrinter;
 use crate::shaper::GlyphPlan;
 use crate::shaper::SculptureShaper;

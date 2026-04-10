@@ -1,5 +1,6 @@
 mod active_areas;
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -17,6 +18,7 @@ use scribe::RecordKeeper;
 use scribe::RecordKeeperAssistant;
 use scribe::RecordKeeperError;
 use scribe::config::IllustratorConfig;
+use sculpter::AtlasVersion;
 use sculpter::SculpterFonts;
 use serde::Deserialize;
 use serde::Serialize;
@@ -109,7 +111,8 @@ pub(crate) struct ReaderView {
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
 	statusline: Option<String>,
 
-	atlas_pixmap_id: Option<PixmapId>,
+	atlas_pixmap: Option<(PixmapId, AtlasVersion)>,
+	content_pixmaps: BTreeMap<u64, PixmapId>,
 }
 
 impl ReaderView {
@@ -148,7 +151,8 @@ impl ReaderView {
 			chapters_cards: Default::default(),
 			statusline: String::new().into(),
 
-			atlas_pixmap_id: None,
+			atlas_pixmap: None,
+			content_pixmaps: BTreeMap::new(),
 		};
 
 		view.create_illustrator()?;
@@ -383,13 +387,16 @@ impl ViewHandle for ReaderView {
 			let atlas = cache.atlas();
 			let pixmap_dims = [atlas.width(), atlas.height()].into();
 			let pixmap_data = PixmapData::Luma(atlas.as_raw());
-			let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id {
-				brush.update(pixmap_id, pixmap_dims, pixmap_data)
+			let pixmap_id = if let Some((pixmap_id, version)) = self.atlas_pixmap.take() {
+				if atlas.version() != version {
+					brush.update(pixmap_id, pixmap_dims, pixmap_data)
+				} else {
+					pixmap_id
+				}
 			} else {
+				log::info!("Recreate atlas version {:?}", atlas.version(),);
 				brush.create(pixmap_dims, pixmap_data)
 			};
-			self.atlas_pixmap_id = Some(pixmap_id);
-
 			for item in &content.items {
 				match item {
 					illustrator::DisplayItem {
@@ -398,7 +405,7 @@ impl ViewHandle for ReaderView {
 						..
 					} => {
 						brush.draw(
-							pixmap_id,
+							&pixmap_id,
 							[pos.x, pos.y].into(),
 							content.glyphs.iter().map(|g| PixmapInstance {
 								pos: g.pos,
@@ -409,15 +416,16 @@ impl ViewHandle for ReaderView {
 						);
 					}
 					illustrator::DisplayItem {
+						hash,
 						pos,
 						size,
 						content: illustrator::DisplayContent::Pixmap(content),
-						..
 					} => {
-						// TODO: Reuse pixmap
-						let pixmap_dims = [content.pixmap_width, content.pixmap_height].into();
-						let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
-						let pixmap_id = brush.create(pixmap_dims, pixmap_data);
+						let pixmap_id = self.content_pixmaps.entry(*hash).or_insert_with(|| {
+							let pixmap_dims = [content.pixmap_width, content.pixmap_height].into();
+							let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
+							brush.create(pixmap_dims, pixmap_data)
+						});
 						brush.draw(
 							pixmap_id,
 							[pos.x, pos.y].into(),
@@ -431,6 +439,7 @@ impl ViewHandle for ReaderView {
 					}
 				}
 			}
+			self.atlas_pixmap = Some((pixmap_id, atlas.version()));
 		});
 
 		let working = illustrator.working();

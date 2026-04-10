@@ -159,17 +159,14 @@ impl ViewHandle for ExperimentsView {
 	fn draw(&mut self, painter: Painter<'_>) {
 		painter
 			.draw_pixmap(|brush| {
-				let pixmap_id = if let Some(pixmap_id) = self.block_pixmap_id
-					&& brush.is_pixmap_active(pixmap_id)
-				{
+				let pixmap_id = if let Some(pixmap_id) = self.block_pixmap_id.take() {
 					pixmap_id
 				} else {
 					let image = ImageBuffer::from_pixel(32, 32, image::Rgba([128u8, 0, 0, 128]));
 					brush.create([32; 2].into(), PixmapData::RgbA(image.as_raw()))
 				};
-				self.block_pixmap_id = Some(pixmap_id);
 				brush.draw(
-					pixmap_id,
+					&pixmap_id,
 					[50.; 2].into(),
 					[PixmapInstance {
 						pos: [0.; 2],
@@ -181,11 +178,10 @@ impl ViewHandle for ExperimentsView {
 						uv_dim: [32; 2],
 					}],
 				);
+				self.block_pixmap_id = Some(pixmap_id);
 
 				if let Some((atlas, glyphs)) = &self.render_items {
-					let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id
-						&& brush.is_pixmap_active(pixmap_id)
-					{
+					let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id.take() {
 						pixmap_id
 					} else {
 						brush.create(
@@ -195,7 +191,7 @@ impl ViewHandle for ExperimentsView {
 					};
 					if self.show_atlas {
 						brush.draw(
-							pixmap_id,
+							&pixmap_id,
 							[100.; 2].into(),
 							[PixmapInstance {
 								pos: [0.; 2],
@@ -206,7 +202,7 @@ impl ViewHandle for ExperimentsView {
 						);
 					} else {
 						brush.draw(
-							pixmap_id,
+							&pixmap_id,
 							[100.; 2].into(),
 							glyphs.iter().map(|g| PixmapInstance {
 								pos: g.pos,
@@ -216,6 +212,7 @@ impl ViewHandle for ExperimentsView {
 							}),
 						);
 					}
+					self.atlas_pixmap_id = Some(pixmap_id);
 				}
 			})
 			.draw_ui(|ui| {

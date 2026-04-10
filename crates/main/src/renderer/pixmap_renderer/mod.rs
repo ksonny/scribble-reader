@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use std::mem;
 use std::num::NonZeroU64;
 use std::ops::Range;
+use std::sync::Arc;
+use std::sync::Weak;
 
 use wgpu::Buffer;
 use wgpu::Device;
@@ -38,7 +40,22 @@ pub(crate) enum PixmapData<'data> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PixmapId(u64);
+struct PixmapIdValue(u64);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PixmapId(Arc<PixmapIdValue>);
+
+impl From<PixmapIdValue> for PixmapId {
+	fn from(value: PixmapIdValue) -> Self {
+		Self(Arc::new(value))
+	}
+}
+
+impl AsRef<PixmapIdValue> for PixmapId {
+	fn as_ref(&self) -> &PixmapIdValue {
+		self.0.as_ref()
+	}
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PixmapDimensions([u32; 2]);
@@ -85,6 +102,7 @@ pub(crate) struct PixmapInstance {
 
 #[derive(Debug)]
 pub(crate) struct PixmapTexture {
+	weak_ref: Weak<PixmapIdValue>,
 	pixmap_dim: PixmapDimensions,
 	flags: Flags,
 	texture: Texture,
@@ -92,7 +110,7 @@ pub(crate) struct PixmapTexture {
 
 #[derive(Debug)]
 pub(crate) struct PixmapSpan {
-	pixmap_id: PixmapId,
+	pixmap_id: PixmapIdValue,
 	pos: PaintPosition,
 	range: Range<u32>,
 }
@@ -102,21 +120,25 @@ pub(crate) struct PixmapBrush<'renderer> {
 	queue: &'renderer Queue,
 
 	id_counter: &'renderer mut u64,
-	textures: &'renderer mut BTreeMap<PixmapId, PixmapTexture>,
+	textures: &'renderer mut BTreeMap<PixmapIdValue, PixmapTexture>,
 	spans: &'renderer mut Vec<PixmapSpan>,
 	instances: &'renderer mut Vec<PixmapInstance>,
 }
 
 impl PixmapBrush<'_> {
 	pub(crate) fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapId {
-		let pixmap_id = PixmapId(*self.id_counter);
+		let pixmap_id_value = PixmapIdValue(*self.id_counter);
 		*self.id_counter += 1;
 
 		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
 
+		let pixmap_id: PixmapId = pixmap_id_value.into();
+		let weak_ref = Arc::downgrade(&pixmap_id.0);
+
 		self.textures.insert(
-			pixmap_id,
+			pixmap_id_value,
 			PixmapTexture {
+				weak_ref,
 				pixmap_dim: dims,
 				flags,
 				texture,
@@ -124,10 +146,6 @@ impl PixmapBrush<'_> {
 		);
 
 		pixmap_id
-	}
-
-	pub(crate) fn is_pixmap_active(&self, pixmap_id: PixmapId) -> bool {
-		self.textures.contains_key(&pixmap_id)
 	}
 
 	#[must_use = "Output pixmap_id may be different and needs to be used in subsequent calls to draw!"]
@@ -141,7 +159,7 @@ impl PixmapBrush<'_> {
 			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
 			PixmapData::Luma(_) => TextureFormat::R8Unorm,
 		};
-		if let Some(entry) = self.textures.get_mut(&pixmap_id)
+		if let Some(entry) = self.textures.get_mut(pixmap_id.as_ref())
 			&& entry.pixmap_dim == dims
 			&& entry.texture.format() == format
 		{
@@ -174,13 +192,17 @@ impl PixmapBrush<'_> {
 			pixmap_id
 		} else {
 			// No match found or different parameters, allocate new texture
-			let pixmap_id = PixmapId(*self.id_counter);
+			let pixmap_id_value = PixmapIdValue(*self.id_counter);
 			*self.id_counter += 1;
+
+			let pixmap_id: PixmapId = pixmap_id_value.into();
+			let weak_ref = Arc::downgrade(&pixmap_id.0);
 
 			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
 			self.textures.insert(
-				pixmap_id,
+				pixmap_id_value,
 				PixmapTexture {
+					weak_ref,
 					pixmap_dim: dims,
 					texture,
 					flags,
@@ -192,7 +214,7 @@ impl PixmapBrush<'_> {
 
 	pub(crate) fn draw(
 		&mut self,
-		pixmap_id: PixmapId,
+		pixmap_id: &PixmapId,
 		pos: PaintPosition,
 		instances: impl IntoIterator<Item = PixmapInstance>,
 	) {
@@ -201,7 +223,7 @@ impl PixmapBrush<'_> {
 		let end = self.instances.len() as u32;
 
 		self.spans.push(PixmapSpan {
-			pixmap_id,
+			pixmap_id: *pixmap_id.as_ref(),
 			pos,
 			range: start..end,
 		});
@@ -222,7 +244,7 @@ pub(crate) struct Renderer {
 	screen_height: u32,
 
 	id_counter: u64,
-	textures: BTreeMap<PixmapId, PixmapTexture>,
+	textures: BTreeMap<PixmapIdValue, PixmapTexture>,
 	spans: Vec<PixmapSpan>,
 	vertices: Vec<PixmapInstance>,
 
@@ -466,9 +488,16 @@ impl Renderer {
 		}
 		drop(params_buffers);
 
-		// Drop unused textures
+		// Drop unused and unreferenced textures
 		for pixmap_id in pixmap_id_set {
-			self.textures.remove(&pixmap_id);
+			if self
+				.textures
+				.get(&pixmap_id)
+				.is_some_and(|t| t.weak_ref.upgrade().is_none())
+			{
+				log::info!("Drop pixmap {:?}", pixmap_id);
+				self.textures.remove(&pixmap_id);
+			}
 		}
 	}
 

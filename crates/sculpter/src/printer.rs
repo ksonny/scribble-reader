@@ -24,6 +24,9 @@ use crate::shaper::ShapeFaceRef;
 
 pub const INITIAL_ATLAS_SIZE: u32 = 512;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AtlasVersion(u64);
+
 #[derive(Debug)]
 pub struct AtlasImage {
 	inner: GrayImage,
@@ -40,8 +43,8 @@ impl Default for AtlasImage {
 }
 
 impl AtlasImage {
-	pub fn version(&self) -> u64 {
-		self.version
+	pub fn version(&self) -> AtlasVersion {
+		AtlasVersion(self.version)
 	}
 
 	pub fn height(&self) -> u32 {
