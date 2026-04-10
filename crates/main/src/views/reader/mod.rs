@@ -384,8 +384,7 @@ impl ViewHandle for ReaderView {
 			let pixmap_dims = [atlas.width(), atlas.height()].into();
 			let pixmap_data = PixmapData::Luma(atlas.as_raw());
 			let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id {
-				brush.update(pixmap_id, pixmap_dims, pixmap_data);
-				pixmap_id
+				brush.update(pixmap_id, pixmap_dims, pixmap_data)
 			} else {
 				brush.create(pixmap_dims, pixmap_data)
 			};

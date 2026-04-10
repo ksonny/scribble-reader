@@ -130,49 +130,54 @@ impl PixmapBrush<'_> {
 		self.textures.contains_key(&pixmap_id)
 	}
 
-	pub(crate) fn update(&mut self, pixmap_id: PixmapId, dims: PixmapDimensions, data: PixmapData) {
-		if let Some(entry) = self.textures.get_mut(&pixmap_id) {
-			let format = match data {
-				PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
-				PixmapData::Luma(_) => TextureFormat::R8Unorm,
+	#[must_use = "Output pixmap_id may be different and needs to be used in subsequent calls to draw!"]
+	pub(crate) fn update(
+		&mut self,
+		pixmap_id: PixmapId,
+		dims: PixmapDimensions,
+		data: PixmapData,
+	) -> PixmapId {
+		let format = match data {
+			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
+			PixmapData::Luma(_) => TextureFormat::R8Unorm,
+		};
+		if let Some(entry) = self.textures.get_mut(&pixmap_id)
+			&& entry.pixmap_dim == dims
+			&& entry.texture.format() == format
+		{
+			// Match, write new data to texture
+			let (bytes, flags, data) = match data {
+				PixmapData::RgbA(data) => (4, Flags::empty(), data),
+				PixmapData::Luma(data) => (1, Flags::GRAYSCALE, data),
 			};
-			if entry.pixmap_dim == dims && entry.texture.format() == format {
-				// Maches, write new data to texture
-				let (bytes, flags, data) = match data {
-					PixmapData::RgbA(data) => (4, Flags::empty(), data),
-					PixmapData::Luma(data) => (1, Flags::GRAYSCALE, data),
-				};
-				let size = wgpu::Extent3d {
-					width: dims.width(),
-					height: dims.height(),
-					depth_or_array_layers: 1,
-				};
-				self.queue.write_texture(
-					wgpu::TexelCopyTextureInfo {
-						texture: &entry.texture,
-						mip_level: 0,
-						origin: wgpu::Origin3d::ZERO,
-						aspect: wgpu::TextureAspect::All,
-					},
-					data,
-					wgpu::TexelCopyBufferLayout {
-						offset: 0,
-						bytes_per_row: Some(bytes * dims.width()),
-						rows_per_image: Some(dims.height()),
-					},
-					size,
-				);
-				entry.flags = flags;
-			} else {
-				// Missmatch, allocate new texture
-				let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
-				entry.texture = texture;
-				entry.flags = flags;
-			}
+			let size = wgpu::Extent3d {
+				width: dims.width(),
+				height: dims.height(),
+				depth_or_array_layers: 1,
+			};
+			self.queue.write_texture(
+				wgpu::TexelCopyTextureInfo {
+					texture: &entry.texture,
+					mip_level: 0,
+					origin: wgpu::Origin3d::ZERO,
+					aspect: wgpu::TextureAspect::All,
+				},
+				data,
+				wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(bytes * dims.width()),
+					rows_per_image: Some(dims.height()),
+				},
+				size,
+			);
+			entry.flags = flags;
+			pixmap_id
 		} else {
-			// Not active, reuse id
-			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
+			// No match found or different parameters, allocate new texture
+			let pixmap_id = PixmapId(*self.id_counter);
+			*self.id_counter += 1;
 
+			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
 			self.textures.insert(
 				pixmap_id,
 				PixmapTexture {
@@ -181,6 +186,7 @@ impl PixmapBrush<'_> {
 					flags,
 				},
 			);
+			pixmap_id
 		}
 	}
 
