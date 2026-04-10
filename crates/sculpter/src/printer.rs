@@ -25,28 +25,35 @@ use crate::shaper::ShapeFaceRef;
 pub const INITIAL_ATLAS_SIZE: u32 = 512;
 
 #[derive(Debug)]
-pub struct AtlasImage(GrayImage);
+pub struct AtlasImage {
+	inner: GrayImage,
+	version: u64,
+}
 
 impl Default for AtlasImage {
 	fn default() -> Self {
-		Self(GrayImage::new(INITIAL_ATLAS_SIZE, INITIAL_ATLAS_SIZE))
+		Self {
+			inner: GrayImage::new(INITIAL_ATLAS_SIZE, INITIAL_ATLAS_SIZE),
+			version: 0,
+		}
 	}
 }
 
 impl AtlasImage {
+	pub fn version(&self) -> u64 {
+		self.version
+	}
+
 	pub fn height(&self) -> u32 {
-		let AtlasImage(image) = self;
-		image.height()
+		self.inner.height()
 	}
 
 	pub fn width(&self) -> u32 {
-		let AtlasImage(image) = self;
-		image.width()
+		self.inner.width()
 	}
 
 	pub fn as_raw(&self) -> &[u8] {
-		let AtlasImage(image) = self;
-		image.as_raw()
+		self.inner.as_raw()
 	}
 }
 
@@ -263,7 +270,7 @@ impl<'a> SculpterPrinter<'a> {
 		image: &mut AtlasImage,
 	) -> Result<(), SculpterPrinterError> {
 		if !self.write_queue.is_empty() {
-			let AtlasImage(image) = image;
+			let AtlasImage { inner, version } = image;
 
 			if log::log_enabled!(log::Level::Debug) {
 				self.log_atlas_stats(log::Level::Debug);
@@ -273,13 +280,13 @@ impl<'a> SculpterPrinter<'a> {
 			let atlas_width = atlas_size.width as u32;
 			let atlas_height = atlas_size.height as u32;
 
-			if image.width() != atlas_width || image.height() != atlas_height {
+			if inner.width() != atlas_width || inner.height() != atlas_height {
 				let new_len = image::Luma::<u8>::CHANNEL_COUNT as usize
 					* (atlas_width * atlas_height) as usize;
 
-				let mut data = std::mem::take(image).into_raw();
+				let mut data = std::mem::take(inner).into_raw();
 				data.resize(new_len, 0u8);
-				*image = GrayImage::from_raw(atlas_width, atlas_height, data)
+				*inner = GrayImage::from_raw(atlas_width, atlas_height, data)
 					.ok_or(SculpterPrinterError::ResizeAtlasTextureFailed)?;
 
 				// Glyph resize, refresh all glyphs
@@ -289,11 +296,12 @@ impl<'a> SculpterPrinter<'a> {
 					entry.outline.draw(|x, y, c| {
 						let c = U0F8::saturating_from_num(c);
 						let c = image::Luma([c.to_bits()]);
-						image.put_pixel(x0 + x, y0 + y, c);
+						inner.put_pixel(x0 + x, y0 + y, c);
 					});
 				}
 				self.write_queue.clear();
-			} else {
+				*version += 1;
+			} else if !self.write_queue.is_empty() {
 				for key in self.write_queue.drain(..) {
 					let Some(Some(entry)) = self.glyph_map.get(&key) else {
 						continue;
@@ -304,9 +312,10 @@ impl<'a> SculpterPrinter<'a> {
 					entry.outline.draw(|x, y, c| {
 						let c = U0F8::saturating_from_num(c);
 						let c = image::Luma([c.to_bits()]);
-						image.put_pixel(x0 + x, y0 + y, c);
+						inner.put_pixel(x0 + x, y0 + y, c);
 					});
 				}
+				*version += 1;
 			}
 		}
 		Ok(())

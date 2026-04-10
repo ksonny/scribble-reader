@@ -56,7 +56,6 @@ impl<'a> ElementWrapper<'a> {
 
 #[derive(Debug, Clone)]
 pub struct TextWrapper<'a> {
-	#[allow(dead_code)]
 	pub id: NodeId,
 	pub t: &'a Text,
 }
