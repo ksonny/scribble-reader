@@ -79,15 +79,42 @@ enum ReaderMode {
 	Settings(EditState),
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum Action {
+	None,
+	Previous,
+	Next,
+	Chapters,
+	Settings,
+	Library,
+	Exit,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ViewState {
 	profile: String,
+
+	gestures_disabled: bool,
+	gesture_right: Action,
+	gesture_down: Action,
+	gesture_left: Action,
+	gesture_up: Action,
+	button_up: Action,
+	button_down: Action,
 }
 
 impl Default for ViewState {
 	fn default() -> Self {
 		Self {
 			profile: "serif".to_string(),
+
+			gestures_disabled: false,
+			gesture_right: Action::Next,
+			gesture_down: Action::None,
+			gesture_left: Action::Previous,
+			gesture_up: Action::None,
+			button_up: Action::Next,
+			button_down: Action::Previous,
 		}
 	}
 }
@@ -349,26 +376,17 @@ impl ReaderView {
 	}
 }
 
-#[derive(Clone, Copy)]
-enum Action {
-	Prev,
-	Next,
-	Chapters,
-	Settings,
-	Library,
-	Exit,
-}
-
 impl OnAction<Action> for ReaderView {
 	fn on_action(&mut self, action: Action) {
 		match action {
+			Action::None => {}
 			Action::Library => {
 				self.bell.send_event(AppEvent::OpenLibrary);
 			}
 			Action::Exit => {
 				self.bell.send_event(AppEvent::Exit);
 			}
-			Action::Prev => self.prev_page(),
+			Action::Previous => self.prev_page(),
 			Action::Next => self.next_page(),
 			Action::Chapters => self.toggle_chapters(),
 			Action::Settings => self.toggle_settings(),
@@ -485,7 +503,7 @@ impl ViewHandle for ReaderView {
 					icon: Icon::ArrowLeft,
 					description: "Previous",
 					active: false,
-					action: Action::Prev,
+					action: Action::Previous,
 				}),
 				None,
 				Some(ToolItem {
