@@ -319,6 +319,34 @@ impl ReaderView {
 			ReaderMode::Settings(_) => {}
 		};
 	}
+
+	fn draw_settings(&mut self, ui: &mut egui::Ui) -> egui::InnerResponse<()> {
+		ui.vertical_centered_justified(|ui| {
+			ui.spacing_mut().item_spacing.y = 12.;
+			ui.spacing_mut().button_padding.y = 6.;
+			ui.heading("Profiles");
+			for (profile, _) in self.config.as_ref().iter() {
+				let is_active = self.state.profile.as_str() == profile;
+				if ui
+					.button(
+						UiIcon::new(Icon::FileSliders)
+							.large()
+							.text(profile)
+							.color(if is_active {
+								theme::ACCENT_COLOR
+							} else {
+								Color32::BLACK
+							})
+							.build(),
+					)
+					.clicked()
+				{
+					self.mode = ReaderMode::Settings(EditState::Changed);
+					self.state.profile = profile.clone();
+				}
+			}
+		})
+	}
 }
 
 #[derive(Clone, Copy)]
@@ -538,31 +566,7 @@ impl ViewHandle for ReaderView {
 					if is_open {
 						ui.disable();
 					}
-					ui.vertical_centered_justified(|ui| {
-						ui.spacing_mut().item_spacing.y = 12.;
-						ui.spacing_mut().button_padding.y = 6.;
-						ui.heading("Profiles");
-						for (profile, _) in self.config.as_ref().iter() {
-							let is_active = self.state.profile.as_str() == profile;
-							if ui
-								.button(
-									UiIcon::new(Icon::FileSliders)
-										.large()
-										.text(profile)
-										.color(if is_active {
-											theme::ACCENT_COLOR
-										} else {
-											Color32::BLACK
-										})
-										.build(),
-								)
-								.clicked()
-							{
-								self.mode = ReaderMode::Settings(EditState::Changed);
-								self.state.profile = profile.clone();
-							}
-						}
-					})
+					self.draw_settings(ui)
 				});
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
