@@ -322,39 +322,28 @@ impl ReaderView {
 }
 
 #[derive(Clone, Copy)]
-enum MenuAction {
-	Library,
-	Exit,
-}
-
-#[derive(Clone, Copy)]
-enum ToolAction {
+enum Action {
 	Prev,
 	Next,
 	Chapters,
 	Settings,
+	Library,
+	Exit,
 }
 
-impl OnAction<MenuAction> for ReaderView {
-	fn on_action(&mut self, action: MenuAction) {
+impl OnAction<Action> for ReaderView {
+	fn on_action(&mut self, action: Action) {
 		match action {
-			MenuAction::Library => {
+			Action::Library => {
 				self.bell.send_event(AppEvent::OpenLibrary);
 			}
-			MenuAction::Exit => {
+			Action::Exit => {
 				self.bell.send_event(AppEvent::Exit);
 			}
-		}
-	}
-}
-
-impl OnAction<ToolAction> for ReaderView {
-	fn on_action(&mut self, action: ToolAction) {
-		match action {
-			ToolAction::Prev => self.prev_page(),
-			ToolAction::Next => self.next_page(),
-			ToolAction::Chapters => self.toggle_chapters(),
-			ToolAction::Settings => self.toggle_settings(),
+			Action::Prev => self.prev_page(),
+			Action::Next => self.next_page(),
+			Action::Chapters => self.toggle_chapters(),
+			Action::Settings => self.toggle_settings(),
 		}
 	}
 }
@@ -453,13 +442,13 @@ impl ViewHandle for ReaderView {
 					icon: Icon::Library,
 					description: "Library",
 					active: false,
-					action: MenuAction::Library,
+					action: Action::Library,
 				},
 				MenuItem {
 					icon: Icon::LogOut,
 					description: "Exit",
 					active: false,
-					action: MenuAction::Exit,
+					action: Action::Exit,
 				},
 			];
 			let tool_items = &[
@@ -468,27 +457,27 @@ impl ViewHandle for ReaderView {
 					icon: Icon::ArrowLeft,
 					description: "Previous",
 					active: false,
-					action: ToolAction::Prev,
+					action: Action::Prev,
 				}),
 				None,
 				Some(ToolItem {
 					icon: Icon::ListTree,
 					description: "Chapters",
 					active: matches!(self.mode, ReaderMode::Navigation),
-					action: ToolAction::Chapters,
+					action: Action::Chapters,
 				}),
 				Some(ToolItem {
 					icon: Icon::Cog,
 					description: "Settings",
 					active: matches!(self.mode, ReaderMode::Settings(_)),
-					action: ToolAction::Settings,
+					action: Action::Settings,
 				}),
 				None,
 				Some(ToolItem {
 					icon: Icon::ArrowRight,
 					description: "Next",
 					active: false,
-					action: ToolAction::Next,
+					action: Action::Next,
 				}),
 				None,
 			];
