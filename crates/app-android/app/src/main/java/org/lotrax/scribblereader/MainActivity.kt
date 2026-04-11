@@ -73,9 +73,9 @@ class MainActivity : GameActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         // android-activity filters volume key events in activity glue, so we run a bypass
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            return inputNext()
+            return inputKeyUp()
         } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            return inputPrev()
+            return inputKeyDown()
         } else {
             return super.onKeyDown(keyCode, event)
         }
@@ -215,8 +215,8 @@ class MainActivity : GameActivity() {
     external fun wranglerFile(ticketId: Long, docId: String, fd: Int, size: Long, lastModified: Long)
     external fun wranglerFail(ticketId: Long, reason: String)
 
-    external fun inputNext(): Boolean
-    external fun inputPrev(): Boolean
+    external fun inputKeyUp(): Boolean
+    external fun inputKeyDown(): Boolean
 
     companion object {
         init {

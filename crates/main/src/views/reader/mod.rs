@@ -598,11 +598,11 @@ impl ViewHandle for ReaderView {
 	fn event(&mut self, event: &AppEvent) -> EventResult {
 		match event {
 			AppEvent::BookContentReady(..) => EventResult::RequestRedraw,
-			AppEvent::NavigateNext => {
+			AppEvent::KeyUp => {
 				self.next_page();
 				EventResult::None
 			}
-			AppEvent::NavigatePrevious => {
+			AppEvent::KeyDown => {
 				self.prev_page();
 				EventResult::None
 			}

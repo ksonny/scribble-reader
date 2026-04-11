@@ -454,11 +454,11 @@ impl ViewHandle for LibraryView {
 				self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
 				EventResult::RequestRedraw
 			}
-			AppEvent::NavigateNext => {
+			AppEvent::KeyUp => {
 				self.next_page();
 				EventResult::RequestRedraw
 			}
-			AppEvent::NavigatePrevious => {
+			AppEvent::KeyDown => {
 				self.prev_page();
 				EventResult::RequestRedraw
 			}

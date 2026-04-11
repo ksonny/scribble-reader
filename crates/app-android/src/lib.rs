@@ -85,11 +85,11 @@ const _WRANGLER_NATIVE_METHODS: &[jni::NativeMethod] = &[
 	},
 	native_method! {
 		java_type = "org.lotrax.scribblereader.MainActivity",
-		extern fn input_next() -> jboolean,
+		extern fn input_key_up() -> jboolean,
 	},
 	native_method! {
 		java_type = "org.lotrax.scribblereader.MainActivity",
-		extern fn input_prev() -> jboolean,
+		extern fn input_key_down() -> jboolean,
 	},
 ];
 
@@ -242,21 +242,21 @@ fn wrangler_fail<'local>(
 	Ok(())
 }
 
-fn input_next<'local>(
+fn input_key_up<'local>(
 	_env: &mut Env<'local>,
 	_this: JObject<'local>,
 ) -> Result<jboolean, jni::errors::Error> {
 	let event_loop = EVENT_LOOP_PROXY.wait();
-	event_loop.send_event(AppEvent::NavigateNext).unwrap();
+	event_loop.send_event(AppEvent::KeyUp).unwrap();
 	Ok(true)
 }
 
-fn input_prev<'local>(
+fn input_key_down<'local>(
 	_env: &mut Env<'local>,
 	_this: JObject<'local>,
 ) -> Result<jboolean, jni::errors::Error> {
 	let event_loop = EVENT_LOOP_PROXY.wait();
-	event_loop.send_event(AppEvent::NavigatePrevious).unwrap();
+	event_loop.send_event(AppEvent::KeyDown).unwrap();
 	Ok(true)
 }
 
