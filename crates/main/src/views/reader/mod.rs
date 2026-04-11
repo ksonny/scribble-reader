@@ -31,8 +31,8 @@ use crate::gestures::Gesture;
 use crate::gestures::GestureEvent;
 use crate::renderer::Painter;
 use crate::renderer::pixmap_renderer::PixmapData;
-use crate::renderer::pixmap_renderer::PixmapId;
 use crate::renderer::pixmap_renderer::PixmapInstance;
+use crate::renderer::pixmap_renderer::PixmapRef;
 use crate::ui::MainMenuBar;
 use crate::ui::MenuItem;
 use crate::ui::OnAction;
@@ -111,8 +111,8 @@ pub(crate) struct ReaderView {
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
 	statusline: Option<String>,
 
-	atlas_pixmap: Option<(PixmapId, AtlasVersion)>,
-	content_pixmaps: BTreeMap<u64, PixmapId>,
+	atlas_pixmap: Option<(PixmapRef, AtlasVersion)>,
+	content_pixmaps: BTreeMap<u64, PixmapRef>,
 }
 
 impl ReaderView {
@@ -387,11 +387,11 @@ impl ViewHandle for ReaderView {
 			let atlas = cache.atlas();
 			let pixmap_dims = [atlas.width(), atlas.height()].into();
 			let pixmap_data = PixmapData::Luma(atlas.as_raw());
-			let pixmap_id = if let Some((pixmap_id, version)) = self.atlas_pixmap.take() {
+			let pixmap = if let Some((pixmap, version)) = self.atlas_pixmap.take() {
 				if atlas.version() != version {
-					brush.update(pixmap_id, pixmap_dims, pixmap_data)
+					brush.update(pixmap, pixmap_dims, pixmap_data)
 				} else {
-					pixmap_id
+					pixmap
 				}
 			} else {
 				log::info!("Recreate atlas version {:?}", atlas.version(),);
@@ -405,7 +405,7 @@ impl ViewHandle for ReaderView {
 						..
 					} => {
 						brush.draw(
-							&pixmap_id,
+							&pixmap,
 							[pos.x, pos.y].into(),
 							content.glyphs.iter().map(|g| PixmapInstance {
 								pos: g.pos,
@@ -421,13 +421,13 @@ impl ViewHandle for ReaderView {
 						size,
 						content: illustrator::DisplayContent::Pixmap(content),
 					} => {
-						let pixmap_id = self.content_pixmaps.entry(*hash).or_insert_with(|| {
+						let pixmap = self.content_pixmaps.entry(*hash).or_insert_with(|| {
 							let pixmap_dims = [content.pixmap_width, content.pixmap_height].into();
 							let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
 							brush.create(pixmap_dims, pixmap_data)
 						});
 						brush.draw(
-							pixmap_id,
+							pixmap,
 							[pos.x, pos.y].into(),
 							[PixmapInstance {
 								pos: [0.; 2],
@@ -439,7 +439,7 @@ impl ViewHandle for ReaderView {
 					}
 				}
 			}
-			self.atlas_pixmap = Some((pixmap_id, atlas.version()));
+			self.atlas_pixmap = Some((pixmap, atlas.version()));
 		});
 
 		let working = illustrator.working();

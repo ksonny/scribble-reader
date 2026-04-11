@@ -17,8 +17,8 @@ use crate::AppEvent;
 use crate::gestures::GestureEvent;
 use crate::renderer::Painter;
 use crate::renderer::pixmap_renderer::PixmapData;
-use crate::renderer::pixmap_renderer::PixmapId;
 use crate::renderer::pixmap_renderer::PixmapInstance;
+use crate::renderer::pixmap_renderer::PixmapRef;
 use crate::ui::MainMenuBar;
 use crate::ui::MenuItem;
 use crate::ui::OnAction;
@@ -36,8 +36,8 @@ pub(crate) struct ExperimentsView {
 	fonts: SculpterFonts,
 	show_atlas: bool,
 
-	block_pixmap_id: Option<PixmapId>,
-	atlas_pixmap_id: Option<PixmapId>,
+	block_pixmap: Option<PixmapRef>,
+	atlas_pixmap: Option<PixmapRef>,
 	render_items: Option<(AtlasImage, Vec<DisplayGlyph>)>,
 }
 
@@ -50,8 +50,8 @@ impl ExperimentsView {
 			fonts,
 			show_atlas: false,
 
-			block_pixmap_id: None,
-			atlas_pixmap_id: None,
+			block_pixmap: None,
+			atlas_pixmap: None,
 			render_items: None,
 		}
 	}
@@ -159,14 +159,14 @@ impl ViewHandle for ExperimentsView {
 	fn draw(&mut self, painter: Painter<'_>) {
 		painter
 			.draw_pixmap(|brush| {
-				let pixmap_id = if let Some(pixmap_id) = self.block_pixmap_id.take() {
-					pixmap_id
+				let pixmap = if let Some(pixmap) = self.block_pixmap.take() {
+					pixmap
 				} else {
 					let image = ImageBuffer::from_pixel(32, 32, image::Rgba([128u8, 0, 0, 128]));
 					brush.create([32; 2].into(), PixmapData::RgbA(image.as_raw()))
 				};
 				brush.draw(
-					&pixmap_id,
+					&pixmap,
 					[50.; 2].into(),
 					[PixmapInstance {
 						pos: [0.; 2],
@@ -178,11 +178,11 @@ impl ViewHandle for ExperimentsView {
 						uv_dim: [32; 2],
 					}],
 				);
-				self.block_pixmap_id = Some(pixmap_id);
+				self.block_pixmap = Some(pixmap);
 
 				if let Some((atlas, glyphs)) = &self.render_items {
-					let pixmap_id = if let Some(pixmap_id) = self.atlas_pixmap_id.take() {
-						pixmap_id
+					let pixmap = if let Some(pixmap) = self.atlas_pixmap.take() {
+						pixmap
 					} else {
 						brush.create(
 							[atlas.width(), atlas.height()].into(),
@@ -191,7 +191,7 @@ impl ViewHandle for ExperimentsView {
 					};
 					if self.show_atlas {
 						brush.draw(
-							&pixmap_id,
+							&pixmap,
 							[100.; 2].into(),
 							[PixmapInstance {
 								pos: [0.; 2],
@@ -202,7 +202,7 @@ impl ViewHandle for ExperimentsView {
 						);
 					} else {
 						brush.draw(
-							&pixmap_id,
+							&pixmap,
 							[100.; 2].into(),
 							glyphs.iter().map(|g| PixmapInstance {
 								pos: g.pos,
@@ -212,7 +212,7 @@ impl ViewHandle for ExperimentsView {
 							}),
 						);
 					}
-					self.atlas_pixmap_id = Some(pixmap_id);
+					self.atlas_pixmap = Some(pixmap);
 				}
 			})
 			.draw_ui(|ui| {

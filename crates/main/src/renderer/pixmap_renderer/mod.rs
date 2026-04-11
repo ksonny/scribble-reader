@@ -40,19 +40,19 @@ pub(crate) enum PixmapData<'data> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct PixmapIdValue(u64);
+struct PixmapId(u64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PixmapId(Arc<PixmapIdValue>);
+pub(crate) struct PixmapRef(Arc<PixmapId>);
 
-impl From<PixmapIdValue> for PixmapId {
-	fn from(value: PixmapIdValue) -> Self {
+impl From<PixmapId> for PixmapRef {
+	fn from(value: PixmapId) -> Self {
 		Self(Arc::new(value))
 	}
 }
 
-impl AsRef<PixmapIdValue> for PixmapId {
-	fn as_ref(&self) -> &PixmapIdValue {
+impl AsRef<PixmapId> for PixmapRef {
+	fn as_ref(&self) -> &PixmapId {
 		self.0.as_ref()
 	}
 }
@@ -102,7 +102,7 @@ pub(crate) struct PixmapInstance {
 
 #[derive(Debug)]
 pub(crate) struct PixmapTexture {
-	weak_ref: Weak<PixmapIdValue>,
+	weak_ref: Weak<PixmapId>,
 	pixmap_dim: PixmapDimensions,
 	flags: Flags,
 	texture: Texture,
@@ -110,7 +110,7 @@ pub(crate) struct PixmapTexture {
 
 #[derive(Debug)]
 pub(crate) struct PixmapSpan {
-	pixmap_id: PixmapIdValue,
+	pixmap: PixmapId,
 	pos: PaintPosition,
 	range: Range<u32>,
 }
@@ -120,23 +120,23 @@ pub(crate) struct PixmapBrush<'renderer> {
 	queue: &'renderer Queue,
 
 	id_counter: &'renderer mut u64,
-	textures: &'renderer mut BTreeMap<PixmapIdValue, PixmapTexture>,
+	textures: &'renderer mut BTreeMap<PixmapId, PixmapTexture>,
 	spans: &'renderer mut Vec<PixmapSpan>,
 	instances: &'renderer mut Vec<PixmapInstance>,
 }
 
 impl PixmapBrush<'_> {
-	pub(crate) fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapId {
-		let pixmap_id_value = PixmapIdValue(*self.id_counter);
+	pub(crate) fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
+		let pixmap_id = PixmapId(*self.id_counter);
 		*self.id_counter += 1;
 
 		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
 
-		let pixmap_id: PixmapId = pixmap_id_value.into();
-		let weak_ref = Arc::downgrade(&pixmap_id.0);
+		let pixmap: PixmapRef = pixmap_id.into();
+		let weak_ref = Arc::downgrade(&pixmap.0);
 
 		self.textures.insert(
-			pixmap_id_value,
+			pixmap_id,
 			PixmapTexture {
 				weak_ref,
 				pixmap_dim: dims,
@@ -145,21 +145,21 @@ impl PixmapBrush<'_> {
 			},
 		);
 
-		pixmap_id
+		pixmap
 	}
 
 	#[must_use = "Output pixmap_id may be different and needs to be used in subsequent calls to draw!"]
 	pub(crate) fn update(
 		&mut self,
-		pixmap_id: PixmapId,
+		pixmap: PixmapRef,
 		dims: PixmapDimensions,
 		data: PixmapData,
-	) -> PixmapId {
+	) -> PixmapRef {
 		let format = match data {
 			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
 			PixmapData::Luma(_) => TextureFormat::R8Unorm,
 		};
-		if let Some(entry) = self.textures.get_mut(pixmap_id.as_ref())
+		if let Some(entry) = self.textures.get_mut(pixmap.as_ref())
 			&& entry.pixmap_dim == dims
 			&& entry.texture.format() == format
 		{
@@ -189,18 +189,18 @@ impl PixmapBrush<'_> {
 				size,
 			);
 			entry.flags = flags;
-			pixmap_id
+			pixmap
 		} else {
 			// No match found or different parameters, allocate new texture
-			let pixmap_id_value = PixmapIdValue(*self.id_counter);
+			let pixmap_id = PixmapId(*self.id_counter);
 			*self.id_counter += 1;
 
-			let pixmap_id: PixmapId = pixmap_id_value.into();
-			let weak_ref = Arc::downgrade(&pixmap_id.0);
+			let pixmap: PixmapRef = pixmap_id.into();
+			let weak_ref = Arc::downgrade(&pixmap.0);
 
 			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
 			self.textures.insert(
-				pixmap_id_value,
+				pixmap_id,
 				PixmapTexture {
 					weak_ref,
 					pixmap_dim: dims,
@@ -208,13 +208,13 @@ impl PixmapBrush<'_> {
 					flags,
 				},
 			);
-			pixmap_id
+			pixmap
 		}
 	}
 
 	pub(crate) fn draw(
 		&mut self,
-		pixmap_id: &PixmapId,
+		pixmap: &PixmapRef,
 		pos: PaintPosition,
 		instances: impl IntoIterator<Item = PixmapInstance>,
 	) {
@@ -223,7 +223,7 @@ impl PixmapBrush<'_> {
 		let end = self.instances.len() as u32;
 
 		self.spans.push(PixmapSpan {
-			pixmap_id: *pixmap_id.as_ref(),
+			pixmap: *pixmap.as_ref(),
 			pos,
 			range: start..end,
 		});
@@ -244,7 +244,7 @@ pub(crate) struct Renderer {
 	screen_height: u32,
 
 	id_counter: u64,
-	textures: BTreeMap<PixmapIdValue, PixmapTexture>,
+	textures: BTreeMap<PixmapId, PixmapTexture>,
 	spans: Vec<PixmapSpan>,
 	vertices: Vec<PixmapInstance>,
 
@@ -437,11 +437,11 @@ impl Renderer {
 		let mut pixmap_id_set = self.textures.keys().cloned().collect::<BTreeSet<_>>();
 		let mut params_buffers = self.batches_inactive.drain(..).map(|e| e.params_buffer);
 		for span in &self.spans {
-			let Some(entry) = self.textures.get(&span.pixmap_id) else {
-				log::warn!("Span pointing at non-existing pixmap: {:?}", span.pixmap_id);
+			let Some(entry) = self.textures.get(&span.pixmap) else {
+				log::warn!("Span pointing at non-existing pixmap: {:?}", span.pixmap);
 				continue;
 			};
-			pixmap_id_set.remove(&span.pixmap_id);
+			pixmap_id_set.remove(&span.pixmap);
 
 			let params = Params {
 				screen_resolution: [self.screen_width, self.screen_height],
