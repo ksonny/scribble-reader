@@ -47,7 +47,7 @@ ttf-parser = "0.25.1"
 wgpu = "29.0.1"
 winit = "0.30.13"
 xdg = "3.0.0"
-zip = "8.5.0"
+zip = "8.5.1"
 
 illustrator = { path = "./crates/illustrator" }
 scribble-reader = { path = "./crates/main" }
