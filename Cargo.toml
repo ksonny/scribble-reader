@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/main", "crates/illustrator", "crates/scribe", "crates/sculpter", "crates/app-android", "crates/wrangler", "crates/scribe-epub"]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 authors = ["ksonny <ksonny@lotrax.org>"]
 edition = "2024"
 
