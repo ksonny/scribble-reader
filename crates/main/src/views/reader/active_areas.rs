@@ -2,9 +2,9 @@ use crate::gestures;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ActiveAreaAction {
-	ToggleUi,
-	PreviousPage,
-	NextPage,
+	Main,
+	Left,
+	Right,
 }
 
 #[derive(Debug)]
@@ -36,21 +36,21 @@ impl ActiveAreas {
 		let forth = width / 4;
 		Self([
 			ActiveArea {
-				action: ActiveAreaAction::PreviousPage,
+				action: ActiveAreaAction::Left,
 				x_min: 0,
 				x_max: forth,
 				y_min: 0,
 				y_max: height,
 			},
 			ActiveArea {
-				action: ActiveAreaAction::ToggleUi,
+				action: ActiveAreaAction::Main,
 				x_min: forth,
 				x_max: 3 * forth,
 				y_min: 0,
 				y_max: height,
 			},
 			ActiveArea {
-				action: ActiveAreaAction::NextPage,
+				action: ActiveAreaAction::Right,
 				x_min: 3 * forth,
 				x_max: width,
 				y_min: 0,

@@ -1,9 +1,12 @@
 mod active_areas;
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::fmt::Display;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use egui::Button;
 use egui::Color32;
 use egui::Rect;
 use egui::RichText;
@@ -67,27 +70,71 @@ pub(crate) enum ReaderIllustratorError {
 	RecordKeeper(#[from] RecordKeeperError),
 }
 
-enum EditState {
-	Unchanged,
-	Changed,
-}
-
+#[derive(PartialEq, Eq)]
 enum ReaderMode {
 	ReadNoUi,
 	Read,
 	Navigation,
-	Settings(EditState),
+	ActionSettings,
+	ProfileSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum Action {
+	None,
+	Next,
+	Previous,
+	Chapters,
+	Settings,
+	Library,
+	Exit,
+}
+
+impl Display for Action {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Action::None => write!(f, "None"),
+			Action::Next => write!(f, "Next"),
+			Action::Previous => write!(f, "Previous"),
+			Action::Chapters => write!(f, "Chapters"),
+			Action::Settings => write!(f, "Settings"),
+			Action::Library => write!(f, "Library"),
+			Action::Exit => write!(f, "Exit"),
+		}
+	}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ViewState {
 	profile: String,
+
+	swipe_right: Action,
+	swipe_down: Action,
+	swipe_left: Action,
+	swipe_up: Action,
+	action_key_up: Action,
+	action_key_down: Action,
+	action_area_right: Action,
+	action_area_left: Action,
+
+	testing: bool,
 }
 
 impl Default for ViewState {
 	fn default() -> Self {
 		Self {
 			profile: "serif".to_string(),
+
+			swipe_right: Action::Previous,
+			swipe_down: Action::None,
+			swipe_left: Action::Next,
+			swipe_up: Action::None,
+			action_key_up: Action::Next,
+			action_key_down: Action::Previous,
+			action_area_right: Action::Next,
+			action_area_left: Action::Previous,
+
+			testing: true,
 		}
 	}
 }
@@ -101,8 +148,8 @@ pub(crate) struct ReaderView {
 	book_id: BookId,
 
 	records: RecordKeeperAssistant,
-	state: ViewState,
 	viewport: Viewport,
+	state: ViewState,
 
 	illustrator: Option<IllustratorAssistant>,
 	mode: ReaderMode,
@@ -129,7 +176,9 @@ impl ReaderView {
 	) -> Result<Self, ReaderViewCreateError> {
 		let records = keeper.assistant()?;
 		let state: ViewState = records
-			.fetch_view_state(Self::STATE_KEY)?
+			.fetch_view_state(Self::STATE_KEY)
+			.inspect_err(|e| log::warn!("Error fetching state: {e}"))
+			.unwrap_or_default()
 			.unwrap_or_default();
 
 		let mut view = Self {
@@ -141,8 +190,8 @@ impl ReaderView {
 			book_id,
 
 			records,
-			state,
 			viewport,
+			state,
 
 			illustrator: None,
 			mode: ReaderMode::ReadNoUi,
@@ -164,6 +213,7 @@ impl ReaderView {
 		if let Some(illustrator) = self.illustrator.take() {
 			log::debug!("Stop running illustrator");
 			illustrator.shutdown();
+			self.atlas_pixmap.take();
 		}
 		let profile = self
 			.config
@@ -229,18 +279,12 @@ impl ReaderView {
 	fn toggle_settings(&mut self) {
 		match self.mode {
 			ReaderMode::Read => {
-				self.mode = ReaderMode::Settings(EditState::Unchanged);
+				self.mode = ReaderMode::ActionSettings;
 			}
-			ReaderMode::Settings(EditState::Changed) => {
-				if let Err(e) = self.create_illustrator() {
-					log::error!("Failed to create illustrator: {e}");
-				}
-				if let Err(e) = self.records.record_view_state(Self::STATE_KEY, &self.state) {
-					log::warn!("Error saving state: {e}");
-				}
+			ReaderMode::ActionSettings => {
 				self.mode = ReaderMode::Read;
 			}
-			ReaderMode::Settings(EditState::Unchanged) => {
+			ReaderMode::ProfileSettings => {
 				self.mode = ReaderMode::Read;
 			}
 			_ => {}
@@ -278,7 +322,8 @@ impl ReaderView {
 					}
 				}
 			}
-			ReaderMode::Settings(_) => {}
+			ReaderMode::ActionSettings => {}
+			ReaderMode::ProfileSettings => {}
 		};
 	}
 
@@ -316,45 +361,26 @@ impl ReaderView {
 					self.chapters_page = page;
 				}
 			}
-			ReaderMode::Settings(_) => {}
+			ReaderMode::ActionSettings => {}
+			ReaderMode::ProfileSettings => {}
 		};
 	}
 }
 
-#[derive(Clone, Copy)]
-enum MenuAction {
-	Library,
-	Exit,
-}
-
-#[derive(Clone, Copy)]
-enum ToolAction {
-	Prev,
-	Next,
-	Chapters,
-	Settings,
-}
-
-impl OnAction<MenuAction> for ReaderView {
-	fn on_action(&mut self, action: MenuAction) {
+impl OnAction<Action> for ReaderView {
+	fn on_action(&mut self, action: Action) {
 		match action {
-			MenuAction::Library => {
+			Action::None => {}
+			Action::Library => {
 				self.bell.send_event(AppEvent::OpenLibrary);
 			}
-			MenuAction::Exit => {
+			Action::Exit => {
 				self.bell.send_event(AppEvent::Exit);
 			}
-		}
-	}
-}
-
-impl OnAction<ToolAction> for ReaderView {
-	fn on_action(&mut self, action: ToolAction) {
-		match action {
-			ToolAction::Prev => self.prev_page(),
-			ToolAction::Next => self.next_page(),
-			ToolAction::Chapters => self.toggle_chapters(),
-			ToolAction::Settings => self.toggle_settings(),
+			Action::Previous => self.prev_page(),
+			Action::Next => self.next_page(),
+			Action::Chapters => self.toggle_chapters(),
+			Action::Settings => self.toggle_settings(),
 		}
 	}
 }
@@ -453,13 +479,13 @@ impl ViewHandle for ReaderView {
 					icon: Icon::Library,
 					description: "Library",
 					active: false,
-					action: MenuAction::Library,
+					action: Action::Library,
 				},
 				MenuItem {
 					icon: Icon::LogOut,
 					description: "Exit",
 					active: false,
-					action: MenuAction::Exit,
+					action: Action::Exit,
 				},
 			];
 			let tool_items = &[
@@ -468,27 +494,27 @@ impl ViewHandle for ReaderView {
 					icon: Icon::ArrowLeft,
 					description: "Previous",
 					active: false,
-					action: ToolAction::Prev,
+					action: Action::Previous,
 				}),
 				None,
 				Some(ToolItem {
 					icon: Icon::ListTree,
 					description: "Chapters",
 					active: matches!(self.mode, ReaderMode::Navigation),
-					action: ToolAction::Chapters,
+					action: Action::Chapters,
 				}),
 				Some(ToolItem {
 					icon: Icon::Cog,
 					description: "Settings",
-					active: matches!(self.mode, ReaderMode::Settings(_)),
-					action: ToolAction::Settings,
+					active: matches!(self.mode, ReaderMode::ActionSettings),
+					action: Action::Settings,
 				}),
 				None,
 				Some(ToolItem {
 					icon: Icon::ArrowRight,
 					description: "Next",
 					active: false,
-					action: ToolAction::Next,
+					action: Action::Next,
 				}),
 				None,
 			];
@@ -544,36 +570,28 @@ impl ViewHandle for ReaderView {
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
 				}
-			} else if matches!(self.mode, ReaderMode::Settings(_)) {
+			} else if matches!(
+				self.mode,
+				ReaderMode::ActionSettings | ReaderMode::ProfileSettings
+			) {
 				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
-					ui.vertical_centered_justified(|ui| {
-						ui.spacing_mut().item_spacing.y = 12.;
-						ui.spacing_mut().button_padding.y = 6.;
-						ui.heading("Profiles");
-						for (profile, _) in self.config.as_ref().iter() {
-							let is_active = self.state.profile.as_str() == profile;
-							if ui
-								.button(
-									UiIcon::new(Icon::FileSliders)
-										.large()
-										.text(profile)
-										.color(if is_active {
-											theme::ACCENT_COLOR
-										} else {
-											Color32::BLACK
-										})
-										.build(),
-								)
-								.clicked()
-							{
-								self.mode = ReaderMode::Settings(EditState::Changed);
-								self.state.profile = profile.clone();
-							}
-						}
-					})
+
+					let mut change = SettingsChange::default();
+					ui.add(SettingsPanelUi::new(self, &mut change));
+
+					if change.profile_changed
+						&& let Err(e) = self.create_illustrator()
+					{
+						log::error!("Failed to create illustrator: {e}");
+					}
+					if change.state_changed
+						&& let Err(e) = self.records.record_view_state(Self::STATE_KEY, &self.state)
+					{
+						log::warn!("Error saving state: {e}");
+					}
 				});
 				if !is_open {
 					self.active_rects.push(central_panel.response.interact_rect);
@@ -587,12 +605,12 @@ impl ViewHandle for ReaderView {
 	fn event(&mut self, event: &AppEvent) -> EventResult {
 		match event {
 			AppEvent::BookContentReady(..) => EventResult::RequestRedraw,
-			AppEvent::NavigateNext => {
-				self.next_page();
+			AppEvent::KeyUp => {
+				self.on_action(self.state.action_key_up);
 				EventResult::None
 			}
-			AppEvent::NavigatePrevious => {
-				self.prev_page();
+			AppEvent::KeyDown => {
+				self.on_action(self.state.action_key_down);
 				EventResult::None
 			}
 			_ => EventResult::None,
@@ -611,9 +629,9 @@ impl ViewHandle for ReaderView {
 						ActiveAreas::new(self.viewport.screen_width, self.viewport.screen_height);
 					if let Some(action) = areas.action(event.loc) {
 						match action {
-							ActiveAreaAction::ToggleUi => self.toggle_ui(),
-							ActiveAreaAction::PreviousPage => self.prev_page(),
-							ActiveAreaAction::NextPage => self.next_page(),
+							ActiveAreaAction::Main => self.toggle_ui(),
+							ActiveAreaAction::Left => self.on_action(self.state.action_area_left),
+							ActiveAreaAction::Right => self.on_action(self.state.action_area_right),
 						};
 						GestureResult::Consumed
 					} else {
@@ -622,11 +640,19 @@ impl ViewHandle for ReaderView {
 				}
 			}
 			Gesture::Swipe(Direction::Right, _) => {
-				self.prev_page();
+				self.on_action(self.state.swipe_right);
+				GestureResult::Consumed
+			}
+			Gesture::Swipe(Direction::Down, _) => {
+				self.on_action(self.state.swipe_down);
 				GestureResult::Consumed
 			}
 			Gesture::Swipe(Direction::Left, _) => {
-				self.next_page();
+				self.on_action(self.state.swipe_left);
+				GestureResult::Consumed
+			}
+			Gesture::Swipe(Direction::Up, _) => {
+				self.on_action(self.state.swipe_up);
 				GestureResult::Consumed
 			}
 			_ => GestureResult::Unhandled,
@@ -653,7 +679,210 @@ impl ViewHandle for ReaderView {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Default)]
+struct SettingsChange {
+	state_changed: bool,
+	profile_changed: bool,
+}
+
+pub(crate) struct SettingsPanelUi<'a> {
+	config: &'a IllustratorConfig,
+	mode: &'a mut ReaderMode,
+	state: &'a mut ViewState,
+	change: &'a mut SettingsChange,
+}
+
+impl<'a> SettingsPanelUi<'a> {
+	fn new(reader: &'a mut ReaderView, change: &'a mut SettingsChange) -> Self {
+		Self {
+			config: &reader.config,
+			mode: &mut reader.mode,
+			state: &mut reader.state,
+			change,
+		}
+	}
+}
+
+impl egui::Widget for SettingsPanelUi<'_> {
+	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		ui.style_mut().visuals.widgets.open.bg_stroke.color = Color32::TRANSPARENT;
+		ui.style_mut().visuals.widgets.active.bg_stroke.color = Color32::TRANSPARENT;
+		ui.style_mut().visuals.widgets.inactive.bg_stroke.color = Color32::TRANSPARENT;
+		ui.style_mut().visuals.widgets.hovered.bg_stroke.color = Color32::TRANSPARENT;
+
+		ui.horizontal(|ui| {
+			ui.selectable_value(
+				self.mode,
+				ReaderMode::ActionSettings,
+				RichText::new("Actions").size(theme::L_SIZE),
+			);
+			ui.selectable_value(
+				self.mode,
+				ReaderMode::ProfileSettings,
+				RichText::new("Profile").size(theme::L_SIZE),
+			);
+		});
+
+		ui.spacing_mut().item_spacing.y = 8.;
+		ui.spacing_mut().button_padding.y = 8.;
+
+		if *self.mode == ReaderMode::ActionSettings {
+			ui.vertical_centered_justified(|ui| {
+				ui.horizontal(|ui| {
+					let actions = [
+						Action::None,
+						Action::Next,
+						Action::Previous,
+						Action::Chapters,
+						Action::Settings,
+						Action::Library,
+					];
+					ui.vertical(|ui| {
+						ui.label(RichText::new("").size(theme::M_SIZE));
+						ui.add_space(5.);
+						ui.label(RichText::new("Swipe Right").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Swipe Left").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Swipe Up").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Swipe Down").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Key Up").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Key Down").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Tap Right").size(theme::M_SIZE));
+						ui.add_space(10.5);
+						ui.label(RichText::new("Tap Left").size(theme::M_SIZE));
+					});
+					ui.columns(actions.len(), |columns| {
+						for (ui, action) in columns.iter_mut().zip(actions) {
+							ui.vertical_centered_justified(|ui| {
+								ui.label(RichText::new(action.to_string()).size(theme::M_SIZE));
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.swipe_right,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.swipe_left,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(&mut self.state.swipe_up, action))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.swipe_down,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.action_key_up,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.action_key_down,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.action_area_right,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+								if ui
+									.add(ActionSelectableUi::new(
+										&mut self.state.action_area_left,
+										action,
+									))
+									.changed()
+								{
+									self.change.state_changed = true;
+								}
+							});
+						}
+					})
+				});
+			})
+			.response
+		} else {
+			ui.vertical_centered_justified(|ui| {
+				for (profile, _) in self.config.as_ref().iter() {
+					let is_active = self.state.profile.as_str() == profile;
+					let response = ui.add(
+						Button::new(RichText::new(profile).size(theme::M_SIZE)).selected(is_active),
+					);
+					if response.clicked() {
+						self.state.profile = profile.clone();
+						self.change.state_changed = true;
+						self.change.profile_changed = true;
+					}
+				}
+			})
+			.response
+		}
+	}
+}
+
+struct ActionSelectableUi<'a> {
+	current_value: &'a mut Action,
+	alternative: Action,
+}
+
+impl<'a> ActionSelectableUi<'a> {
+	fn new(current_value: &'a mut Action, alternative: Action) -> Self {
+		Self {
+			current_value,
+			alternative,
+		}
+	}
+}
+
+impl egui::Widget for ActionSelectableUi<'_> {
+	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		let icon = if *self.current_value == self.alternative {
+			UiIcon::new(Icon::CheckSquare).build()
+		} else {
+			UiIcon::new(Icon::Square).build()
+		};
+		let response = ui.add(Button::new(icon).selected(*self.current_value == self.alternative));
+		if response.clicked() {
+			*self.current_value = self.alternative;
+		}
+		response
+	}
+}
+
 pub(crate) struct ChapterCard {
 	location: Location,
 	title: Arc<String>,

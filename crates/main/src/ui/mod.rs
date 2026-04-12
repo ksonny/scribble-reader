@@ -5,6 +5,7 @@ use std::time::Instant;
 use egui::Align;
 use egui::Color32;
 use egui::Context;
+use egui::CornerRadius;
 use egui::FontFamily;
 use egui::FontId;
 use egui::Layout;
@@ -16,6 +17,7 @@ use egui::TextWrapMode;
 use egui::Vec2;
 use egui::ViewportId;
 use egui::epaint::text::FontInsert;
+use egui::style::WidgetVisuals;
 use egui::text::LayoutJob;
 use lucide_icons::Icon;
 
@@ -36,26 +38,50 @@ pub fn create_egui_ctx() -> Context {
 	egui_ctx.set_theme(egui::Theme::Light);
 	egui_ctx.global_style_mut(|style| {
 		style.animation_time = 0.0;
+		style.spacing.interact_size = Vec2::ZERO;
 		style.spacing.item_spacing = Vec2::new(5.0, 5.0);
+		style.spacing.button_padding = Vec2::new(2.0, 2.0);
 		style.wrap_mode = Some(TextWrapMode::Truncate);
-		style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.open.weak_bg_fill = Color32::TRANSPARENT;
-		style.visuals.widgets.open.bg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-		style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.active.expansion = 0.0;
-		style.visuals.widgets.active.weak_bg_fill = Color32::LIGHT_GRAY;
-		style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.hovered.expansion = 2.0;
-		style.visuals.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
-		style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::BLACK);
-		style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::BLACK);
+		style.visuals.widgets.noninteractive = WidgetVisuals {
+			bg_fill: Color32::BLACK,
+			weak_bg_fill: Color32::TRANSPARENT,
+			bg_stroke: Stroke::new(1.0, Color32::BLACK),
+			corner_radius: CornerRadius::from(3.0),
+			fg_stroke: Stroke::new(1.0, Color32::BLACK),
+			expansion: 0.0,
+		};
+		style.visuals.widgets.open = WidgetVisuals {
+			bg_fill: Color32::BLACK,
+			weak_bg_fill: Color32::TRANSPARENT,
+			bg_stroke: Stroke::new(1.0, Color32::BLACK),
+			corner_radius: CornerRadius::from(3.0),
+			fg_stroke: Stroke::new(1.0, Color32::BLACK),
+			expansion: 0.0,
+		};
+		style.visuals.widgets.inactive = WidgetVisuals {
+			bg_fill: Color32::BLACK,
+			weak_bg_fill: Color32::TRANSPARENT,
+			bg_stroke: Stroke::new(1.0, Color32::BLACK),
+			corner_radius: CornerRadius::from(3.0),
+			fg_stroke: Stroke::new(1.0, Color32::BLACK),
+			expansion: 0.0,
+		};
+		style.visuals.widgets.active = WidgetVisuals {
+			bg_fill: Color32::LIGHT_GRAY,
+			weak_bg_fill: Color32::TRANSPARENT,
+			bg_stroke: Stroke::new(1.0, Color32::BLACK),
+			corner_radius: CornerRadius::from(3.0),
+			fg_stroke: Stroke::new(1.0, Color32::BLACK),
+			expansion: 0.0,
+		};
+		style.visuals.widgets.hovered = WidgetVisuals {
+			bg_fill: Color32::BLACK,
+			weak_bg_fill: Color32::TRANSPARENT,
+			bg_stroke: Stroke::new(1.0, Color32::BLACK),
+			corner_radius: CornerRadius::from(3.0),
+			fg_stroke: Stroke::new(1.0, Color32::BLACK),
+			expansion: 0.0,
+		};
 
 		style.text_styles = [
 			(
@@ -310,16 +336,11 @@ impl<A: Copy, H: OnAction<A>> MainMenuBar<'_, A, H> {
 
 						let menu = ui.menu_button(UiIcon::new(Icon::Menu).large().build(), |ui| {
 							for item in self.items {
-								let color = if item.active {
-									theme::ACCENT_COLOR
-								} else {
-									Color32::BLACK
-								};
-								let button = ui.button(
+								let button = ui.selectable_label(
+									item.active,
 									UiIcon::new(item.icon)
 										.large()
 										.text(item.description)
-										.color(color)
 										.build(),
 								);
 								if button.clicked() {
@@ -400,15 +421,12 @@ impl<A: Copy, H: OnAction<A>> ToolBar<'_, A, H> {
 								Layout::centered_and_justified(egui::Direction::LeftToRight),
 								|ui| {
 									ui.set_height(ui.available_width() * 0.5);
-									let color = if item.active {
-										theme::ACCENT_COLOR
-									} else {
-										Color32::BLACK
-									};
-									let button = ui.button(
-										UiIcon::new(item.icon).xlarge().color(color).build(),
+									let response = ui.add(
+										egui::Button::new(UiIcon::new(item.icon).xlarge().build())
+											.selected(item.active)
+											.frame(true),
 									);
-									if button.clicked() {
+									if response.clicked() {
 										self.handler.on_action(item.action);
 									}
 								},

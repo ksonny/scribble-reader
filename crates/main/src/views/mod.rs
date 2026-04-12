@@ -115,7 +115,7 @@ impl AppView {
 			Ok(view) => self.view = Views::Reader(view),
 			Err(e) => {
 				log::error!("Failed to create reader: {e}");
-				self.view = Views::Error(format!("Library view error: {}", e));
+				self.view = Views::Error(format!("Reader view error: {}", e));
 			}
 		};
 	}
@@ -135,29 +135,27 @@ impl ViewHandle for AppView {
 		match &mut self.view {
 			Views::Loading => {
 				painter.draw_ui(|ui| {
-					ui.vertical(|ui| {
-						ui.centered_and_justified(|ui| {
-							ui.label(
-								UiIcon::new(lucide_icons::Icon::RefreshCw)
-									.large()
-									.text("Loading")
-									.build(),
-							);
-						});
+					ui.centered_and_justified(|ui| {
+						ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+						ui.label(
+							UiIcon::new(lucide_icons::Icon::RefreshCw)
+								.large()
+								.text("Loading")
+								.build(),
+						);
 					});
 				});
 			}
 			Views::Error(error) => {
 				painter.draw_ui(|ui| {
-					ui.vertical(|ui| {
-						ui.centered_and_justified(|ui| {
-							ui.label(
-								UiIcon::new(lucide_icons::Icon::AlertTriangle)
-									.large()
-									.text(error.as_str())
-									.build(),
-							);
-						});
+					ui.centered_and_justified(|ui| {
+						ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+						ui.label(
+							UiIcon::new(lucide_icons::Icon::AlertTriangle)
+								.large()
+								.text(error)
+								.build(),
+						);
 					});
 				});
 			}
