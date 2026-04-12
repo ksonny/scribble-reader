@@ -838,20 +838,10 @@ impl egui::Widget for SettingsPanelUi<'_> {
 			ui.vertical_centered_justified(|ui| {
 				for (profile, _) in self.config.as_ref().iter() {
 					let is_active = self.state.profile.as_str() == profile;
-					if ui
-						.button(
-							UiIcon::new(Icon::FileSliders)
-								.size(theme::M_SIZE)
-								.text(profile)
-								.color(if is_active {
-									theme::ACCENT_COLOR
-								} else {
-									Color32::BLACK
-								})
-								.build(),
-						)
-						.clicked()
-					{
+					let response = ui.add(
+						Button::new(RichText::new(profile).size(theme::M_SIZE)).selected(is_active),
+					);
+					if response.clicked() {
 						self.state.profile = profile.clone();
 						self.change.state_changed = true;
 						self.change.profile_changed = true;
