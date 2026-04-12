@@ -213,6 +213,7 @@ impl ReaderView {
 		if let Some(illustrator) = self.illustrator.take() {
 			log::debug!("Stop running illustrator");
 			illustrator.shutdown();
+			self.atlas_pixmap.take();
 		}
 		let profile = self
 			.config
