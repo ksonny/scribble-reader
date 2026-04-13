@@ -442,16 +442,17 @@ impl ViewHandle for ReaderView {
 						);
 					}
 					illustrator::DisplayItem {
-						hash,
 						pos,
 						size,
 						content: illustrator::DisplayContent::Pixmap(content),
 					} => {
-						let pixmap = self.content_pixmaps.entry(*hash).or_insert_with(|| {
-							let pixmap_dims = [content.pixmap_width, content.pixmap_height].into();
-							let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
-							brush.create(pixmap_dims, pixmap_data)
-						});
+						let pixmap =
+							self.content_pixmaps.entry(content.hash).or_insert_with(|| {
+								let pixmap_dims =
+									[content.pixmap_width, content.pixmap_height].into();
+								let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
+								brush.create(pixmap_dims, pixmap_data)
+							});
 						brush.draw(
 							pixmap,
 							[pos.x, pos.y].into(),

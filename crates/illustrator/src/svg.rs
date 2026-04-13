@@ -16,14 +16,13 @@ use crate::html_parser::TextWrapper;
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorSvgError {
 	#[error(transparent)]
-	Usvg(#[from] resvg::usvg::Error),
-	#[error(transparent)]
 	Write(#[from] fmt::Error),
 }
 
-pub(crate) struct SvgRender {
+pub(crate) struct SvgContent {
+	pub(crate) hash: u64,
 	pub(crate) scale: f32,
-	pub(crate) svg: usvg::Tree,
+	pub(crate) tree: usvg::Tree,
 }
 
 pub(crate) fn svg_options<'a, R: io::Seek + io::Read + Sync + Send>(
@@ -129,12 +128,11 @@ fn loab_sub_svg(data: &[u8], opts: &usvg::Options<'_>) -> Option<usvg::ImageKind
 	Some(usvg::ImageKind::SVG(tree))
 }
 
-pub(crate) fn read_svg(
-	buf: &mut String,
+pub(crate) fn read_svg<'a>(
+	buf: &'a mut String,
 	el: &html_parser::ElementWrapper<'_>,
 	node_iter: &mut html_parser::NodeTreeIter<'_>,
-	options: &usvg::Options,
-) -> Result<usvg::Tree, IllustratorSvgError> {
+) -> Result<&'a str, IllustratorSvgError> {
 	buf.clear();
 	write_begin_node(buf, el.el)?;
 	for edge in node_iter.by_ref() {
@@ -154,8 +152,7 @@ pub(crate) fn read_svg(
 	write_end_node(buf, el.name())?;
 	log::debug!("Svg node '''\n{buf}\n'''");
 
-	let svg = usvg::Tree::from_str(buf.as_str(), options)?;
-	Ok(svg)
+	Ok(buf.as_str())
 }
 
 fn write_begin_node<W: fmt::Write>(w: &mut W, el: &html_parser::Element) -> Result<(), fmt::Error> {

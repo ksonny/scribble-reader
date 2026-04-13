@@ -155,6 +155,7 @@ impl From<taffy::Size<f32>> for Size {
 
 #[derive(Debug)]
 pub struct DisplayPixmap {
+	pub hash: u64,
 	pub pixmap_width: u32,
 	pub pixmap_height: u32,
 	pub pixmap_rgba: Vec<u8>,
@@ -180,7 +181,6 @@ impl From<DisplayPixmap> for DisplayContent {
 
 #[derive(Debug)]
 pub struct DisplayItem {
-	pub hash: u64,
 	pub pos: Position,
 	pub size: Size,
 	pub content: DisplayContent,
@@ -364,7 +364,6 @@ impl Worker {
 							&mut archive,
 							&settings,
 							&package,
-							book.id,
 							current_loc.spine,
 						)?;
 
@@ -409,7 +408,6 @@ impl Worker {
 							&mut archive,
 							&settings,
 							&package,
-							book.id,
 							next_spine,
 						)?;
 					}
@@ -422,7 +420,6 @@ impl Worker {
 							&mut archive,
 							&settings,
 							&package,
-							book.id,
 							prev_spine,
 						)?;
 					}
@@ -511,7 +508,6 @@ impl Worker {
 		archive: &mut ZipArchive<R>,
 		settings: &StyleSettings<'settings>,
 		package: &Package,
-		book_id: BookId,
 		spine_index: u32,
 	) -> Result<PageLayouter<'layout>, IllustratorWorkerError> {
 		let resource = package
@@ -523,7 +519,7 @@ impl Worker {
 			resource.as_path(),
 			settings,
 		)?;
-		let (mut layouter, pages) = layouter.layout(settings, book_id)?;
+		let (mut layouter, pages) = layouter.layout(settings)?;
 
 		let mut cache = self.cache.lock().unwrap();
 		cache.insert(spine_index, pages);

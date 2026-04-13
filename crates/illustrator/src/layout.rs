@@ -11,7 +11,7 @@ use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
-use scribe::BookId;
+use resvg::usvg;
 use scribe::config::FontConfig;
 use scribe::config::IllustratorProfile;
 use sculpter::AtlasImage;
@@ -40,7 +40,7 @@ use crate::html_parser::Text;
 use crate::html_parser::TextWrapper;
 use crate::html_parser::TreeBuilderError;
 use crate::svg::IllustratorSvgError;
-use crate::svg::SvgRender;
+use crate::svg::SvgContent;
 use crate::svg::read_svg;
 use crate::svg::svg_options;
 
@@ -58,6 +58,8 @@ pub enum IllustratorLayoutError {
 	SculpterShape(#[from] sculpter::SculpterShapeError),
 	#[error(transparent)]
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
+	#[error(transparent)]
+	Usvg(#[from] resvg::usvg::Error),
 	#[error("Unexpected extra close")]
 	UnexpectedExtraClose,
 	#[error("Missing body")]
@@ -387,7 +389,7 @@ pub(crate) struct PageLayouterEmpty;
 pub(crate) struct PageLayouterLoaded {
 	content_id: NodeId,
 	texts: HashMap<NodeId, SculpterHandle>,
-	svgs: HashMap<NodeId, SvgRender>,
+	svgs: HashMap<NodeId, SvgContent>,
 }
 
 pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
@@ -457,9 +459,16 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		while let Some(edge) = node_iter.next() {
 			match edge {
 				EdgeRef::OpenElement(el) if el.local_name() == &local_name!("svg") => {
-					let svg = read_svg(&mut svg_buf, &el, &mut node_iter, &svg_options)?;
-					let size = svg.size();
+					let svg = read_svg(&mut svg_buf, &el, &mut node_iter)?;
+					let hash = {
+						let mut s = DefaultHasher::new();
+						svg.hash(&mut s);
+						s.finish()
+					};
+					let tree = usvg::Tree::from_str(svg, &svg_options)?;
+					let size = tree.size();
 					let scale = scale_to_fit(size.width(), size.height(), page_width, page_height);
+
 					let style = Style {
 						size: taffy::Size::from_lengths(
 							size.width() * scale,
@@ -468,16 +477,9 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 						..Default::default()
 					};
 
-					#[cfg(debug_assertions)]
-					{
-						let el_id = el.id.value();
-						debug_assert!(max_el_id < el_id, "Non sequential element id in content");
-						max_el_id = el_id;
-					}
-
 					let node =
 						taffy_tree.new_leaf_with_context(style, NodeContext::svg(el.id.value()))?;
-					svgs.insert(node, SvgRender { scale, svg });
+					svgs.insert(node, SvgContent { hash, scale, tree });
 					taffy_tree.add_child(current, node)?;
 				}
 				EdgeRef::OpenElement(el) if is_inline(el.local_name()) => {
@@ -612,7 +614,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 }
 
 struct PageBreaker {
-	book_id: BookId,
 	padding_left: f32,
 	padding_top: f32,
 	page_height: f32,
@@ -623,13 +624,12 @@ struct PageBreaker {
 }
 
 impl PageBreaker {
-	fn new(settings: &StyleSettings<'_>, book_id: BookId) -> Self {
+	fn new(settings: &StyleSettings<'_>) -> Self {
 		let padding_left = settings.padding_left();
 		let padding_top = settings.padding_top();
 		let page_height = settings.page_height_padded();
 
 		Self {
-			book_id,
 			padding_left,
 			padding_top,
 			page_height,
@@ -667,14 +667,7 @@ impl PageBreaker {
 			self.add_page(pos.y);
 		}
 
-		let hash = {
-			let mut s = DefaultHasher::new();
-			self.book_id.0.hash(&mut s);
-			el.hash(&mut s);
-			s.finish()
-		};
 		self.page.items.push(DisplayItem {
-			hash,
 			pos: crate::Position {
 				x: pos.x + self.padding_left,
 				y: pos.y - self.page_offset + self.padding_top,
@@ -721,7 +714,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 	pub(crate) fn layout<'settings>(
 		self,
 		settings: &StyleSettings<'settings>,
-		book_id: BookId,
 	) -> Result<(PageLayouter<'layout, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError>
 	{
 		let Self {
@@ -737,7 +729,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 
 		let min_line_height = Fixed::from_num(settings.min_line_height());
 
-		let mut breaker = PageBreaker::new(settings, book_id);
+		let mut breaker = PageBreaker::new(settings);
 		let mut cursor = taffy::Point::ZERO;
 
 		for edge in TaffyTreeIter::new(&taffy_tree, content_id) {
@@ -814,11 +806,11 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							}
 						}
 						NodeContent::Svg => {
-							let SvgRender { scale, svg } = svgs
+							let SvgContent { hash, scale, tree } = svgs
 								.remove(&id)
 								.ok_or(IllustratorLayoutError::MissingSvgContent(id))?;
 
-							let pixmap_size = svg
+							let pixmap_size = tree
 								.size()
 								.to_int_size()
 								.scale_by(scale)
@@ -827,13 +819,14 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							let mut pixmap =
 								tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height())
 									.unwrap();
-							resvg::render(&svg, transform, &mut pixmap.as_mut());
+							resvg::render(&tree, transform, &mut pixmap.as_mut());
 
 							breaker.add_content(
 								U26F6::from_num(ctx.element),
 								cursor,
 								l.size,
 								DisplayPixmap {
+									hash,
 									pixmap_width: pixmap.width(),
 									pixmap_height: pixmap.height(),
 									pixmap_rgba: pixmap.take(),
