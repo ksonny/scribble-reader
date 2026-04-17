@@ -244,10 +244,7 @@ pub fn create_wrangler(document_tree: DocumentTree) -> (WranglerSystem, JoinHand
 						}
 					};
 					let mut folders = vec![root_path];
-					loop {
-						let Some(folder) = folders.pop() else {
-							break;
-						};
+					while let Some(folder) = folders.pop() {
 						let entries = match fs::read_dir(&folder) {
 							Ok(entries) => entries,
 							Err(err) => {
