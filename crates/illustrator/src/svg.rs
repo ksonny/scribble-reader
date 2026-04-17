@@ -2,10 +2,14 @@ use resvg::usvg;
 
 use std::fmt;
 use std::fmt::Write;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use zip::ZipArchive;
 
@@ -13,15 +17,42 @@ use crate::html_parser;
 use crate::html_parser::EdgeRef;
 use crate::html_parser::TextWrapper;
 
+pub static HORIZONTAL_RULER_SVG: LazyLock<SvgContent> = LazyLock::new(|| {
+	let svg = r##"
+<svg width="116.06" height="38.367" version="1.1" viewBox="0 0 30.707 10.151" xmlns="http://www.w3.org/2000/svg">
+ <g transform="translate(-143.4 -8.1536)" stroke-width=".26458">
+  <g transform="matrix(1.3673 0 0 1.3673 -58.313 -4.8594)">
+   <path transform="matrix(1.0132 0 0 1.0132 2.5512 8.4914)" d="m154.17 8.34-1.146-2.5178-2.5178-1.146 2.5178-1.146 1.146-2.5178 1.146 2.5178 2.5178 1.146-2.5178 1.146z"/>
+   <path transform="matrix(.28031 0 0 .28031 115.53 11.918)" d="m154.17 9.2082-1.146-3.386-3.386-1.146 3.386-1.146 1.146-3.386 1.146 3.386 3.386 1.146-3.386 1.146z" fill="#fff"/>
+  </g>
+  <g transform="translate(-11.642)">
+   <path transform="matrix(1.0132 0 0 1.0132 2.5512 8.4914)" d="m154.17 8.34-1.146-2.5178-2.5178-1.146 2.5178-1.146 1.146-2.5178 1.146 2.5178 2.5178 1.146-2.5178 1.146zm22.981 0 1.146-2.5178 2.5178-1.146-2.5178-1.146-1.146-2.5178-1.146 2.5178-2.5178 1.146 2.5178 1.146z"/>
+   <path transform="matrix(.28031 0 0 .28031 115.53 11.918)" d="m154.17 9.2082-1.146-3.386-3.386-1.146 3.386-1.146 1.146-3.386 1.146 3.386 3.386 1.146-3.386 1.146zm83.063 0 1.146-3.386 3.386-1.146-3.386-1.146-1.146-3.386-1.146 3.386-3.386 1.146 3.386 1.146z" fill="#fff"/>
+  </g>
+ </g>
+</svg>
+	"##;
+
+	let hash = {
+		let mut s = DefaultHasher::new();
+		svg.hash(&mut s);
+		s.finish()
+	};
+	SvgContent {
+		hash,
+		tree: usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap(),
+	}
+});
+
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorSvgError {
 	#[error(transparent)]
 	Write(#[from] fmt::Error),
 }
 
+#[derive(Clone)]
 pub(crate) struct SvgContent {
 	pub(crate) hash: u64,
-	pub(crate) scale: f32,
 	pub(crate) tree: usvg::Tree,
 }
 

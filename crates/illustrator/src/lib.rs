@@ -513,7 +513,7 @@ impl Worker {
 		let resource = package
 			.metadata_by_spine(spine_index as usize)
 			.expect("Unexpected missing resource");
-		let layouter = layouter.load(
+		let layouter = layouter.load_archive(
 			archive,
 			package.package_root.as_path(),
 			resource.as_path(),
