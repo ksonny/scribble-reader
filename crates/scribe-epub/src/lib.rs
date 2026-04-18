@@ -725,7 +725,8 @@ pub fn parse_nav<R: BufRead>(
 						let value = unescape(&value)?.to_string();
 						entries[idx].title = Some(value);
 
-						let path = Path::new(href.as_ref());
+						let href = href.split('#').next().unwrap_or(href.as_ref());
+						let path = Path::new(href);
 						if path.is_relative() {
 							let path = package_root.join(path);
 							let idref = path_lookup.get(path.to_string_lossy().as_ref()).cloned();
@@ -734,7 +735,7 @@ pub fn parse_nav<R: BufRead>(
 							}
 							entries[idx].idref = idref;
 						} else {
-							let idref = path_lookup.get(href.as_ref()).cloned();
+							let idref = path_lookup.get(href).cloned();
 							if idref.is_none() {
 								log::warn!("Navigation target not found in manifest: {}", href);
 							}
@@ -915,18 +916,19 @@ pub fn parse_ncx<R: BufRead>(
 					if let Some(src) = src
 						&& let Some(idx) = stack.last().cloned()
 					{
-						let path = Path::new(src.as_ref());
+						let src = src.split('#').next().unwrap_or(src.as_ref());
+						let path = Path::new(src);
 						if path.is_relative() {
 							let path = package_root.join(path);
 							let idref = path_lookup.get(path.to_string_lossy().as_ref()).cloned();
 							if idref.is_none() {
-								log::warn!("Navigation target not found in manifest: {}", src);
+								log::warn!("Ncx navigation target not found in manifest: {}", src);
 							}
 							entries[idx].idref = idref;
 						} else {
-							let idref = path_lookup.get(src.as_ref()).cloned();
+							let idref = path_lookup.get(src).cloned();
 							if idref.is_none() {
-								log::warn!("Navigation target not found in manifest: {}", src);
+								log::warn!("Ncx navigation target not found in manifest: {}", src);
 							}
 							entries[idx].idref = idref;
 						};
