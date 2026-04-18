@@ -59,8 +59,9 @@ struct App<'window> {
 }
 
 impl App<'_> {
-	const ACTIVE_TICK: u64 = 32;
-	const SLEEP_TIMEOUT: u64 = 256;
+	const ACTIVE_TICK: Duration = Duration::from_millis(32);
+	const SLEEP_TICK: Duration = Duration::from_secs(10);
+	const SLEEP_THRESHOLD: Duration = Duration::from_millis(256);
 
 	fn request_redraw(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
 		log::trace!("Request redraw");
@@ -69,7 +70,7 @@ impl App<'_> {
 		self.request_redraw = now;
 
 		// Wake the loop if needed
-		let next_tick = now + Duration::from_millis(Self::ACTIVE_TICK);
+		let next_tick = now + Self::ACTIVE_TICK;
 		match event_loop.control_flow() {
 			winit::event_loop::ControlFlow::Poll | winit::event_loop::ControlFlow::Wait => {
 				event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
@@ -92,28 +93,29 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 	) {
 		match cause {
 			winit::event::StartCause::Init => {
-				let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
+				let next_tick = Instant::now() + Self::ACTIVE_TICK;
 				event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
 			}
 			winit::event::StartCause::ResumeTimeReached {
 				requested_resume, ..
 			} => {
-				log::trace!("Resume time reached");
-				let since_redraw_request = requested_resume
-					.duration_since(self.request_redraw)
-					.as_millis() as u64;
-				if since_redraw_request < Self::SLEEP_TIMEOUT {
-					log::trace!("Render full speed: {}", since_redraw_request);
+				let since_redraw_request = requested_resume.duration_since(self.request_redraw);
+				if since_redraw_request < Self::SLEEP_THRESHOLD {
+					log::trace!("Render active");
 					if let Some(renderer) = self.renderer.as_mut() {
-						log::trace!("Render");
 						renderer.request_redraw();
 					}
-					let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
+					let next_tick = Instant::now() + Self::ACTIVE_TICK;
 					event_loop
 						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
 				} else {
 					log::trace!("Render sleep");
-					event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+					if let Some(renderer) = self.renderer.as_mut() {
+						renderer.request_redraw();
+					}
+					let next_tick = Instant::now() + Self::SLEEP_TICK;
+					event_loop
+						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
 				}
 			}
 			_ => {}
