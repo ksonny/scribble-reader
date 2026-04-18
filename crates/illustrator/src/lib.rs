@@ -57,8 +57,9 @@ pub struct IllustratorAssistant {
 	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
 	req_tx: Sender<Request>,
 	working: Arc<AtomicBool>,
-	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
+	title: Option<Arc<String>>,
 	state: Arc<Mutex<BookState>>,
+	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	cache: Arc<Mutex<PageContentCache>>,
 }
 
@@ -71,6 +72,10 @@ pub enum IllustratorRequestError {
 impl IllustratorAssistant {
 	pub fn working(&self) -> bool {
 		self.working.load(Ordering::Acquire)
+	}
+
+	pub fn title(&self) -> Option<Arc<String>> {
+		self.title.clone()
 	}
 
 	pub fn state(&self) -> BookState {
@@ -234,8 +239,8 @@ struct Worker {
 	records: RecordKeeperAssistant,
 	content: ContentWranglerAssistant,
 	cache: Arc<Mutex<PageContentCache>>,
-	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	state: Arc<Mutex<BookState>>,
+	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
 	working: Arc<AtomicBool>,
 }
 
@@ -495,7 +500,7 @@ impl Worker {
 			} else if idx == current_loc.spine as usize
 				&& let Some((_, meta)) = self.cache.lock().unwrap().page(current_loc)
 			{
-				bytes_read += (*b * meta.page) / meta.pages;
+				bytes_read += (*b * meta.page as u64) / meta.pages as u64;
 			}
 			bytes_total += b;
 		}
@@ -553,6 +558,7 @@ pub fn create_illustrator(
 
 	let cache = Arc::new(Mutex::new(PageContentCache::default()));
 	let navigation = Arc::new(Mutex::new(None));
+	let title = book.title.clone();
 	let state = Arc::new(Mutex::new(BookState {
 		location: book.location(),
 		percent_read: book.percent_read.unwrap_or(0),
@@ -567,8 +573,8 @@ pub fn create_illustrator(
 		records,
 		content,
 		cache: cache.clone(),
-		navigation: navigation.clone(),
 		state: state.clone(),
+		navigation: navigation.clone(),
 		working: working.clone(),
 	};
 
@@ -581,8 +587,9 @@ pub fn create_illustrator(
 		handle,
 		req_tx,
 		working,
-		navigation,
+		title,
 		state,
+		navigation,
 		cache,
 	})
 }
