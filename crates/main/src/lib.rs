@@ -62,9 +62,25 @@ impl App<'_> {
 	const ACTIVE_TICK: u64 = 32;
 	const SLEEP_TIMEOUT: u64 = 256;
 
-	fn request_redraw(&mut self) {
+	fn request_redraw(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
 		log::trace!("Request redraw");
-		self.request_redraw = Instant::now();
+
+		let now = Instant::now();
+		self.request_redraw = now;
+
+		// Wake the loop if needed
+		let next_tick = now + Duration::from_millis(Self::ACTIVE_TICK);
+		match event_loop.control_flow() {
+			winit::event_loop::ControlFlow::Poll | winit::event_loop::ControlFlow::Wait => {
+				event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
+			}
+			winit::event_loop::ControlFlow::WaitUntil(instant) => {
+				if instant > next_tick {
+					event_loop
+						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
+				}
+			}
+		}
 	}
 }
 
@@ -76,9 +92,8 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 	) {
 		match cause {
 			winit::event::StartCause::Init => {
-				if let Some(renderer) = self.renderer.as_mut() {
-					renderer.request_redraw();
-				}
+				let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
+				event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
 			}
 			winit::event::StartCause::ResumeTimeReached {
 				requested_resume, ..
@@ -99,19 +114,6 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				} else {
 					log::trace!("Render sleep");
 					event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-				}
-			}
-			winit::event::StartCause::WaitCancelled {
-				requested_resume, ..
-			} => {
-				if requested_resume.is_none()
-					&& let Some(renderer) = self.renderer.as_mut()
-				{
-					log::trace!("Wait cancelled from sleep");
-					renderer.request_redraw();
-					let next_tick = Instant::now() + Duration::from_millis(Self::ACTIVE_TICK);
-					event_loop
-						.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_tick));
 				}
 			}
 			_ => {}
@@ -190,7 +192,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				log::trace!("Forward user event: {event:?}");
 				let result = self.view.event(&event);
 				if matches!(result, EventResult::RequestRedraw) {
-					self.request_redraw();
+					self.request_redraw(event_loop);
 				}
 			}
 		}
@@ -233,7 +235,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				}
 			}
 			self.gestures.reset();
-			self.request_redraw();
+			self.request_redraw(event_loop);
 		}
 
 		log::trace!("event: {event:?}");
@@ -246,7 +248,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 					.set_min_distance_by_screen(size.width, size.height);
 				self.input.resize(size);
 				self.view.resize(size.width, size.height);
-				self.request_redraw();
+				self.request_redraw(event_loop);
 			}
 			WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
 				if let Some(renderer) = self.renderer.as_mut() {
@@ -254,7 +256,7 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				}
 				self.input.rescale(scale_factor as f32);
 				self.view.rescale(scale_factor as f32);
-				self.request_redraw();
+				self.request_redraw(event_loop);
 			}
 			WindowEvent::RedrawRequested => {
 				let Some(renderer) = self.renderer.as_mut() else {
