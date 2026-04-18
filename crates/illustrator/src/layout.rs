@@ -11,7 +11,7 @@ use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
 use resvg::tiny_skia;
-use scribe::BookId;
+use resvg::usvg;
 use scribe::config::FontConfig;
 use scribe::config::IllustratorProfile;
 use sculpter::AtlasImage;
@@ -39,8 +39,9 @@ use crate::html_parser::NodeTreeBuilder;
 use crate::html_parser::Text;
 use crate::html_parser::TextWrapper;
 use crate::html_parser::TreeBuilderError;
+use crate::svg::HORIZONTAL_RULER_SVG;
 use crate::svg::IllustratorSvgError;
-use crate::svg::SvgRender;
+use crate::svg::SvgContent;
 use crate::svg::read_svg;
 use crate::svg::svg_options;
 
@@ -58,12 +59,14 @@ pub enum IllustratorLayoutError {
 	SculpterShape(#[from] sculpter::SculpterShapeError),
 	#[error(transparent)]
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
+	#[error(transparent)]
+	Usvg(#[from] resvg::usvg::Error),
 	#[error("Unexpected extra close")]
 	UnexpectedExtraClose,
 	#[error("Missing body")]
 	MissingBody,
-	#[error("Scale svg failed")]
-	ScaleSvgFailed,
+	#[error("Scale svg failed: {0}")]
+	ScaleSvgFailed(f32),
 	#[error("Missing content for text node")]
 	MissingTextContent(NodeId),
 	#[error("Missing content for svg node")]
@@ -183,88 +186,115 @@ impl<'a> StyleSettings<'a> {
 		self.profile.font_size * self.scale
 	}
 
+	fn em_to_px(&self, n: f32) -> f32 {
+		n * self.profile.font_size * self.scale
+	}
+
 	fn min_line_height(&self) -> f32 {
-		self.profile.line_height * self.profile.font_size * self.scale
+		self.em_to_px(self.profile.line_height)
 	}
 
 	fn page_height_padded(&self) -> f32 {
 		(self.page_height as f32
-			- self.profile.padding.top_em * self.font_size()
-			- self.profile.padding.bottom_em * self.font_size())
+			- self.em_to_px(self.profile.padding.top_em)
+			- self.em_to_px(self.profile.padding.bottom_em))
 		.floor()
 	}
 	fn page_width_padded(&self) -> f32 {
 		(self.page_width as f32
-			- self.profile.padding.left_em * self.font_size()
-			- self.profile.padding.right_em * self.font_size())
+			- self.em_to_px(self.profile.padding.left_em)
+			- self.em_to_px(self.profile.padding.right_em))
 		.floor()
 	}
 
 	fn padding_top(&self) -> f32 {
-		self.profile.padding.top_em * self.font_size()
+		self.em_to_px(self.profile.padding.top_em)
 	}
 
 	fn padding_left(&self) -> f32 {
-		self.profile.padding.left_em * self.font_size()
+		self.em_to_px(self.profile.padding.left_em)
 	}
 
 	fn element_style(&self, name: &LocalName) -> Style {
 		match *name {
 			local_name!("h1") => Style {
+				display: Display::Block,
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.profile.h1.padding_em * self.font_size()),
+					bottom: length(self.em_to_px(self.profile.h1.padding_em)),
 					left: zero(),
 					right: zero(),
 				},
 				..Style::default()
 			},
 			local_name!("h2") => Style {
+				display: Display::Block,
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.profile.h2.padding_em * self.font_size()),
+					bottom: length(self.em_to_px(self.profile.h2.padding_em)),
 					left: zero(),
 					right: zero(),
 				},
 				..Style::default()
 			},
 			local_name!("h3") => Style {
+				display: Display::Block,
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.profile.h3.padding_em * self.font_size()),
+					bottom: length(self.em_to_px(self.profile.h3.padding_em)),
 					left: zero(),
 					right: zero(),
 				},
 				..Style::default()
 			},
 			local_name!("h4") => Style {
+				display: Display::Block,
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.profile.h4.padding_em * self.font_size()),
+					bottom: length(self.em_to_px(self.profile.h4.padding_em)),
 					left: zero(),
 					right: zero(),
 				},
 				..Style::default()
 			},
 			local_name!("h5") => Style {
+				display: Display::Block,
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.profile.h5.padding_em * self.font_size()),
+					bottom: length(self.em_to_px(self.profile.h5.padding_em)),
 					left: zero(),
 					right: zero(),
 				},
 				..Style::default()
 			},
 			local_name!("p") => Style {
+				display: Display::Block,
 				padding: Rect {
 					top: zero(),
-					bottom: length(self.profile.padding.paragraph_em * self.font_size()),
+					bottom: length(self.em_to_px(self.profile.padding.paragraph_em)),
 					left: zero(),
 					right: zero(),
 				},
 				..Style::default()
 			},
-			_ => Style::default(),
+			local_name!("hr") => Style {
+				display: Display::Block,
+				size: taffy::Size {
+					width: auto(),
+					height: length(self.em_to_px(1.2)),
+				},
+				padding: Rect {
+					top: length(self.em_to_px(self.profile.padding.paragraph_em)),
+					bottom: length(self.em_to_px(self.profile.padding.paragraph_em)),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
+			_ => Style {
+				display: Display::Block,
+				..Style::default()
+			},
 		}
 	}
 }
@@ -387,7 +417,7 @@ pub(crate) struct PageLayouterEmpty;
 pub(crate) struct PageLayouterLoaded {
 	content_id: NodeId,
 	texts: HashMap<NodeId, SculpterHandle>,
-	svgs: HashMap<NodeId, SvgRender>,
+	svgs: HashMap<NodeId, SvgContent>,
 }
 
 pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
@@ -407,7 +437,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		}
 	}
 
-	pub(crate) fn load<'settings, R: io::Seek + io::Read + Sync + Send>(
+	pub(crate) fn load_archive<'settings, R: io::Seek + io::Read + Sync + Send>(
 		self,
 		archive: &mut ZipArchive<R>,
 		root: &Path,
@@ -427,16 +457,17 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		};
 		let svg_options = svg_options(Mutex::new(archive), root);
 
-		let page_height = settings.page_height_padded();
 		let page_width = settings.page_width_padded();
+		let page_height = settings.page_height_padded();
 		let min_line_height = Fixed::from_num(settings.min_line_height());
 
 		let content_id = taffy_tree.new_leaf(Style {
+			display: Display::Block,
 			size: taffy::Size {
 				width: length(page_width),
 				height: auto(),
 			},
-			..Default::default()
+			..Style::default()
 		})?;
 
 		let mut current = content_id;
@@ -457,28 +488,51 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		while let Some(edge) = node_iter.next() {
 			match edge {
 				EdgeRef::OpenElement(el) if el.local_name() == &local_name!("svg") => {
-					let svg = read_svg(&mut svg_buf, &el, &mut node_iter, &svg_options)?;
-					let size = svg.size();
-					let scale = scale_to_fit(size.width(), size.height(), page_width, page_height);
-					let style = Style {
-						size: taffy::Size::from_lengths(
-							size.width() * scale,
-							size.height() * scale,
-						),
-						..Default::default()
+					let container = taffy_tree.new_leaf_with_context(
+						Style {
+							display: Display::Flex,
+							justify_content: Some(AlignContent::Center),
+							..Style::default()
+						},
+						NodeContext::block(el.id.value()),
+					)?;
+					taffy_tree.add_child(current, container)?;
+
+					let node = taffy_tree.new_leaf_with_context(
+						settings.element_style(el.local_name()),
+						NodeContext::svg(el.id.value()),
+					)?;
+					taffy_tree.add_child(container, node)?;
+
+					let svg = read_svg(&mut svg_buf, &el, &mut node_iter)?;
+					let hash = {
+						let mut s = DefaultHasher::new();
+						svg.hash(&mut s);
+						s.finish()
 					};
+					let tree = usvg::Tree::from_str(svg, &svg_options)?;
+					svgs.insert(node, SvgContent { hash, tree });
+				}
+				EdgeRef::OpenElement(el) if el.local_name() == &local_name!("hr") => {
+					take_until_closed(&mut node_iter, el.id);
 
-					#[cfg(debug_assertions)]
-					{
-						let el_id = el.id.value();
-						debug_assert!(max_el_id < el_id, "Non sequential element id in content");
-						max_el_id = el_id;
-					}
+					let container = taffy_tree.new_leaf_with_context(
+						Style {
+							display: Display::Flex,
+							justify_content: Some(AlignContent::Center),
+							..Style::default()
+						},
+						NodeContext::block(el.id.value()),
+					)?;
+					taffy_tree.add_child(current, container)?;
 
-					let node =
-						taffy_tree.new_leaf_with_context(style, NodeContext::svg(el.id.value()))?;
-					svgs.insert(node, SvgRender { scale, svg });
-					taffy_tree.add_child(current, node)?;
+					let node = taffy_tree.new_leaf_with_context(
+						settings.element_style(el.local_name()),
+						NodeContext::svg(el.id.value()),
+					)?;
+					taffy_tree.add_child(container, node)?;
+
+					svgs.insert(node, HORIZONTAL_RULER_SVG.clone());
 				}
 				EdgeRef::OpenElement(el) if is_inline(el.local_name()) => {
 					if let Some(text_style) = TextStyle::try_from(el.local_name()) {
@@ -577,24 +631,62 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		taffy_tree.compute_layout_with_measure(
 			content_id,
 			taffy::Size::MAX_CONTENT,
-			|known_dimensions, available_space, node_id, _node_context, _style| match texts
-				.get(&node_id)
-			{
-				Some(handle) => {
-					let max_width = known_dimensions
-						.width
-						.unwrap_or(match available_space.width {
-							AvailableSpace::MinContent => 0.0,
-							AvailableSpace::MaxContent => page_width,
-							AvailableSpace::Definite(width) => width,
-						});
-					let result = sculpter.measure(handle, max_width as u32, min_line_height);
-					taffy::Size {
-						width: max_width,
-						height: result.height.to_num::<f32>().ceil(),
-					}
+			|known_dimensions, available_space, node_id, node_context, _style| {
+				if let Size {
+					width: Some(width),
+					height: Some(height),
+				} = known_dimensions
+				{
+					return Size { width, height };
 				}
-				None => taffy::Size::ZERO,
+				let Some(node_context) = node_context else {
+					return taffy::Size::ZERO;
+				};
+
+				let max_width = known_dimensions.width.or(match available_space.width {
+					AvailableSpace::MinContent => None,
+					AvailableSpace::MaxContent => Some(page_width),
+					AvailableSpace::Definite(width) => Some(width),
+				});
+				let max_height = known_dimensions.height.or(match available_space.width {
+					AvailableSpace::MinContent => None,
+					AvailableSpace::MaxContent => Some(page_height),
+					AvailableSpace::Definite(height) => Some(height),
+				});
+
+				match node_context.content {
+					NodeContent::Text => {
+						if let Some(handle) = texts.get(&node_id) {
+							let max_width = max_width.unwrap_or(page_width);
+							let result =
+								sculpter.measure(handle, max_width as u32, min_line_height);
+							taffy::Size {
+								width: max_width,
+								height: result.height.to_num::<f32>().ceil(),
+							}
+						} else {
+							taffy::Size::ZERO
+						}
+					}
+					NodeContent::Svg => {
+						if let Some(svg) = svgs.get(&node_id) {
+							let size = svg.tree.size();
+							let scale = scale_to_fit(
+								size.width(),
+								size.height(),
+								max_width.unwrap_or(size.width()).min(page_width),
+								max_height.unwrap_or(size.height()).min(page_height),
+							);
+							taffy::Size {
+								width: size.width() * scale,
+								height: size.height() * scale,
+							}
+						} else {
+							taffy::Size::ZERO
+						}
+					}
+					NodeContent::Block => taffy::Size::ZERO,
+				}
 			},
 		)?;
 
@@ -611,8 +703,20 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 	}
 }
 
+fn take_until_closed(
+	node_iter: &mut crate::html_parser::NodeTreeIter<'_>,
+	el_id: crate::html_parser::NodeId,
+) {
+	for edge in node_iter.by_ref() {
+		if let EdgeRef::CloseElement(id, _name) = edge
+			&& id == el_id
+		{
+			break;
+		}
+	}
+}
+
 struct PageBreaker {
-	book_id: BookId,
 	padding_left: f32,
 	padding_top: f32,
 	page_height: f32,
@@ -623,13 +727,12 @@ struct PageBreaker {
 }
 
 impl PageBreaker {
-	fn new(settings: &StyleSettings<'_>, book_id: BookId) -> Self {
+	fn new(settings: &StyleSettings<'_>) -> Self {
 		let padding_left = settings.padding_left();
 		let padding_top = settings.padding_top();
 		let page_height = settings.page_height_padded();
 
 		Self {
-			book_id,
 			padding_left,
 			padding_top,
 			page_height,
@@ -667,14 +770,7 @@ impl PageBreaker {
 			self.add_page(pos.y);
 		}
 
-		let hash = {
-			let mut s = DefaultHasher::new();
-			self.book_id.0.hash(&mut s);
-			el.hash(&mut s);
-			s.finish()
-		};
 		self.page.items.push(DisplayItem {
-			hash,
 			pos: crate::Position {
 				x: pos.x + self.padding_left,
 				y: pos.y - self.page_offset + self.padding_top,
@@ -721,7 +817,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 	pub(crate) fn layout<'settings>(
 		self,
 		settings: &StyleSettings<'settings>,
-		book_id: BookId,
 	) -> Result<(PageLayouter<'layout, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError>
 	{
 		let Self {
@@ -737,7 +832,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 
 		let min_line_height = Fixed::from_num(settings.min_line_height());
 
-		let mut breaker = PageBreaker::new(settings, book_id);
+		let mut breaker = PageBreaker::new(settings);
 		let mut cursor = taffy::Point::ZERO;
 
 		for edge in TaffyTreeIter::new(&taffy_tree, content_id) {
@@ -814,26 +909,37 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							}
 						}
 						NodeContent::Svg => {
-							let SvgRender { scale, svg } = svgs
+							let SvgContent { hash, tree } = svgs
 								.remove(&id)
 								.ok_or(IllustratorLayoutError::MissingSvgContent(id))?;
 
-							let pixmap_size = svg
+							let size = tree.size();
+							let scale = scale_to_fit(
+								size.width(),
+								size.height(),
+								l.size.width,
+								l.size.height,
+							);
+							let pixmap_size = tree
 								.size()
 								.to_int_size()
 								.scale_by(scale)
-								.ok_or(IllustratorLayoutError::ScaleSvgFailed)?;
+								.ok_or(IllustratorLayoutError::ScaleSvgFailed(scale))?;
 							let transform = tiny_skia::Transform::from_scale(scale, scale);
 							let mut pixmap =
 								tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height())
 									.unwrap();
-							resvg::render(&svg, transform, &mut pixmap.as_mut());
+							resvg::render(&tree, transform, &mut pixmap.as_mut());
 
 							breaker.add_content(
 								U26F6::from_num(ctx.element),
 								cursor,
-								l.size,
+								taffy::Size {
+									width: size.width() * scale,
+									height: size.height() * scale,
+								},
 								DisplayPixmap {
+									hash,
 									pixmap_width: pixmap.width(),
 									pixmap_height: pixmap.height(),
 									pixmap_rgba: pixmap.take(),
@@ -885,11 +991,7 @@ fn is_inline(name: &LocalName) -> bool {
 }
 
 fn scale_to_fit(width: f32, height: f32, max_width: f32, max_height: f32) -> f32 {
-	if width < max_width && height < max_height {
-		1.0
-	} else {
-		let ws = max_width / width;
-		let hs = max_height / height;
-		ws.min(hs)
-	}
+	let ws = max_width / width;
+	let hs = max_height / height;
+	ws.min(hs)
 }
