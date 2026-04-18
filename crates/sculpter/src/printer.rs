@@ -151,6 +151,11 @@ impl<'a> SculpterPrinter<'a> {
 
 		let mut x_pos = x_origin;
 		for (style, glyph) in styled_glyphs {
+			if matches!(glyph.br, crate::shaper::BreakpointType::Newline) {
+				// Ignore newline characters included in print
+				continue;
+			}
+
 			let x_advance = glyph.pos.x_advance * style.font_size * PX_PER_PT;
 			let x_offset = glyph.pos.x_offset * style.font_size * PX_PER_PT;
 			let y_offset = glyph.pos.y_offset * style.font_size * PX_PER_PT;
