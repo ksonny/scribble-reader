@@ -512,7 +512,10 @@ impl ViewHandle for ReaderView {
 				Some(ToolItem {
 					icon: Icon::Cog,
 					description: "Settings",
-					active: matches!(self.mode, ReaderMode::ActionSettings),
+					active: matches!(
+						self.mode,
+						ReaderMode::ActionSettings | ReaderMode::ProfileSettings
+					),
 					action: Action::Settings,
 				}),
 				None,
