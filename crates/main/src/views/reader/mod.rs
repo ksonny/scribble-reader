@@ -3,7 +3,6 @@ mod active_areas;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Display;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use egui::Button;
@@ -156,7 +155,6 @@ pub(crate) struct ReaderView {
 	active_rects: Vec<Rect>,
 	chapters_page: u32,
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
-	statusline: Option<String>,
 
 	atlas_pixmap: Option<(PixmapRef, AtlasVersion)>,
 	content_pixmaps: BTreeMap<u64, PixmapRef>,
@@ -198,7 +196,6 @@ impl ReaderView {
 			active_rects: Vec::new(),
 			chapters_page: 0,
 			chapters_cards: Default::default(),
-			statusline: String::new().into(),
 
 			atlas_pixmap: None,
 			content_pixmaps: BTreeMap::new(),
@@ -394,9 +391,8 @@ impl ViewHandle for ReaderView {
 	fn draw(&mut self, painter: Painter<'_>) {
 		self.active_rects.clear();
 
-		let mut statusline = self.statusline.take().unwrap_or_default();
-		statusline.clear();
 		let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+		let mut page_meta = None;
 
 		let painter = painter.draw_pixmap(|brush| {
 			if !matches!(self.mode, ReaderMode::Read | ReaderMode::ReadNoUi) {
@@ -409,11 +405,7 @@ impl ViewHandle for ReaderView {
 			let Some((content, meta)) = page else {
 				return;
 			};
-			let _ = write!(
-				&mut statusline,
-				"Chapter {} / {} Book {}%",
-				meta.page, meta.pages, state.percent_read
-			);
+			page_meta = Some(meta);
 
 			let atlas = cache.atlas();
 			let pixmap_dims = [atlas.width(), atlas.height()].into();
@@ -428,6 +420,7 @@ impl ViewHandle for ReaderView {
 				log::info!("Recreate atlas version {:?}", atlas.version(),);
 				brush.create(pixmap_dims, pixmap_data)
 			};
+
 			for item in &content.items {
 				match item {
 					illustrator::DisplayItem {
@@ -475,6 +468,41 @@ impl ViewHandle for ReaderView {
 		});
 
 		let working = illustrator.working();
+		let mut book_details = if matches!(self.mode, ReaderMode::Read) {
+			let title = illustrator
+				.title()
+				.unwrap_or_else(|| "N/A".to_string().into());
+			let state = illustrator.state();
+			let navigation = illustrator.navigation();
+			let nav_points = navigation
+				.as_ref()
+				.map(|n| n.nav_points.as_slice())
+				.unwrap_or_default();
+			let chapter = nav_points
+				.iter()
+				.find(|n| n.spine.is_some_and(|s| state.location.spine == s));
+			if let Some(chapter) = chapter {
+				let chapter = chapter.title.clone();
+				let percent_read = state.percent_read;
+				let (page, pages) = page_meta
+					.as_ref()
+					.map(|m| (m.page, m.pages))
+					.unwrap_or_default();
+
+				Some(BookDetailsUI {
+					title,
+					chapter,
+					percent_read,
+					page,
+					pages,
+				})
+			} else {
+				None
+			}
+		} else {
+			None
+		};
+
 		painter.draw_ui(|ui| {
 			if matches!(self.mode, ReaderMode::ReadNoUi) {
 				return;
@@ -529,10 +557,16 @@ impl ViewHandle for ReaderView {
 			];
 
 			let top_panel = egui::Panel::top("top").show_inside(ui, |ui| {
-				MainMenuBar::new(self, menu_items)
+				let response = MainMenuBar::new(self, menu_items)
 					.with_loading(working)
-					.with_status(Some(&statusline))
-					.ui(ui)
+					.ui(ui);
+
+				if let Some(book_details) = book_details.take() {
+					ui.separator();
+					ui.add(book_details.clone());
+				}
+
+				response
 			});
 			let is_open = top_panel.inner.context_menu_opened();
 			if !is_open {
@@ -607,8 +641,6 @@ impl ViewHandle for ReaderView {
 				}
 			}
 		});
-
-		self.statusline = Some(statusline);
 	}
 
 	fn event(&mut self, event: &AppEvent) -> EventResult {
@@ -685,6 +717,41 @@ impl ViewHandle for ReaderView {
 		if let Some(illustrator) = self.illustrator.take() {
 			illustrator.shutdown();
 		}
+	}
+}
+
+#[derive(Clone)]
+struct BookDetailsUI {
+	title: Arc<String>,
+	chapter: Arc<String>,
+	percent_read: u32,
+	page: u32,
+	pages: u32,
+}
+
+impl egui::Widget for BookDetailsUI {
+	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+		ui.horizontal(|ui| {
+			ui.add_space(10.);
+			ui.vertical(|ui| {
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+					ui.label(RichText::new(format!("{}%", self.percent_read)).size(theme::L_SIZE));
+					ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
+						ui.label(RichText::new(self.title.as_ref()).size(theme::L_SIZE));
+					});
+				});
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+					ui.label(
+						RichText::new(format!("{}/{}", self.page, self.pages)).size(theme::S_SIZE),
+					);
+					ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
+						ui.label(RichText::new(self.chapter.as_ref()).size(theme::S_SIZE));
+					});
+				});
+				ui.add_space(0.5);
+			});
+		})
+		.response
 	}
 }
 
