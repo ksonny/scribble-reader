@@ -2,6 +2,7 @@ pub(crate) mod theme;
 
 use std::time::Instant;
 
+use chrono::Local;
 use egui::Align;
 use egui::Color32;
 use egui::Context;
@@ -359,6 +360,15 @@ impl<A: Copy, H: OnAction<A>> MainMenuBar<'_, A, H> {
 						}
 
 						ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+							let now = Local::now();
+							ui.label(
+								RichText::new(now.format("%H:%M").to_string())
+									.monospace()
+									.size(theme::CLOCK_SIZE),
+							);
+
+							ui.add_space(2.);
+
 							if self.loading {
 								ui.label(
 									UiIcon::new(Icon::RefreshCw)

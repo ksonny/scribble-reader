@@ -9,6 +9,7 @@ pub const S_SIZE: f32 = 14.0;
 pub const M_SIZE: f32 = 18.0;
 pub const L_SIZE: f32 = 24.0;
 pub const XL_SIZE: f32 = 48.0;
+pub const CLOCK_SIZE: f32 = 16.0;
 pub const SECONDARY_COLOR: Color32 = Color32::GRAY;
 
 lazy_static! {
