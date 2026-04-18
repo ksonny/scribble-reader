@@ -99,3 +99,11 @@ keyPassword=
 * `just build`
 
 See also `just install` to upload the resulting apk to your device.
+
+## Screenshots
+
+![Library](./assets/library.png)
+![Reader no ui](./assets/readernoui.png)
+![Reader](./assets/reader.png)
+![Reader Actions](./assets/readeractions.png)
+![Reader Profiles](./assets/readerprofiles.png)
