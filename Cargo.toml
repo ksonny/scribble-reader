@@ -42,7 +42,6 @@ serde_json = "1.0.149"
 serde_rusqlite = "0.42.0"
 taffy = { version = "0.10.0", default-features = false, features = ["alloc", "std", "block_layout", "flexbox", "taffy_tree", "content_size"] }
 thiserror = "2.0.17"
-toml = "1.1.2"
 ttf-parser = "0.25.1"
 wgpu = "29.0.1"
 winit = "0.30.13"

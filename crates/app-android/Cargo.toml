@@ -10,7 +10,6 @@ android_logger.workspace = true
 jni.workspace = true
 log.workspace = true
 scribble-reader.workspace = true
-scribe.workspace = true
 winit = { workspace = true, features = ["android-game-activity"] }
 wrangler.workspace = true
 

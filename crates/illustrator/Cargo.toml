@@ -7,7 +7,6 @@ publish = false
 
 [dependencies]
 bitflags.workspace = true
-config.workspace = true
 fixed.workspace = true
 html5ever.workspace = true
 imagesize.workspace = true

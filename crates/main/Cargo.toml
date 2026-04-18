@@ -16,7 +16,6 @@ egui-wgpu.workspace = true
 egui-winit.workspace = true
 egui_extras.workspace = true
 env_logger.workspace = true
-expand-tilde.workspace = true
 illustrator.workspace = true
 image.workspace = true
 integer-sqrt.workspace = true
