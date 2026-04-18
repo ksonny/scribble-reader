@@ -266,6 +266,7 @@ impl ReaderView {
 					*card = Some(ChapterCard {
 						location: Location::from_spine(item.spine.unwrap_or_default()),
 						title: item.title.clone(),
+						active: item.spine.is_some_and(|s| s == state.location.spine),
 					});
 				} else {
 					*card = None;
@@ -304,6 +305,7 @@ impl ReaderView {
 				let offset = self.chapters_page * CHAPTER_LIST_SIZE;
 
 				let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+				let state = illustrator.state();
 				let navigation = illustrator.navigation();
 				let nav_points = navigation
 					.as_ref()
@@ -316,6 +318,7 @@ impl ReaderView {
 						*card = Some(ChapterCard {
 							location: Location::from_spine(item.spine.unwrap_or_default()),
 							title: item.title.clone(),
+							active: item.spine.is_some_and(|s| s == state.location.spine),
 						});
 					} else {
 						*card = None;
@@ -340,6 +343,7 @@ impl ReaderView {
 				let offset = (page * CHAPTER_LIST_SIZE) as usize;
 
 				let illustrator = self.illustrator.as_ref().expect("Illustrator not running");
+				let state = illustrator.state();
 				let navigation = illustrator.navigation();
 				let nav_points = navigation
 					.as_ref()
@@ -353,6 +357,7 @@ impl ReaderView {
 							*card = Some(ChapterCard {
 								location: Location::from_spine(item.spine.unwrap_or_default()),
 								title: item.title.clone(),
+								active: item.spine.is_some_and(|s| s == state.location.spine),
 							});
 						} else {
 							*card = None;
@@ -887,6 +892,7 @@ impl egui::Widget for ActionSelectableUi<'_> {
 pub(crate) struct ChapterCard {
 	location: Location,
 	title: Arc<String>,
+	active: bool,
 }
 
 impl ChapterCard {
@@ -902,7 +908,14 @@ pub(crate) struct ChapterCardUi<'a> {
 impl egui::Widget for ChapterCardUi<'_> {
 	fn ui(self, ui: &mut egui::Ui) -> egui::Response {
 		let card = self.card;
-		ui.group(|ui| {
+
+		let group = egui::Frame::group(ui.style());
+		if card.active {
+			group.fill(ui.style().visuals.selection.bg_fill)
+		} else {
+			group
+		}
+		.show(ui, |ui| {
 			ui.set_min_size(ui.available_size());
 			let title = card.title.as_ref();
 			ui.label(RichText::new(title).text_style(theme::HEADING2.clone()));
