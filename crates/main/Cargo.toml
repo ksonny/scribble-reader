@@ -6,8 +6,6 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-bitflags.workspace = true
-bytemuck.workspace = true
 chrono.workspace = true
 config.workspace = true
 dotenv.workspace = true
