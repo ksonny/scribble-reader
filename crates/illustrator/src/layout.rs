@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::mem;
 use std::path::Path;
@@ -399,7 +398,7 @@ impl<'a, C> Iterator for TaffyTreeIter<'a, C> {
 #[derive(Debug)]
 enum NodeContent {
 	Block,
-	Text,
+	Text(SculpterHandle),
 	Svg(Arc<usvg::Tree>),
 	Image(Arc<RgbaImage>),
 }
@@ -418,10 +417,10 @@ impl NodeContext {
 		}
 	}
 
-	fn text(element: u32) -> Self {
+	fn text(element: u32, handle: SculpterHandle) -> Self {
 		Self {
 			element,
-			content: NodeContent::Text,
+			content: NodeContent::Text(handle),
 		}
 	}
 
@@ -443,7 +442,6 @@ impl NodeContext {
 pub(crate) struct PageLayouterEmpty;
 pub(crate) struct PageLayouterLoaded {
 	content_id: NodeId,
-	texts: HashMap<NodeId, SculpterHandle>,
 }
 
 pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
@@ -499,12 +497,13 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 			..Style::default()
 		})?;
 
+		let src_attr_name =
+			html5ever::QualName::new(None, html5ever::ns!(), html5ever::local_name!("src"));
+
 		let mut current = content_id;
 
 		let mut styles = Vec::new();
 		let mut inputs = Vec::new();
-		let mut texts = HashMap::new();
-
 		let mut svg_buf = String::new();
 
 		#[cfg(debug_assertions)]
@@ -631,8 +630,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 							);
 							max_el_id = el_id;
 						}
-						let node = taffy_tree
-							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
 						let handle =
 							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
 								SculpterInput {
@@ -640,7 +637,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 									input: tendril,
 								}
 							}))?;
-						texts.insert(node, handle);
+						let node = taffy_tree.new_leaf_with_context(
+							Style::default(),
+							NodeContext::text(el_id, handle),
+						)?;
 						taffy_tree.add_child(current, node)?;
 					}
 					let node = taffy_tree.new_leaf_with_context(
@@ -668,8 +668,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 							);
 							max_el_id = el_id;
 						}
-						let node = taffy_tree
-							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
 						let handle =
 							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
 								SculpterInput {
@@ -677,7 +675,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 									input: tendril,
 								}
 							}))?;
-						texts.insert(node, handle);
+						let node = taffy_tree.new_leaf_with_context(
+							Style::default(),
+							NodeContext::text(el_id, handle),
+						)?;
 						taffy_tree.add_child(current, node)?;
 					}
 
@@ -701,7 +702,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		taffy_tree.compute_layout_with_measure(
 			content_id,
 			taffy::Size::MAX_CONTENT,
-			|known_dimensions, available_space, node_id, node_context, _style| {
+			|known_dimensions, available_space, _node_id, node_context, _style| {
 				if let Size {
 					width: Some(width),
 					height: Some(height),
@@ -725,17 +726,12 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 				});
 
 				match node_context.content {
-					NodeContent::Text => {
-						if let Some(handle) = texts.get(&node_id) {
-							let max_width = max_width.unwrap_or(page_width);
-							let result =
-								sculpter.measure(handle, max_width as u32, min_line_height);
-							taffy::Size {
-								width: max_width,
-								height: result.height.to_num::<f32>().ceil(),
-							}
-						} else {
-							taffy::Size::ZERO
+					NodeContent::Text(ref handle) => {
+						let max_width = max_width.unwrap_or(page_width);
+						let result = sculpter.measure(handle, max_width as u32, min_line_height);
+						taffy::Size {
+							width: max_width,
+							height: result.height.to_num::<f32>().ceil(),
 						}
 					}
 					NodeContent::Svg(ref tree) => {
@@ -775,7 +771,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 			buffer,
 			taffy_tree,
 			sculpter,
-			state: PageLayouterLoaded { content_id, texts },
+			state: PageLayouterLoaded { content_id },
 		})
 	}
 }
@@ -902,10 +898,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 			mut buffer,
 			mut taffy_tree,
 			mut sculpter,
-			state: PageLayouterLoaded {
-				content_id,
-				mut texts,
-			},
+			state: PageLayouterLoaded { content_id },
 		} = self;
 
 		let min_line_height = Fixed::from_num(settings.min_line_height());
@@ -926,11 +919,8 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 						continue;
 					};
 					match &ctx.content {
-						NodeContent::Text => {
-							let mut text = texts
-								.remove(&id)
-								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
-
+						NodeContent::Text(handle) => {
+							let mut text = handle.clone();
 							let el = U26F6::from_num(ctx.element);
 							let glyph_len = U26F6::from_num(text.glyph_range().len());
 

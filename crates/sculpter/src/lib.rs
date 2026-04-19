@@ -245,7 +245,7 @@ pub struct SculpterInput<'a> {
 	pub input: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SculpterHandle {
 	glyphs_start: usize,
 	glyphs_end: usize,
