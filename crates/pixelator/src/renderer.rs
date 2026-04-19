@@ -14,15 +14,14 @@ use wgpu::Texture;
 use wgpu::TextureFormat;
 use wgpu::util::DeviceExt;
 
-use bitflags::bitflags;
-
-bitflags! {
-	#[repr(C)]
-	#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-	struct Flags: u32 {
-		const GRAYSCALE = 0b00000001;
-	}
-}
+use crate::Flags;
+use crate::PaintPosition;
+use crate::PixmapData;
+use crate::PixmapDimensions;
+use crate::PixmapId;
+use crate::PixmapInstance;
+use crate::PixmapRef;
+use crate::upload_texture;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,200 +33,11 @@ struct Params {
 }
 
 #[derive(Debug)]
-pub(crate) enum PixmapData<'data> {
-	RgbA(&'data [u8]),
-	Luma(&'data [u8]),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct PixmapId(u64);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PixmapRef(Arc<PixmapId>);
-
-impl From<PixmapId> for PixmapRef {
-	fn from(value: PixmapId) -> Self {
-		Self(Arc::new(value))
-	}
-}
-
-impl AsRef<PixmapId> for PixmapRef {
-	fn as_ref(&self) -> &PixmapId {
-		self.0.as_ref()
-	}
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PixmapDimensions([u32; 2]);
-
-impl PixmapDimensions {
-	pub(crate) fn width(&self) -> u32 {
-		self.0[0]
-	}
-
-	pub(crate) fn height(&self) -> u32 {
-		self.0[1]
-	}
-}
-
-impl From<[u32; 2]> for PixmapDimensions {
-	fn from(value: [u32; 2]) -> Self {
-		Self(value)
-	}
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct PaintPosition([f32; 2]);
-
-impl PaintPosition {
-	pub(crate) fn inner(&self) -> [f32; 2] {
-		self.0
-	}
-}
-
-impl From<[f32; 2]> for PaintPosition {
-	fn from(value: [f32; 2]) -> Self {
-		Self(value)
-	}
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct PixmapInstance {
-	pub(crate) pos: [f32; 2],
-	pub(crate) dim: [f32; 2],
-	pub(crate) uv_pos: [u32; 2],
-	pub(crate) uv_dim: [u32; 2],
-}
-
-#[derive(Debug)]
-pub(crate) struct PixmapTexture {
+struct PixmapTexture {
 	weak_ref: Weak<PixmapId>,
 	pixmap_dim: PixmapDimensions,
 	flags: Flags,
 	texture: Texture,
-}
-
-#[derive(Debug)]
-pub(crate) struct PixmapSpan {
-	pixmap: PixmapId,
-	pos: PaintPosition,
-	range: Range<u32>,
-}
-
-pub(crate) struct PixmapBrush<'renderer> {
-	device: &'renderer Device,
-	queue: &'renderer Queue,
-
-	id_counter: &'renderer mut u64,
-	textures: &'renderer mut BTreeMap<PixmapId, PixmapTexture>,
-	spans: &'renderer mut Vec<PixmapSpan>,
-	instances: &'renderer mut Vec<PixmapInstance>,
-}
-
-impl PixmapBrush<'_> {
-	pub(crate) fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
-		let pixmap_id = PixmapId(*self.id_counter);
-		*self.id_counter += 1;
-
-		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
-
-		let pixmap: PixmapRef = pixmap_id.into();
-		let weak_ref = Arc::downgrade(&pixmap.0);
-
-		self.textures.insert(
-			pixmap_id,
-			PixmapTexture {
-				weak_ref,
-				pixmap_dim: dims,
-				flags,
-				texture,
-			},
-		);
-
-		pixmap
-	}
-
-	#[must_use = "Output pixmap_id may be different and needs to be used in subsequent calls to draw!"]
-	pub(crate) fn update(
-		&mut self,
-		pixmap: PixmapRef,
-		dims: PixmapDimensions,
-		data: PixmapData,
-	) -> PixmapRef {
-		let format = match data {
-			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
-			PixmapData::Luma(_) => TextureFormat::R8Unorm,
-		};
-		if let Some(entry) = self.textures.get_mut(pixmap.as_ref())
-			&& entry.pixmap_dim == dims
-			&& entry.texture.format() == format
-		{
-			// Match, write new data to texture
-			let (bytes, flags, data) = match data {
-				PixmapData::RgbA(data) => (4, Flags::empty(), data),
-				PixmapData::Luma(data) => (1, Flags::GRAYSCALE, data),
-			};
-			let size = wgpu::Extent3d {
-				width: dims.width(),
-				height: dims.height(),
-				depth_or_array_layers: 1,
-			};
-			self.queue.write_texture(
-				wgpu::TexelCopyTextureInfo {
-					texture: &entry.texture,
-					mip_level: 0,
-					origin: wgpu::Origin3d::ZERO,
-					aspect: wgpu::TextureAspect::All,
-				},
-				data,
-				wgpu::TexelCopyBufferLayout {
-					offset: 0,
-					bytes_per_row: Some(bytes * dims.width()),
-					rows_per_image: Some(dims.height()),
-				},
-				size,
-			);
-			entry.flags = flags;
-			pixmap
-		} else {
-			// No match found or different parameters, allocate new texture
-			let pixmap_id = PixmapId(*self.id_counter);
-			*self.id_counter += 1;
-
-			let pixmap: PixmapRef = pixmap_id.into();
-			let weak_ref = Arc::downgrade(&pixmap.0);
-
-			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
-			self.textures.insert(
-				pixmap_id,
-				PixmapTexture {
-					weak_ref,
-					pixmap_dim: dims,
-					texture,
-					flags,
-				},
-			);
-			pixmap
-		}
-	}
-
-	pub(crate) fn draw(
-		&mut self,
-		pixmap: &PixmapRef,
-		pos: PaintPosition,
-		instances: impl IntoIterator<Item = PixmapInstance>,
-	) {
-		let start = self.instances.len() as u32;
-		self.instances.extend(instances);
-		let end = self.instances.len() as u32;
-
-		self.spans.push(PixmapSpan {
-			pixmap: *pixmap.as_ref(),
-			pos,
-			range: start..end,
-		});
-	}
 }
 
 struct PixmapBatch {
@@ -236,7 +46,10 @@ struct PixmapBatch {
 	range: Range<u32>,
 }
 
-pub(crate) struct Renderer {
+pub struct Renderer {
+	device: Device,
+	queue: Queue,
+
 	sampler: wgpu::Sampler,
 	bind_group_layout: wgpu::BindGroupLayout,
 	pipeline: wgpu::RenderPipeline,
@@ -254,8 +67,9 @@ pub(crate) struct Renderer {
 }
 
 impl Renderer {
-	pub(crate) fn new(
-		device: &Device,
+	pub fn new(
+		device: Device,
+		queue: Queue,
 		format: TextureFormat,
 		screen_width: u32,
 		screen_height: u32,
@@ -347,6 +161,9 @@ impl Renderer {
 		});
 
 		Self {
+			device,
+			queue,
+
 			sampler,
 			bind_group_layout,
 			pipeline,
@@ -393,23 +210,32 @@ impl Renderer {
 		}
 	}
 
-	pub(crate) fn resize(&mut self, width: u32, height: u32) {
+	pub fn resize(&mut self, width: u32, height: u32) {
 		self.screen_width = width;
 		self.screen_height = height;
 	}
 
-	pub(crate) fn prepare(
-		&mut self,
-		device: &Device,
-		queue: &Queue,
-		mut run_brush: impl FnMut(&mut PixmapBrush<'_>),
-	) {
+	pub fn render(&self, rpass: &mut RenderPass<'_>) {
+		if !self.batches_active.is_empty()
+			&& let Some(instance_buffer) = &self.instance_buffer
+		{
+			rpass.set_pipeline(&self.pipeline);
+			rpass.set_vertex_buffer(0, instance_buffer.slice(..));
+
+			for batch in &self.batches_active {
+				rpass.set_bind_group(0, &batch.bind_group, &[]);
+				rpass.draw(0..4, batch.range.clone());
+			}
+		}
+	}
+
+	pub fn prepare(&mut self, mut run_brush: impl FnMut(&mut PixmapBrush<'_>)) {
 		// Get new content to work with
 		self.spans.clear();
 		self.vertices.clear();
 		let mut brush = PixmapBrush {
-			device,
-			queue,
+			device: &self.device,
+			queue: &self.queue,
 			id_counter: &mut self.id_counter,
 			textures: &mut self.textures,
 			spans: &mut self.spans,
@@ -422,13 +248,15 @@ impl Renderer {
 		if let Some(buffer) = &self.instance_buffer
 			&& buffer.size() >= contents.len() as u64
 		{
-			queue.write_buffer(buffer, 0, contents);
+			self.queue.write_buffer(buffer, 0, contents);
 		} else {
-			let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-				label: Some("pixmap instance buffer"),
-				contents,
-				usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-			});
+			let buffer = self
+				.device
+				.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+					label: Some("pixmap instance buffer"),
+					contents,
+					usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+				});
 			self.instance_buffer = Some(buffer);
 		}
 
@@ -450,19 +278,21 @@ impl Renderer {
 				_unused: 0,
 			};
 			let params_buffer = if let Some(buffer) = params_buffers.next() {
-				queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[params]));
+				self.queue
+					.write_buffer(&buffer, 0, bytemuck::cast_slice(&[params]));
 				buffer
 			} else {
-				device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-					label: Some("pixmap params buffer"),
-					contents: bytemuck::cast_slice(&[params]),
-					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-				})
+				self.device
+					.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+						label: Some("pixmap params buffer"),
+						contents: bytemuck::cast_slice(&[params]),
+						usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+					})
 			};
 			let texture_view = entry
 				.texture
 				.create_view(&wgpu::wgt::TextureViewDescriptor::default());
-			let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
 				label: Some("pixmap bind group"),
 				layout: &self.bind_group_layout,
 				entries: &[
@@ -500,61 +330,126 @@ impl Renderer {
 			}
 		}
 	}
-
-	pub(crate) fn render(&self, rpass: &mut RenderPass<'_>) {
-		if !self.batches_active.is_empty()
-			&& let Some(instance_buffer) = &self.instance_buffer
-		{
-			rpass.set_pipeline(&self.pipeline);
-			rpass.set_vertex_buffer(0, instance_buffer.slice(..));
-
-			for batch in &self.batches_active {
-				rpass.set_bind_group(0, &batch.bind_group, &[]);
-				rpass.draw(0..4, batch.range.clone());
-			}
-		}
-	}
 }
 
-fn upload_texture(
-	device: &Device,
-	queue: &Queue,
-	dims: &PixmapDimensions,
-	data: PixmapData<'_>,
-) -> (Texture, Flags) {
-	let (format, bytes, flags, data) = match data {
-		PixmapData::RgbA(data) => (TextureFormat::Rgba8Unorm, 4, Flags::empty(), data),
-		PixmapData::Luma(data) => (TextureFormat::R8Unorm, 1, Flags::GRAYSCALE, data),
-	};
-	let size = wgpu::Extent3d {
-		width: dims.width(),
-		height: dims.height(),
-		depth_or_array_layers: 1,
-	};
-	let texture = device.create_texture(&wgpu::TextureDescriptor {
-		label: Some("pixmap texture"),
-		size,
-		mip_level_count: 1,
-		sample_count: 1,
-		dimension: wgpu::TextureDimension::D2,
-		format,
-		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-		view_formats: &[],
-	});
-	queue.write_texture(
-		wgpu::TexelCopyTextureInfo {
-			texture: &texture,
-			mip_level: 0,
-			origin: wgpu::Origin3d::ZERO,
-			aspect: wgpu::TextureAspect::All,
-		},
-		data,
-		wgpu::TexelCopyBufferLayout {
-			offset: 0,
-			bytes_per_row: Some(bytes * dims.width()),
-			rows_per_image: Some(dims.height()),
-		},
-		size,
-	);
-	(texture, flags)
+struct PixmapSpan {
+	pixmap: PixmapId,
+	pos: PaintPosition,
+	range: Range<u32>,
+}
+
+pub struct PixmapBrush<'renderer> {
+	device: &'renderer Device,
+	queue: &'renderer Queue,
+
+	id_counter: &'renderer mut u64,
+	textures: &'renderer mut BTreeMap<PixmapId, PixmapTexture>,
+	spans: &'renderer mut Vec<PixmapSpan>,
+	instances: &'renderer mut Vec<PixmapInstance>,
+}
+
+impl PixmapBrush<'_> {
+	#[must_use = "Output needs to be saved or texture is deallocated"]
+	pub fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
+		let pixmap_id = PixmapId(*self.id_counter);
+		*self.id_counter += 1;
+
+		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
+
+		let pixmap: PixmapRef = pixmap_id.into();
+		let weak_ref = Arc::downgrade(&pixmap.0);
+
+		self.textures.insert(
+			pixmap_id,
+			PixmapTexture {
+				weak_ref,
+				pixmap_dim: dims,
+				flags,
+				texture,
+			},
+		);
+
+		pixmap
+	}
+
+	#[must_use = "Output needs to be saved or texture is deallocated"]
+	pub fn update(
+		&mut self,
+		pixmap: PixmapRef,
+		dims: PixmapDimensions,
+		data: PixmapData,
+	) -> PixmapRef {
+		let format = match data {
+			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
+			PixmapData::Luma(_) => TextureFormat::R8Unorm,
+		};
+		if let Some(entry) = self.textures.get_mut(pixmap.as_ref())
+			&& entry.pixmap_dim == dims
+			&& entry.texture.format() == format
+		{
+			// Match, write new data to texture
+			let (bytes, flags, data) = match data {
+				PixmapData::RgbA(data) => (4, Flags::empty(), data),
+				PixmapData::Luma(data) => (1, Flags::GRAYSCALE, data),
+			};
+			let size = wgpu::Extent3d {
+				width: dims.width(),
+				height: dims.height(),
+				depth_or_array_layers: 1,
+			};
+			self.queue.write_texture(
+				wgpu::TexelCopyTextureInfo {
+					texture: &entry.texture,
+					mip_level: 0,
+					origin: wgpu::Origin3d::ZERO,
+					aspect: wgpu::TextureAspect::All,
+				},
+				data,
+				wgpu::TexelCopyBufferLayout {
+					offset: 0,
+					bytes_per_row: Some(bytes * dims.width()),
+					rows_per_image: Some(dims.height()),
+				},
+				size,
+			);
+			entry.flags = flags;
+			pixmap
+		} else {
+			// No match found or different parameters, allocate new texture
+			let pixmap_id = PixmapId(*self.id_counter);
+			*self.id_counter += 1;
+
+			let pixmap: PixmapRef = pixmap_id.into();
+			let weak_ref = Arc::downgrade(&pixmap.0);
+
+			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
+			self.textures.insert(
+				pixmap_id,
+				PixmapTexture {
+					weak_ref,
+					pixmap_dim: dims,
+					texture,
+					flags,
+				},
+			);
+			pixmap
+		}
+	}
+
+	pub fn draw(
+		&mut self,
+		pixmap: &PixmapRef,
+		pos: PaintPosition,
+		instances: impl IntoIterator<Item = PixmapInstance>,
+	) {
+		let start = self.instances.len() as u32;
+		self.instances.extend(instances);
+		let end = self.instances.len() as u32;
+
+		self.spans.push(PixmapSpan {
+			pixmap: *pixmap.as_ref(),
+			pos,
+			range: start..end,
+		});
+	}
 }

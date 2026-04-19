@@ -1,0 +1,12 @@
+[package]
+name = "pixelator"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+bytemuck.workspace = true
+log.workspace = true
+wgpu.workspace = true
+

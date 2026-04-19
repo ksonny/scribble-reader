@@ -1,6 +1,5 @@
 pub(crate) mod gui_renderer;
 pub(crate) mod painter;
-pub(crate) mod pixmap_renderer;
 
 use winit::dpi::PhysicalSize;
 use winit::event_loop::OwnedDisplayHandle;
@@ -60,7 +59,7 @@ pub(crate) struct Renderer<'window> {
 	adapter: wgpu::Adapter,
 	device: wgpu::Device,
 	queue: wgpu::Queue,
-	pixmap_renderer: pixmap_renderer::Renderer,
+	pixmap_renderer: pixelator::Renderer,
 	gui_renderer: gui_renderer::Renderer,
 	surface_state: Option<SurfaceState<'window>>,
 	resized: Option<PhysicalSize<u32>>,
@@ -99,11 +98,17 @@ impl Renderer<'_> {
 		let size = window.inner_size();
 		let (format, alpha_mode) = surface_format(&surface, &adapter)?;
 
-		let pixmap_renderer =
-			pixmap_renderer::Renderer::new(&device, format, size.width, size.height);
+		let pixmap_renderer = pixelator::Renderer::new(
+			device.clone(),
+			queue.clone(),
+			format,
+			size.width,
+			size.height,
+		);
 
-		let mut gui_renderer = gui_renderer::Renderer::new(&device, format, egui_ctx.clone());
-		gui_renderer.resume(&device, window.clone());
+		let mut gui_renderer =
+			gui_renderer::Renderer::new(device.clone(), queue.clone(), format, egui_ctx.clone());
+		gui_renderer.resume(window.clone());
 
 		let surface_state = SurfaceState {
 			window,
@@ -139,7 +144,7 @@ impl Renderer<'_> {
 		let (format, alpha_mode) = surface_format(&surface, &self.adapter)?;
 
 		self.pixmap_renderer.resize(size.width, size.height);
-		self.gui_renderer.resume(&self.device, window.clone());
+		self.gui_renderer.resume(window.clone());
 
 		let surface_state = SurfaceState {
 			window,
@@ -251,13 +256,7 @@ impl Renderer<'_> {
 	}
 
 	pub(crate) fn painter<'a>(&'a mut self, ui_input: &'a mut UiInput) -> Painter<'a> {
-		Painter::new(
-			&self.device,
-			&self.queue,
-			ui_input,
-			&mut self.gui_renderer,
-			&mut self.pixmap_renderer,
-		)
+		Painter::new(ui_input, &mut self.gui_renderer, &mut self.pixmap_renderer)
 	}
 }
 
