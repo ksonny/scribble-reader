@@ -20,6 +20,7 @@ taffy.workspace = true
 thiserror.workspace = true
 wrangler.workspace = true
 zip.workspace = true
+pixelator.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true

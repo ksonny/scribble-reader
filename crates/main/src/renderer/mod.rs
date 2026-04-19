@@ -1,6 +1,7 @@
 pub(crate) mod gui_renderer;
 pub(crate) mod painter;
 
+use pixelator::PixelatorAssistant;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::OwnedDisplayHandle;
 
@@ -257,6 +258,10 @@ impl Renderer<'_> {
 
 	pub(crate) fn painter<'a>(&'a mut self, ui_input: &'a mut UiInput) -> Painter<'a> {
 		Painter::new(ui_input, &mut self.gui_renderer, &mut self.pixmap_renderer)
+	}
+
+	pub(crate) fn pixelator(&self) -> PixelatorAssistant {
+		self.pixmap_renderer.assistant()
 	}
 }
 

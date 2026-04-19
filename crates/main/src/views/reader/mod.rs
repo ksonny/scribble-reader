@@ -1,6 +1,5 @@
 mod active_areas;
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -14,6 +13,7 @@ use illustrator::IllustratorCreateError;
 use illustrator::IllustratorRequestError;
 use illustrator::create_illustrator;
 use lucide_icons::Icon;
+use pixelator::PixelatorAssistant;
 use pixelator::PixelatorTextures;
 use pixelator::PixmapData;
 use pixelator::PixmapInstance;
@@ -144,6 +144,7 @@ pub(crate) struct ReaderView {
 	keeper: RecordKeeper,
 	fonts: SculpterFonts,
 	content: ContentWranglerAssistant,
+	pixelator: PixelatorAssistant,
 	bell: AppBell,
 	book_id: BookId,
 
@@ -158,17 +159,18 @@ pub(crate) struct ReaderView {
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
 
 	atlas_pixmap: Option<(PixmapRef, AtlasVersion)>,
-	content_pixmaps: BTreeMap<u64, PixmapRef>,
 }
 
 impl ReaderView {
 	const STATE_KEY: &str = "reader_view_state";
 
+	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn create(
 		config: IllustratorConfig,
 		keeper: RecordKeeper,
 		fonts: SculpterFonts,
 		content: ContentWranglerAssistant,
+		pixelator: PixelatorAssistant,
 		bell: AppBell,
 		book_id: BookId,
 		viewport: Viewport,
@@ -185,6 +187,7 @@ impl ReaderView {
 			keeper,
 			fonts,
 			content,
+			pixelator,
 			bell,
 			book_id,
 
@@ -199,7 +202,6 @@ impl ReaderView {
 			chapters_cards: Default::default(),
 
 			atlas_pixmap: None,
-			content_pixmaps: BTreeMap::new(),
 		};
 
 		view.create_illustrator()?;
@@ -224,6 +226,7 @@ impl ReaderView {
 			self.keeper.assistant()?,
 			self.fonts.clone(),
 			self.content.clone(),
+			self.pixelator.clone(),
 			self.bell.clone(),
 			profile,
 			self.book_id,
@@ -445,15 +448,8 @@ impl ViewHandle for ReaderView {
 						size,
 						content: illustrator::DisplayContent::Pixmap(content),
 					} => {
-						let pixmap =
-							self.content_pixmaps.entry(content.hash).or_insert_with(|| {
-								let pixmap_dims =
-									[content.pixmap_width, content.pixmap_height].into();
-								let pixmap_data = PixmapData::RgbA(&content.pixmap_rgba);
-								brush.create(pixmap_dims, pixmap_data)
-							});
 						brush.draw(
-							pixmap,
+							&content.pixmap,
 							[pos.x, pos.y].into(),
 							[PixmapInstance {
 								pos: [0.; 2],

@@ -171,12 +171,18 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				self.view.library(self.keeper.clone(), self.scribe.clone());
 			}
 			AppEvent::OpenReader(book_id) => {
+				let Some(pixelator) = self.renderer.as_ref().map(|r| r.pixelator()) else {
+					self.view.error("Renderer not available");
+					return;
+				};
+
 				log::debug!("Open book {book_id:?}");
 				self.view.reader(
 					self.config.illustrator.clone(),
 					self.keeper.clone(),
 					self.fonts.clone(),
 					self.content.clone(),
+					pixelator,
 					self.bell.clone(),
 					book_id,
 				);

@@ -1650,6 +1650,7 @@ dependencies = [
  "html5ever",
  "imagesize",
  "log",
+ "pixelator",
  "pollster",
  "resvg",
  "scribe",

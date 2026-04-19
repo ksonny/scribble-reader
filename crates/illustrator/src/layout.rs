@@ -10,6 +10,9 @@ use std::sync::Mutex;
 use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
+use pixelator::PixelatorAssistant;
+use pixelator::PixelatorTextures;
+use pixelator::PixmapData;
 use resvg::tiny_skia;
 use resvg::usvg;
 use scribe::config::FontConfig;
@@ -422,6 +425,7 @@ pub(crate) struct PageLayouterLoaded {
 
 pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
 	builder: NodeTreeBuilder,
+	buffer: Vec<u8>,
 	taffy_tree: taffy::TaffyTree<NodeContext>,
 	sculpter: Sculpter<'a>,
 	state: TState,
@@ -431,6 +435,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 	pub(crate) fn new(sculpter: Sculpter<'layout>) -> Self {
 		Self {
 			builder: NodeTreeBuilder::new(),
+			buffer: Vec::new(),
 			taffy_tree: taffy::TaffyTree::new(),
 			sculpter,
 			state: PageLayouterEmpty,
@@ -446,6 +451,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 	) -> Result<PageLayouter<'layout, PageLayouterLoaded>, IllustratorLayoutError> {
 		let Self {
 			builder,
+			buffer,
 			mut taffy_tree,
 			mut sculpter,
 			..
@@ -692,6 +698,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 
 		Ok(PageLayouter {
 			builder,
+			buffer,
 			taffy_tree,
 			sculpter,
 			state: PageLayouterLoaded {
@@ -816,11 +823,13 @@ impl PageBreaker {
 impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 	pub(crate) fn layout<'settings>(
 		self,
+		pixelator: &PixelatorAssistant,
 		settings: &StyleSettings<'settings>,
 	) -> Result<(PageLayouter<'layout, PageLayouterEmpty>, Vec<PageContent>), IllustratorLayoutError>
 	{
 		let Self {
 			builder,
+			mut buffer,
 			mut taffy_tree,
 			mut sculpter,
 			state: PageLayouterLoaded {
@@ -909,7 +918,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							}
 						}
 						NodeContent::Svg => {
-							let SvgContent { hash, tree } = svgs
+							let SvgContent { tree, .. } = svgs
 								.remove(&id)
 								.ok_or(IllustratorLayoutError::MissingSvgContent(id))?;
 
@@ -925,11 +934,25 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 								.to_int_size()
 								.scale_by(scale)
 								.ok_or(IllustratorLayoutError::ScaleSvgFailed(scale))?;
+
+							let byte_size = pixmap_size.width() as usize
+								* pixmap_size.height() as usize
+								* tiny_skia::BYTES_PER_PIXEL;
+							buffer.resize(byte_size, 0u8);
+
+							let mut target = tiny_skia::PixmapMut::from_bytes(
+								&mut buffer,
+								pixmap_size.width(),
+								pixmap_size.height(),
+							)
+							.unwrap();
 							let transform = tiny_skia::Transform::from_scale(scale, scale);
-							let mut pixmap =
-								tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height())
-									.unwrap();
-							resvg::render(&tree, transform, &mut pixmap.as_mut());
+							resvg::render(&tree, transform, &mut target);
+
+							let pixmap = pixelator.create(
+								[target.width(), target.height()].into(),
+								PixmapData::RgbA(target.data_mut()),
+							);
 
 							breaker.add_content(
 								U26F6::from_num(ctx.element),
@@ -939,10 +962,9 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 									height: size.height() * scale,
 								},
 								DisplayPixmap {
-									hash,
-									pixmap_width: pixmap.width(),
-									pixmap_height: pixmap.height(),
-									pixmap_rgba: pixmap.take(),
+									pixmap,
+									pixmap_width: target.width(),
+									pixmap_height: target.height(),
 								},
 							);
 						}
@@ -964,6 +986,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 
 		let layouter = PageLayouter {
 			builder,
+			buffer,
 			taffy_tree,
 			sculpter,
 			state: PageLayouterEmpty,

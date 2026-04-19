@@ -2,6 +2,7 @@ mod experiments;
 mod library;
 mod reader;
 
+use pixelator::PixelatorAssistant;
 use scribe::BookId;
 use scribe::LibraryScribeAssistant;
 use scribe::RecordKeeper;
@@ -93,12 +94,14 @@ impl AppView {
 		};
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn reader(
 		&mut self,
 		config: IllustratorConfig,
 		keeper: RecordKeeper,
 		fonts: SculpterFonts,
 		content: ContentWranglerAssistant,
+		pixelator: PixelatorAssistant,
 		bell: AppBell,
 		book_id: BookId,
 	) {
@@ -108,6 +111,7 @@ impl AppView {
 			keeper,
 			fonts,
 			content,
+			pixelator,
 			bell,
 			book_id,
 			self.viewport.clone(),
@@ -127,6 +131,10 @@ impl AppView {
 			fonts,
 			self.viewport.clone(),
 		))
+	}
+
+	pub(crate) fn error(&mut self, error: &str) {
+		self.view = Views::Error(error.to_string());
 	}
 }
 
