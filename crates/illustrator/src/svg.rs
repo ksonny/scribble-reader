@@ -2,9 +2,6 @@ use resvg::usvg;
 
 use std::fmt;
 use std::fmt::Write;
-use std::hash::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::io;
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +14,7 @@ use crate::html_parser;
 use crate::html_parser::EdgeRef;
 use crate::html_parser::TextWrapper;
 
-pub static HORIZONTAL_RULER_SVG: LazyLock<SvgContent> = LazyLock::new(|| {
+pub static HORIZONTAL_RULER_SVG: LazyLock<Arc<usvg::Tree>> = LazyLock::new(|| {
 	let svg = r##"
 <svg width="116.06" height="38.367" version="1.1" viewBox="0 0 30.707 10.151" xmlns="http://www.w3.org/2000/svg">
  <g transform="translate(-143.4 -8.1536)" stroke-width=".26458">
@@ -32,29 +29,13 @@ pub static HORIZONTAL_RULER_SVG: LazyLock<SvgContent> = LazyLock::new(|| {
  </g>
 </svg>
 	"##;
-
-	let hash = {
-		let mut s = DefaultHasher::new();
-		svg.hash(&mut s);
-		s.finish()
-	};
-	SvgContent {
-		hash,
-		tree: usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap(),
-	}
+	Arc::new(usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap())
 });
 
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorSvgError {
 	#[error(transparent)]
 	Write(#[from] fmt::Error),
-}
-
-#[derive(Clone)]
-pub(crate) struct SvgContent {
-	#[allow(unused)]
-	pub(crate) hash: u64,
-	pub(crate) tree: usvg::Tree,
 }
 
 pub(crate) fn svg_options<'a, R: io::Seek + io::Read + Sync + Send>(
@@ -182,8 +163,6 @@ pub(crate) fn read_svg<'a>(
 		}
 	}
 	write_end_node(buf, el.name())?;
-	log::debug!("Svg node '''\n{buf}\n'''");
-
 	Ok(buf.as_str())
 }
 

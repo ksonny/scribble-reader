@@ -1,15 +1,13 @@
-use std::collections::HashMap;
-use std::hash::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::io;
 use std::mem;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use fixed::types::U26F6;
 use html5ever::LocalName;
 use html5ever::local_name;
+use image::RgbaImage;
 use pixelator::PixelatorAssistant;
 use pixelator::PixelatorTextures;
 use pixelator::PixmapData;
@@ -44,7 +42,6 @@ use crate::html_parser::TextWrapper;
 use crate::html_parser::TreeBuilderError;
 use crate::svg::HORIZONTAL_RULER_SVG;
 use crate::svg::IllustratorSvgError;
-use crate::svg::SvgContent;
 use crate::svg::read_svg;
 use crate::svg::svg_options;
 
@@ -58,6 +55,8 @@ pub enum IllustratorLayoutError {
 	Taffy(#[from] taffy::TaffyError),
 	#[error(transparent)]
 	Svg(#[from] IllustratorSvgError),
+	#[error(transparent)]
+	Image(#[from] image::ImageError),
 	#[error(transparent)]
 	SculpterShape(#[from] sculpter::SculpterShapeError),
 	#[error(transparent)]
@@ -222,6 +221,7 @@ impl<'a> StyleSettings<'a> {
 		match *name {
 			local_name!("h1") => Style {
 				display: Display::Block,
+				box_sizing: BoxSizing::ContentBox,
 				padding: Rect {
 					top: zero(),
 					bottom: length(self.em_to_px(self.profile.h1.padding_em)),
@@ -232,6 +232,7 @@ impl<'a> StyleSettings<'a> {
 			},
 			local_name!("h2") => Style {
 				display: Display::Block,
+				box_sizing: BoxSizing::ContentBox,
 				padding: Rect {
 					top: zero(),
 					bottom: length(self.em_to_px(self.profile.h2.padding_em)),
@@ -242,6 +243,7 @@ impl<'a> StyleSettings<'a> {
 			},
 			local_name!("h3") => Style {
 				display: Display::Block,
+				box_sizing: BoxSizing::ContentBox,
 				padding: Rect {
 					top: zero(),
 					bottom: length(self.em_to_px(self.profile.h3.padding_em)),
@@ -252,6 +254,7 @@ impl<'a> StyleSettings<'a> {
 			},
 			local_name!("h4") => Style {
 				display: Display::Block,
+				box_sizing: BoxSizing::ContentBox,
 				padding: Rect {
 					top: zero(),
 					bottom: length(self.em_to_px(self.profile.h4.padding_em)),
@@ -262,6 +265,7 @@ impl<'a> StyleSettings<'a> {
 			},
 			local_name!("h5") => Style {
 				display: Display::Block,
+				box_sizing: BoxSizing::ContentBox,
 				padding: Rect {
 					top: zero(),
 					bottom: length(self.em_to_px(self.profile.h5.padding_em)),
@@ -272,6 +276,7 @@ impl<'a> StyleSettings<'a> {
 			},
 			local_name!("p") => Style {
 				display: Display::Block,
+				box_sizing: BoxSizing::ContentBox,
 				padding: Rect {
 					top: zero(),
 					bottom: length(self.em_to_px(self.profile.padding.paragraph_em)),
@@ -286,8 +291,18 @@ impl<'a> StyleSettings<'a> {
 					width: auto(),
 					height: length(self.em_to_px(1.2)),
 				},
-				padding: Rect {
-					top: length(self.em_to_px(self.profile.padding.paragraph_em)),
+				margin: Rect {
+					top: zero(),
+					bottom: length(self.em_to_px(self.profile.padding.paragraph_em)),
+					left: zero(),
+					right: zero(),
+				},
+				..Style::default()
+			},
+			local_name!("img") => Style {
+				display: Display::Block,
+				margin: Rect {
+					top: zero(),
 					bottom: length(self.em_to_px(self.profile.padding.paragraph_em)),
 					left: zero(),
 					right: zero(),
@@ -383,8 +398,9 @@ impl<'a, C> Iterator for TaffyTreeIter<'a, C> {
 #[derive(Debug)]
 enum NodeContent {
 	Block,
-	Text,
-	Svg,
+	Text(SculpterHandle),
+	Svg(Arc<usvg::Tree>),
+	Image(Arc<RgbaImage>),
 }
 
 #[derive(Debug)]
@@ -401,17 +417,24 @@ impl NodeContext {
 		}
 	}
 
-	fn text(element: u32) -> Self {
+	fn text(element: u32, handle: SculpterHandle) -> Self {
 		Self {
 			element,
-			content: NodeContent::Text,
+			content: NodeContent::Text(handle),
 		}
 	}
 
-	fn svg(element: u32) -> Self {
+	fn svg(element: u32, tree: Arc<usvg::Tree>) -> Self {
 		Self {
 			element,
-			content: NodeContent::Svg,
+			content: NodeContent::Svg(tree),
+		}
+	}
+
+	fn image(element: u32, image: Arc<RgbaImage>) -> Self {
+		Self {
+			element,
+			content: NodeContent::Image(image),
 		}
 	}
 }
@@ -419,8 +442,6 @@ impl NodeContext {
 pub(crate) struct PageLayouterEmpty;
 pub(crate) struct PageLayouterLoaded {
 	content_id: NodeId,
-	texts: HashMap<NodeId, SculpterHandle>,
-	svgs: HashMap<NodeId, SvgContent>,
 }
 
 pub(crate) struct PageLayouter<'a, TState = PageLayouterEmpty> {
@@ -476,14 +497,14 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 			..Style::default()
 		})?;
 
+		let src_attr_name =
+			html5ever::QualName::new(None, html5ever::ns!(), html5ever::local_name!("src"));
+
 		let mut current = content_id;
 
 		let mut styles = Vec::new();
 		let mut inputs = Vec::new();
-		let mut texts = HashMap::new();
-
 		let mut svg_buf = String::new();
-		let mut svgs = HashMap::new();
 
 		#[cfg(debug_assertions)]
 		let mut max_el_id = 0;
@@ -494,6 +515,8 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		while let Some(edge) = node_iter.next() {
 			match edge {
 				EdgeRef::OpenElement(el) if el.local_name() == &local_name!("svg") => {
+					let svg = read_svg(&mut svg_buf, &el, &mut node_iter)?;
+
 					let container = taffy_tree.new_leaf_with_context(
 						Style {
 							display: Display::Flex,
@@ -504,20 +527,12 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 					)?;
 					taffy_tree.add_child(current, container)?;
 
+					let tree = usvg::Tree::from_str(svg, &svg_options)?;
 					let node = taffy_tree.new_leaf_with_context(
 						settings.element_style(el.local_name()),
-						NodeContext::svg(el.id.value()),
+						NodeContext::svg(el.id.value(), Arc::new(tree)),
 					)?;
 					taffy_tree.add_child(container, node)?;
-
-					let svg = read_svg(&mut svg_buf, &el, &mut node_iter)?;
-					let hash = {
-						let mut s = DefaultHasher::new();
-						svg.hash(&mut s);
-						s.finish()
-					};
-					let tree = usvg::Tree::from_str(svg, &svg_options)?;
-					svgs.insert(node, SvgContent { hash, tree });
 				}
 				EdgeRef::OpenElement(el) if el.local_name() == &local_name!("hr") => {
 					take_until_closed(&mut node_iter, el.id);
@@ -534,11 +549,59 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 
 					let node = taffy_tree.new_leaf_with_context(
 						settings.element_style(el.local_name()),
-						NodeContext::svg(el.id.value()),
+						NodeContext::svg(el.id.value(), HORIZONTAL_RULER_SVG.clone()),
 					)?;
 					taffy_tree.add_child(container, node)?;
+				}
+				EdgeRef::OpenElement(el) if el.local_name() == &local_name!("img") => {
+					take_until_closed(&mut node_iter, el.id);
 
-					svgs.insert(node, HORIZONTAL_RULER_SVG.clone());
+					if let Some(src) = el.el.attrs.get(&src_attr_name)
+						&& let Some(image) =
+							(svg_options.image_href_resolver.resolve_string)(src, &svg_options)
+					{
+						match image {
+							usvg::ImageKind::JPEG(data)
+							| usvg::ImageKind::PNG(data)
+							| usvg::ImageKind::GIF(data)
+							| usvg::ImageKind::WEBP(data) => {
+								if let Some(image) = image::load_from_memory(data.as_slice())
+									.inspect_err(|e| log::error!("Failed to load image {src}: {e}"))
+									.ok()
+									.map(|image| image.into_rgba8())
+								{
+									let node = taffy_tree.new_leaf_with_context(
+										Style {
+											size: Size {
+												width: length(image.width() as f32),
+												height: length(image.height() as f32),
+											},
+											..settings.element_style(el.local_name())
+										},
+										NodeContext::image(el.id.value(), Arc::new(image)),
+									)?;
+									taffy_tree.add_child(current, node)?;
+								}
+							}
+							usvg::ImageKind::SVG(tree) => {
+								let container = taffy_tree.new_leaf_with_context(
+									Style {
+										display: Display::Flex,
+										justify_content: Some(AlignContent::Center),
+										..Style::default()
+									},
+									NodeContext::block(el.id.value()),
+								)?;
+								taffy_tree.add_child(current, container)?;
+
+								let node = taffy_tree.new_leaf_with_context(
+									settings.element_style(el.local_name()),
+									NodeContext::svg(el.id.value(), Arc::new(tree)),
+								)?;
+								taffy_tree.add_child(container, node)?;
+							}
+						};
+					}
 				}
 				EdgeRef::OpenElement(el) if is_inline(el.local_name()) => {
 					if let Some(text_style) = TextStyle::try_from(el.local_name()) {
@@ -567,8 +630,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 							);
 							max_el_id = el_id;
 						}
-						let node = taffy_tree
-							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
 						let handle =
 							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
 								SculpterInput {
@@ -576,7 +637,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 									input: tendril,
 								}
 							}))?;
-						texts.insert(node, handle);
+						let node = taffy_tree.new_leaf_with_context(
+							Style::default(),
+							NodeContext::text(el_id, handle),
+						)?;
 						taffy_tree.add_child(current, node)?;
 					}
 					let node = taffy_tree.new_leaf_with_context(
@@ -604,8 +668,6 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 							);
 							max_el_id = el_id;
 						}
-						let node = taffy_tree
-							.new_leaf_with_context(Style::default(), NodeContext::text(el_id))?;
 						let handle =
 							sculpter.shape(inputs.drain(..).map(|(_, tendril, style)| {
 								SculpterInput {
@@ -613,7 +675,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 									input: tendril,
 								}
 							}))?;
-						texts.insert(node, handle);
+						let node = taffy_tree.new_leaf_with_context(
+							Style::default(),
+							NodeContext::text(el_id, handle),
+						)?;
 						taffy_tree.add_child(current, node)?;
 					}
 
@@ -637,7 +702,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		taffy_tree.compute_layout_with_measure(
 			content_id,
 			taffy::Size::MAX_CONTENT,
-			|known_dimensions, available_space, node_id, node_context, _style| {
+			|known_dimensions, available_space, _node_id, node_context, _style| {
 				if let Size {
 					width: Some(width),
 					height: Some(height),
@@ -661,34 +726,39 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 				});
 
 				match node_context.content {
-					NodeContent::Text => {
-						if let Some(handle) = texts.get(&node_id) {
-							let max_width = max_width.unwrap_or(page_width);
-							let result =
-								sculpter.measure(handle, max_width as u32, min_line_height);
-							taffy::Size {
-								width: max_width,
-								height: result.height.to_num::<f32>().ceil(),
-							}
-						} else {
-							taffy::Size::ZERO
+					NodeContent::Text(ref handle) => {
+						let max_width = max_width.unwrap_or(page_width);
+						let result = sculpter.measure(handle, max_width as u32, min_line_height);
+						taffy::Size {
+							width: max_width,
+							height: result.height.to_num::<f32>().ceil(),
 						}
 					}
-					NodeContent::Svg => {
-						if let Some(svg) = svgs.get(&node_id) {
-							let size = svg.tree.size();
-							let scale = scale_to_fit(
-								size.width(),
-								size.height(),
-								max_width.unwrap_or(size.width()).min(page_width),
-								max_height.unwrap_or(size.height()).min(page_height),
-							);
-							taffy::Size {
-								width: size.width() * scale,
-								height: size.height() * scale,
-							}
-						} else {
-							taffy::Size::ZERO
+					NodeContent::Svg(ref tree) => {
+						let size = tree.size();
+						let scale = scale_to_fit(
+							size.width(),
+							size.height(),
+							max_width.unwrap_or(size.width()).min(page_width),
+							max_height.unwrap_or(size.height()).min(page_height),
+						);
+						taffy::Size {
+							width: size.width() * scale,
+							height: size.height() * scale,
+						}
+					}
+					NodeContent::Image(ref image) => {
+						let width = image.width() as f32;
+						let height = image.height() as f32;
+						let scale = scale_to_fit(
+							width,
+							height,
+							max_width.unwrap_or(width).min(page_width),
+							max_height.unwrap_or(height).min(page_height),
+						);
+						taffy::Size {
+							width: width * scale,
+							height: height * scale,
 						}
 					}
 					NodeContent::Block => taffy::Size::ZERO,
@@ -701,11 +771,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 			buffer,
 			taffy_tree,
 			sculpter,
-			state: PageLayouterLoaded {
-				content_id,
-				texts,
-				svgs,
-			},
+			state: PageLayouterLoaded { content_id },
 		})
 	}
 }
@@ -832,11 +898,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 			mut buffer,
 			mut taffy_tree,
 			mut sculpter,
-			state: PageLayouterLoaded {
-				content_id,
-				mut texts,
-				mut svgs,
-			},
+			state: PageLayouterLoaded { content_id },
 		} = self;
 
 		let min_line_height = Fixed::from_num(settings.min_line_height());
@@ -856,12 +918,9 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 					let Some(ctx) = taffy_tree.get_node_context(id) else {
 						continue;
 					};
-					match ctx.content {
-						NodeContent::Text => {
-							let mut text = texts
-								.remove(&id)
-								.ok_or(IllustratorLayoutError::MissingTextContent(id))?;
-
+					match &ctx.content {
+						NodeContent::Text(handle) => {
+							let mut text = handle.clone();
 							let el = U26F6::from_num(ctx.element);
 							let glyph_len = U26F6::from_num(text.glyph_range().len());
 
@@ -917,11 +976,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 								}
 							}
 						}
-						NodeContent::Svg => {
-							let SvgContent { tree, .. } = svgs
-								.remove(&id)
-								.ok_or(IllustratorLayoutError::MissingSvgContent(id))?;
-
+						NodeContent::Svg(tree) => {
 							let size = tree.size();
 							let scale = scale_to_fit(
 								size.width(),
@@ -947,7 +1002,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							)
 							.unwrap();
 							let transform = tiny_skia::Transform::from_scale(scale, scale);
-							resvg::render(&tree, transform, &mut target);
+							resvg::render(tree, transform, &mut target);
 
 							let pixmap = pixelator.create(
 								[target.width(), target.height()].into(),
@@ -965,6 +1020,27 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 									pixmap,
 									pixmap_width: target.width(),
 									pixmap_height: target.height(),
+								},
+							);
+						}
+						NodeContent::Image(image) => {
+							let width = image.width();
+							let height = image.height();
+
+							let pixmap = pixelator
+								.create([width, height].into(), PixmapData::RgbA(image.as_raw()));
+
+							breaker.add_content(
+								U26F6::from_num(ctx.element),
+								cursor,
+								taffy::Size {
+									width: width as f32,
+									height: height as f32,
+								},
+								DisplayPixmap {
+									pixmap,
+									pixmap_width: width,
+									pixmap_height: height,
 								},
 							);
 						}
