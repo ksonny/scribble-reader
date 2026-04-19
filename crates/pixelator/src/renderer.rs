@@ -316,7 +316,7 @@ impl Renderer {
 				.get(&pixmap_id)
 				.is_some_and(|t| t.weak_ref.upgrade().is_none())
 			{
-				log::info!("Drop pixmap {:?}", pixmap_id);
+				log::debug!("Drop pixmap {:?}", pixmap_id);
 				textures.remove(&pixmap_id);
 			}
 		}

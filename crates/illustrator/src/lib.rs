@@ -546,10 +546,13 @@ impl Worker {
 			let pixmap_data = PixmapData::Luma(atlas.as_raw());
 			let cache_pixmap = cache.pixmap_mut();
 			let pixmap = if let Some(pixmap) = cache_pixmap.take() {
-				log::info!("Update atlas version {:?}", atlas.version());
+				log::debug!(
+					"Update atlas version {:?} in pixmap {pixmap:?}",
+					atlas.version()
+				);
 				self.pixelator.update(pixmap, pixmap_dims, pixmap_data)
 			} else {
-				log::info!("Recreate atlas version {:?}", atlas.version());
+				log::debug!("Recreate atlas version {:?}", atlas.version());
 				self.pixelator.create(pixmap_dims, pixmap_data)
 			};
 			*cache_pixmap = Some(pixmap);
