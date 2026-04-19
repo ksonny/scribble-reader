@@ -14,17 +14,13 @@ use illustrator::IllustratorRequestError;
 use illustrator::create_illustrator;
 use lucide_icons::Icon;
 use pixelator::PixelatorAssistant;
-use pixelator::PixelatorTextures;
-use pixelator::PixmapData;
 use pixelator::PixmapInstance;
-use pixelator::PixmapRef;
 use scribe::BookId;
 use scribe::Location;
 use scribe::RecordKeeper;
 use scribe::RecordKeeperAssistant;
 use scribe::RecordKeeperError;
 use scribe::config::IllustratorConfig;
-use sculpter::AtlasVersion;
 use sculpter::SculpterFonts;
 use serde::Deserialize;
 use serde::Serialize;
@@ -157,8 +153,6 @@ pub(crate) struct ReaderView {
 	active_rects: Vec<Rect>,
 	chapters_page: u32,
 	chapters_cards: [Option<ChapterCard>; CHAPTER_LIST_SIZE as usize],
-
-	atlas_pixmap: Option<(PixmapRef, AtlasVersion)>,
 }
 
 impl ReaderView {
@@ -200,8 +194,6 @@ impl ReaderView {
 			active_rects: Vec::new(),
 			chapters_page: 0,
 			chapters_cards: Default::default(),
-
-			atlas_pixmap: None,
 		};
 
 		view.create_illustrator()?;
@@ -213,7 +205,6 @@ impl ReaderView {
 		if let Some(illustrator) = self.illustrator.take() {
 			log::debug!("Stop running illustrator");
 			illustrator.shutdown();
-			self.atlas_pixmap.take();
 		}
 		let profile = self
 			.config
@@ -410,20 +401,7 @@ impl ViewHandle for ReaderView {
 				return;
 			};
 			page_meta = Some(meta);
-
-			let atlas = cache.atlas();
-			let pixmap_dims = [atlas.width(), atlas.height()].into();
-			let pixmap_data = PixmapData::Luma(atlas.as_raw());
-			let pixmap = if let Some((pixmap, version)) = self.atlas_pixmap.take() {
-				if atlas.version() != version {
-					brush.update(pixmap, pixmap_dims, pixmap_data)
-				} else {
-					pixmap
-				}
-			} else {
-				log::info!("Recreate atlas version {:?}", atlas.version(),);
-				brush.create(pixmap_dims, pixmap_data)
-			};
+			let atlas_pixmap = cache.pixmap();
 
 			for item in &content.items {
 				match item {
@@ -432,16 +410,20 @@ impl ViewHandle for ReaderView {
 						content: illustrator::DisplayContent::Text(content),
 						..
 					} => {
-						brush.draw(
-							&pixmap,
-							[pos.x, pos.y].into(),
-							content.glyphs.iter().map(|g| PixmapInstance {
-								pos: g.pos,
-								dim: g.dim,
-								uv_pos: g.uv_pos,
-								uv_dim: g.uv_dim,
-							}),
-						);
+						if let Some(pixmap) = atlas_pixmap {
+							brush.draw(
+								pixmap,
+								[pos.x, pos.y].into(),
+								content.glyphs.iter().map(|g| PixmapInstance {
+									pos: g.pos,
+									dim: g.dim,
+									uv_pos: g.uv_pos,
+									uv_dim: g.uv_dim,
+								}),
+							);
+						} else {
+							log::warn!("Tried to render text without atlas pixmap ready");
+						}
 					}
 					illustrator::DisplayItem {
 						pos,
@@ -461,7 +443,6 @@ impl ViewHandle for ReaderView {
 					}
 				}
 			}
-			self.atlas_pixmap = Some((pixmap, atlas.version()));
 		});
 
 		let working = illustrator.working();
