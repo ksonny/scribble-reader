@@ -14,6 +14,7 @@ use illustrator::IllustratorCreateError;
 use illustrator::IllustratorRequestError;
 use illustrator::create_illustrator;
 use lucide_icons::Icon;
+use pixelator::PixelatorTextures;
 use pixelator::PixmapData;
 use pixelator::PixmapInstance;
 use pixelator::PixmapRef;

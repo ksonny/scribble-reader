@@ -4,23 +4,20 @@ use std::mem;
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::Weak;
+use std::sync::Mutex;
 
-use wgpu::Buffer;
-use wgpu::Device;
-use wgpu::Queue;
-use wgpu::RenderPass;
-use wgpu::Texture;
-use wgpu::TextureFormat;
 use wgpu::util::DeviceExt;
 
 use crate::Flags;
 use crate::PaintPosition;
+use crate::PixelatorAssistant;
+use crate::PixelatorTextures;
 use crate::PixmapData;
 use crate::PixmapDimensions;
 use crate::PixmapId;
 use crate::PixmapInstance;
 use crate::PixmapRef;
+use crate::PixmapTexture;
 use crate::upload_texture;
 
 #[repr(C)]
@@ -32,14 +29,6 @@ struct Params {
 	_unused: u32,
 }
 
-#[derive(Debug)]
-struct PixmapTexture {
-	weak_ref: Weak<PixmapId>,
-	pixmap_dim: PixmapDimensions,
-	flags: Flags,
-	texture: Texture,
-}
-
 struct PixmapBatch {
 	bind_group: wgpu::BindGroup,
 	params_buffer: wgpu::Buffer,
@@ -47,8 +36,8 @@ struct PixmapBatch {
 }
 
 pub struct Renderer {
-	device: Device,
-	queue: Queue,
+	device: wgpu::Device,
+	queue: wgpu::Queue,
 
 	sampler: wgpu::Sampler,
 	bind_group_layout: wgpu::BindGroupLayout,
@@ -56,21 +45,20 @@ pub struct Renderer {
 	screen_width: u32,
 	screen_height: u32,
 
-	id_counter: u64,
-	textures: BTreeMap<PixmapId, PixmapTexture>,
+	textures: Arc<Mutex<BTreeMap<PixmapId, PixmapTexture>>>,
 	spans: Vec<PixmapSpan>,
 	vertices: Vec<PixmapInstance>,
 
-	instance_buffer: Option<Buffer>,
+	instance_buffer: Option<wgpu::Buffer>,
 	batches_active: Vec<PixmapBatch>,
 	batches_inactive: Vec<PixmapBatch>,
 }
 
 impl Renderer {
 	pub fn new(
-		device: Device,
-		queue: Queue,
-		format: TextureFormat,
+		device: wgpu::Device,
+		queue: wgpu::Queue,
+		format: wgpu::TextureFormat,
 		screen_width: u32,
 		screen_height: u32,
 	) -> Self {
@@ -132,7 +120,32 @@ impl Renderer {
 			vertex: wgpu::VertexState {
 				module: &shader,
 				entry_point: Some("vs_main"),
-				buffers: &[Self::vertex_buffer_layout()],
+				buffers: &[wgpu::VertexBufferLayout {
+					array_stride: mem::size_of::<PixmapInstance>() as u64,
+					step_mode: wgpu::VertexStepMode::Instance,
+					attributes: &[
+						wgpu::VertexAttribute {
+							format: wgpu::VertexFormat::Float32x2,
+							offset: 0,
+							shader_location: 0,
+						},
+						wgpu::VertexAttribute {
+							format: wgpu::VertexFormat::Float32x2,
+							offset: mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+							shader_location: 1,
+						},
+						wgpu::VertexAttribute {
+							format: wgpu::VertexFormat::Uint32x2,
+							offset: mem::size_of::<[u32; 4]>() as wgpu::BufferAddress,
+							shader_location: 2,
+						},
+						wgpu::VertexAttribute {
+							format: wgpu::VertexFormat::Uint32x2,
+							offset: mem::size_of::<[u32; 6]>() as wgpu::BufferAddress,
+							shader_location: 3,
+						},
+					],
+				}],
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 			},
 			fragment: Some(wgpu::FragmentState {
@@ -170,8 +183,7 @@ impl Renderer {
 			screen_width,
 			screen_height,
 
-			id_counter: 0,
-			textures: BTreeMap::new(),
+			textures: Arc::new(Mutex::new(BTreeMap::new())),
 			spans: Vec::new(),
 			vertices: Vec::new(),
 
@@ -181,32 +193,11 @@ impl Renderer {
 		}
 	}
 
-	fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
-		wgpu::VertexBufferLayout {
-			array_stride: mem::size_of::<PixmapInstance>() as u64,
-			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &[
-				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Float32x2,
-					offset: 0,
-					shader_location: 0,
-				},
-				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Float32x2,
-					offset: mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-					shader_location: 1,
-				},
-				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Uint32x2,
-					offset: mem::size_of::<[u32; 4]>() as wgpu::BufferAddress,
-					shader_location: 2,
-				},
-				wgpu::VertexAttribute {
-					format: wgpu::VertexFormat::Uint32x2,
-					offset: mem::size_of::<[u32; 6]>() as wgpu::BufferAddress,
-					shader_location: 3,
-				},
-			],
+	pub fn assistant(&self) -> PixelatorAssistant {
+		PixelatorAssistant {
+			device: self.device.clone(),
+			queue: self.queue.clone(),
+			textures: self.textures.clone(),
 		}
 	}
 
@@ -215,7 +206,7 @@ impl Renderer {
 		self.screen_height = height;
 	}
 
-	pub fn render(&self, rpass: &mut RenderPass<'_>) {
+	pub fn render(&self, rpass: &mut wgpu::RenderPass<'_>) {
 		if !self.batches_active.is_empty()
 			&& let Some(instance_buffer) = &self.instance_buffer
 		{
@@ -236,7 +227,6 @@ impl Renderer {
 		let mut brush = PixmapBrush {
 			device: &self.device,
 			queue: &self.queue,
-			id_counter: &mut self.id_counter,
 			textures: &mut self.textures,
 			spans: &mut self.spans,
 			instances: &mut self.vertices,
@@ -260,12 +250,14 @@ impl Renderer {
 			self.instance_buffer = Some(buffer);
 		}
 
+		let mut textures = self.textures.lock().unwrap();
+
 		// Create batches of textures and instance ranges
 		mem::swap(&mut self.batches_active, &mut self.batches_inactive);
-		let mut pixmap_id_set = self.textures.keys().cloned().collect::<BTreeSet<_>>();
+		let mut pixmap_id_set = textures.keys().cloned().collect::<BTreeSet<_>>();
 		let mut params_buffers = self.batches_inactive.drain(..).map(|e| e.params_buffer);
 		for span in &self.spans {
-			let Some(entry) = self.textures.get(&span.pixmap) else {
+			let Some(entry) = textures.get(&span.pixmap) else {
 				log::warn!("Span pointing at non-existing pixmap: {:?}", span.pixmap);
 				continue;
 			};
@@ -320,13 +312,12 @@ impl Renderer {
 
 		// Drop unused and unreferenced textures
 		for pixmap_id in pixmap_id_set {
-			if self
-				.textures
+			if textures
 				.get(&pixmap_id)
 				.is_some_and(|t| t.weak_ref.upgrade().is_none())
 			{
 				log::info!("Drop pixmap {:?}", pixmap_id);
-				self.textures.remove(&pixmap_id);
+				textures.remove(&pixmap_id);
 			}
 		}
 	}
@@ -339,27 +330,42 @@ struct PixmapSpan {
 }
 
 pub struct PixmapBrush<'renderer> {
-	device: &'renderer Device,
-	queue: &'renderer Queue,
+	device: &'renderer wgpu::Device,
+	queue: &'renderer wgpu::Queue,
 
-	id_counter: &'renderer mut u64,
-	textures: &'renderer mut BTreeMap<PixmapId, PixmapTexture>,
+	textures: &'renderer Mutex<BTreeMap<PixmapId, PixmapTexture>>,
 	spans: &'renderer mut Vec<PixmapSpan>,
 	instances: &'renderer mut Vec<PixmapInstance>,
 }
 
 impl PixmapBrush<'_> {
-	#[must_use = "Output needs to be saved or texture is deallocated"]
-	pub fn create(&mut self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
-		let pixmap_id = PixmapId(*self.id_counter);
-		*self.id_counter += 1;
+	pub fn draw(
+		&mut self,
+		pixmap: &PixmapRef,
+		pos: PaintPosition,
+		instances: impl IntoIterator<Item = PixmapInstance>,
+	) {
+		let start = self.instances.len() as u32;
+		self.instances.extend(instances);
+		let end = self.instances.len() as u32;
 
+		self.spans.push(PixmapSpan {
+			pixmap: *pixmap.as_ref(),
+			pos,
+			range: start..end,
+		});
+	}
+}
+
+impl PixelatorTextures for PixmapBrush<'_> {
+	fn create(&self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
+		let pixmap_id = PixmapId::take();
 		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
 
 		let pixmap: PixmapRef = pixmap_id.into();
 		let weak_ref = Arc::downgrade(&pixmap.0);
 
-		self.textures.insert(
+		self.textures.lock().unwrap().insert(
 			pixmap_id,
 			PixmapTexture {
 				weak_ref,
@@ -372,18 +378,13 @@ impl PixmapBrush<'_> {
 		pixmap
 	}
 
-	#[must_use = "Output needs to be saved or texture is deallocated"]
-	pub fn update(
-		&mut self,
-		pixmap: PixmapRef,
-		dims: PixmapDimensions,
-		data: PixmapData,
-	) -> PixmapRef {
+	fn update(&self, pixmap: PixmapRef, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
 		let format = match data {
-			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
-			PixmapData::Luma(_) => TextureFormat::R8Unorm,
+			PixmapData::RgbA(_) => wgpu::TextureFormat::Rgba8Unorm,
+			PixmapData::Luma(_) => wgpu::TextureFormat::R8Unorm,
 		};
-		if let Some(entry) = self.textures.get_mut(pixmap.as_ref())
+		let mut textures = self.textures.lock().unwrap();
+		if let Some(entry) = textures.get_mut(pixmap.as_ref())
 			&& entry.pixmap_dim == dims
 			&& entry.texture.format() == format
 		{
@@ -416,14 +417,13 @@ impl PixmapBrush<'_> {
 			pixmap
 		} else {
 			// No match found or different parameters, allocate new texture
-			let pixmap_id = PixmapId(*self.id_counter);
-			*self.id_counter += 1;
+			let pixmap_id = PixmapId::take();
 
 			let pixmap: PixmapRef = pixmap_id.into();
 			let weak_ref = Arc::downgrade(&pixmap.0);
 
 			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
-			self.textures.insert(
+			textures.insert(
 				pixmap_id,
 				PixmapTexture {
 					weak_ref,
@@ -434,22 +434,5 @@ impl PixmapBrush<'_> {
 			);
 			pixmap
 		}
-	}
-
-	pub fn draw(
-		&mut self,
-		pixmap: &PixmapRef,
-		pos: PaintPosition,
-		instances: impl IntoIterator<Item = PixmapInstance>,
-	) {
-		let start = self.instances.len() as u32;
-		self.instances.extend(instances);
-		let end = self.instances.len() as u32;
-
-		self.spans.push(PixmapSpan {
-			pixmap: *pixmap.as_ref(),
-			pos,
-			range: start..end,
-		});
 	}
 }

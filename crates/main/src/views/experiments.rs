@@ -1,6 +1,7 @@
 use egui::Panel;
 use image::ImageBuffer;
 use lucide_icons::Icon;
+use pixelator::PixelatorTextures;
 use pixelator::PixmapData;
 use pixelator::PixmapInstance;
 use pixelator::PixmapRef;
