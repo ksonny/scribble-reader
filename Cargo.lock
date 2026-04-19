@@ -1648,6 +1648,7 @@ dependencies = [
  "env_logger",
  "fixed",
  "html5ever",
+ "image",
  "imagesize",
  "log",
  "pixelator",
