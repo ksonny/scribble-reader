@@ -8,6 +8,15 @@ Most of my books are large ones that gets appended to weekly, primarily generate
 This makes location tracking and efficient read patterns important, and also disqualifies most readers available for free.
 It is also a sufficiently complicated problem for a hobby project. :D
 
+## Features
+
+* Fast - Optimization is fun
+* Focused - Its made for reading
+* Efficient - 0.1 fps in sleep mode
+* Supports Epub v2 & v3 mostly
+* [rustybuzz](https://github.com/harfbuzz/rustybuzz) text shaping
+* [ab-glyph](https://github.com/alexheretic/ab-glyph) glyph rasterizing
+
 ## Download
 
 Grab the apk from [latest release](https://github.com/ksonny/scribble-reader/releases/latest) and sideload to your device.
@@ -74,11 +83,12 @@ In additon, `sans-serif` is an alias for `Open Sans`, and `serif` is an alias fo
 ## Crates
 
 * `app-android` - Android activity & glue
-* `main` - Main event loop, wgpu rendering and views
+* `main` - Main event loop and views
 * `scribe` - Models, database, Epub parsing and settings
 * `illustrator` - Epub layouting
 * `sculpter` - Font shaping and printing
 * `wrangler` - File system abstraction for Android storage madness
+* `pixelator` - Pixmap rendering and wgpu resource management
 
 ## Develop Android
 
