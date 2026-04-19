@@ -52,6 +52,7 @@ pub enum IllustratorSvgError {
 
 #[derive(Clone)]
 pub(crate) struct SvgContent {
+	#[allow(unused)]
 	pub(crate) hash: u64,
 	pub(crate) tree: usvg::Tree,
 }

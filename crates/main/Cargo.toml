@@ -22,6 +22,7 @@ integer-sqrt.workspace = true
 lazy_static.workspace = true
 log.workspace = true
 lucide-icons.workspace = true
+pixelator.workspace = true
 pollster.workspace = true
 scribe.workspace = true
 sculpter.workspace = true

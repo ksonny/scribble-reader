@@ -21,6 +21,10 @@ use std::time::Instant;
 use bitflags::bitflags;
 use fixed::types::I26F6;
 use fixed::types::U26F6;
+use pixelator::PixelatorAssistant;
+use pixelator::PixelatorTextures;
+use pixelator::PixmapData;
+use pixelator::PixmapRef;
 use scribe::Book;
 use scribe::BookId;
 use scribe::Location;
@@ -29,6 +33,7 @@ use scribe::config::IllustratorProfile;
 use scribe_epub::EpubMetadata;
 use scribe_epub::Navigation;
 use scribe_epub::Package;
+use sculpter::AtlasImage;
 use sculpter::SculpterFonts;
 use sculpter::SculpterOptions;
 use sculpter::TextBlock;
@@ -160,10 +165,9 @@ impl From<taffy::Size<f32>> for Size {
 
 #[derive(Debug)]
 pub struct DisplayPixmap {
-	pub hash: u64,
+	pub pixmap: PixmapRef,
 	pub pixmap_width: u32,
 	pub pixmap_height: u32,
-	pub pixmap_rgba: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -238,6 +242,7 @@ struct Worker {
 	fonts: SculpterFonts,
 	records: RecordKeeperAssistant,
 	content: ContentWranglerAssistant,
+	pixelator: PixelatorAssistant,
 	cache: Arc<Mutex<PageContentCache>>,
 	state: Arc<Mutex<BookState>>,
 	navigation: Arc<Mutex<Option<Arc<Navigation>>>>,
@@ -350,6 +355,7 @@ impl Worker {
 
 		let mut reusable_layouter = PageLayouter::new(sculpter);
 		let mut clear_cache = true;
+		let mut atlas = AtlasImage::default();
 
 		loop {
 			let req = match req_rx.try_recv() {
@@ -367,6 +373,7 @@ impl Worker {
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
+							&mut atlas,
 							&settings,
 							&package,
 							current_loc.spine,
@@ -411,6 +418,7 @@ impl Worker {
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
+							&mut atlas,
 							&settings,
 							&package,
 							next_spine,
@@ -423,6 +431,7 @@ impl Worker {
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
+							&mut atlas,
 							&settings,
 							&package,
 							prev_spine,
@@ -511,6 +520,7 @@ impl Worker {
 		&self,
 		layouter: PageLayouter<'layout>,
 		archive: &mut ZipArchive<R>,
+		atlas: &mut AtlasImage,
 		settings: &StyleSettings<'settings>,
 		package: &Package,
 		spine_index: u32,
@@ -524,11 +534,27 @@ impl Worker {
 			resource.as_path(),
 			settings,
 		)?;
-		let (mut layouter, pages) = layouter.layout(settings)?;
+		let (mut layouter, pages) = layouter.layout(&self.pixelator, settings)?;
 
 		let mut cache = self.cache.lock().unwrap();
 		cache.insert(spine_index, pages);
-		layouter.write_glyph_atlas(cache.atlas_mut())?;
+
+		let version = atlas.version();
+		layouter.write_glyph_atlas(atlas)?;
+		if version != atlas.version() {
+			let pixmap_dims = [atlas.width(), atlas.height()].into();
+			let pixmap_data = PixmapData::Luma(atlas.as_raw());
+			let cache_pixmap = cache.pixmap_mut();
+			let pixmap = if let Some(pixmap) = cache_pixmap.take() {
+				log::info!("Update atlas version {:?}", atlas.version());
+				self.pixelator.update(pixmap, pixmap_dims, pixmap_data)
+			} else {
+				log::info!("Recreate atlas version {:?}", atlas.version());
+				self.pixelator.create(pixmap_dims, pixmap_data)
+			};
+			*cache_pixmap = Some(pixmap);
+		}
+
 		drop(cache);
 
 		Ok(layouter)
@@ -546,6 +572,7 @@ pub fn create_illustrator(
 	records: RecordKeeperAssistant,
 	fonts: SculpterFonts,
 	content: ContentWranglerAssistant,
+	pixelator: PixelatorAssistant,
 	bell: impl Bell + Send + 'static,
 	profile: Arc<IllustratorProfile>,
 	book_id: BookId,
@@ -572,6 +599,7 @@ pub fn create_illustrator(
 		fonts,
 		records,
 		content,
+		pixelator,
 		cache: cache.clone(),
 		state: state.clone(),
 		navigation: navigation.clone(),

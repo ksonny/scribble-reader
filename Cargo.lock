@@ -1650,6 +1650,7 @@ dependencies = [
  "html5ever",
  "imagesize",
  "log",
+ "pixelator",
  "pollster",
  "resvg",
  "scribe",
@@ -2838,6 +2839,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pixelator"
+version = "0.1.10"
+dependencies = [
+ "bitflags 2.11.1",
+ "bytemuck",
+ "log",
+ "wgpu",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3443,6 +3454,7 @@ dependencies = [
  "lazy_static",
  "log",
  "lucide-icons",
+ "pixelator",
  "pollster",
  "scribe",
  "sculpter",

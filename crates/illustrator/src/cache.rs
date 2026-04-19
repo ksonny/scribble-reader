@@ -1,6 +1,6 @@
 use fixed::types::I26F6;
+use pixelator::PixmapRef;
 use scribe::Location;
-use sculpter::AtlasImage;
 
 use crate::PageContent;
 use crate::PageFlags;
@@ -16,16 +16,16 @@ struct PageCacheEntry {
 #[derive(Debug)]
 pub struct PageContentCache {
 	index: usize,
+	atlas_pixmap: Option<PixmapRef>,
 	entries: [Option<PageCacheEntry>; CACHE_CHAPTERS],
-	atlas: AtlasImage,
 }
 
 impl Default for PageContentCache {
 	fn default() -> Self {
 		Self {
 			index: 0,
+			atlas_pixmap: None,
 			entries: [const { None }; CACHE_CHAPTERS],
-			atlas: AtlasImage::default(),
 		}
 	}
 }
@@ -50,12 +50,12 @@ pub(crate) enum NavigateError {
 }
 
 impl PageContentCache {
-	pub fn atlas(&self) -> &AtlasImage {
-		&self.atlas
+	pub fn pixmap(&self) -> Option<&PixmapRef> {
+		self.atlas_pixmap.as_ref()
 	}
 
-	pub(crate) fn atlas_mut(&mut self) -> &mut AtlasImage {
-		&mut self.atlas
+	pub(crate) fn pixmap_mut(&mut self) -> &mut Option<PixmapRef> {
+		&mut self.atlas_pixmap
 	}
 
 	pub fn page(&self, loc: Location) -> Option<(&PageContent, PageMetadata)> {

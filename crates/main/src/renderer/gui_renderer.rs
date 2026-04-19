@@ -4,9 +4,14 @@ use egui_wgpu::wgpu::{
 	self,
 };
 use egui_winit::winit;
+use wgpu::Device;
+use wgpu::Queue;
 use winit::window::Window;
 
 pub struct Renderer {
+	device: Device,
+	queue: Queue,
+
 	ctx: egui::Context,
 	gui_renderer: egui_wgpu::Renderer,
 	screen: egui_wgpu::ScreenDescriptor,
@@ -17,12 +22,13 @@ pub struct Renderer {
 
 impl Renderer {
 	pub(crate) fn new(
-		device: &wgpu::Device,
+		device: Device,
+		queue: Queue,
 		format: wgpu::TextureFormat,
 		ctx: egui::Context,
 	) -> Self {
 		let gui_renderer =
-			egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default());
+			egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
 		let screen = egui_wgpu::ScreenDescriptor {
 			size_in_pixels: [0, 0],
 			pixels_per_point: 1.0,
@@ -31,6 +37,9 @@ impl Renderer {
 		let paint_jobs = vec![];
 
 		Self {
+			device,
+			queue,
+
 			ctx,
 			gui_renderer,
 			screen,
@@ -40,7 +49,7 @@ impl Renderer {
 		}
 	}
 
-	pub(crate) fn resume(&mut self, device: &wgpu::Device, window: Arc<Window>) {
+	pub(crate) fn resume(&mut self, window: Arc<Window>) {
 		let size = window.inner_size();
 		let scale_factor = window.scale_factor();
 		self.state = Some((
@@ -50,7 +59,7 @@ impl Renderer {
 				&window,
 				Some(scale_factor as f32),
 				None,
-				Some(device.limits().max_texture_dimension_2d as usize),
+				Some(self.device.limits().max_texture_dimension_2d as usize),
 			),
 			window,
 		));
@@ -70,12 +79,7 @@ impl Renderer {
 		self.screen.pixels_per_point = scale_factor as f32;
 	}
 
-	pub(crate) fn prepare(
-		&mut self,
-		device: &wgpu::Device,
-		queue: &wgpu::Queue,
-		output: egui::FullOutput,
-	) {
+	pub(crate) fn prepare(&mut self, output: egui::FullOutput) {
 		if let Some((state, window)) = self.state.as_mut() {
 			state.handle_platform_output(window, output.platform_output);
 		}
@@ -85,7 +89,7 @@ impl Renderer {
 			.tessellate(output.shapes, self.screen.pixels_per_point);
 		for (id, image_delta) in &self.textures.set {
 			self.gui_renderer
-				.update_texture(device, queue, *id, image_delta);
+				.update_texture(&self.device, &self.queue, *id, image_delta);
 		}
 	}
 
