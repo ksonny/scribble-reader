@@ -1642,7 +1642,7 @@ dependencies = [
 
 [[package]]
 name = "illustrator"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "bitflags 2.11.1",
  "env_logger",
@@ -2841,7 +2841,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pixelator"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "bitflags 2.11.1",
  "bytemuck",
@@ -3437,7 +3437,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scribble-reader"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "chrono",
  "config",
@@ -3467,7 +3467,7 @@ dependencies = [
 
 [[package]]
 name = "scribble-reader-android"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "android_logger",
  "jni",
@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "scribe"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "chrono",
  "config",
@@ -3500,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "scribe-epub"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "log",
  "quick-xml",
@@ -3523,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "sculpter"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "ab_glyph",
  "etagere",
@@ -5257,7 +5257,7 @@ dependencies = [
 
 [[package]]
 name = "wrangler"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "expand-tilde",
  "log",
