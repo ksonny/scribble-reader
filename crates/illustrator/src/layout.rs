@@ -993,6 +993,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							let byte_size = pixmap_size.width() as usize
 								* pixmap_size.height() as usize
 								* tiny_skia::BYTES_PER_PIXEL;
+							buffer.clear();
 							buffer.resize(byte_size, 0u8);
 
 							let mut target = tiny_skia::PixmapMut::from_bytes(
