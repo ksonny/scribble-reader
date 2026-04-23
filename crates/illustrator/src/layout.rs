@@ -571,13 +571,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 									.map(|image| image.into_rgba8())
 								{
 									let node = taffy_tree.new_leaf_with_context(
-										Style {
-											size: Size {
-												width: length(image.width() as f32),
-												height: length(image.height() as f32),
-											},
-											..settings.element_style(el.local_name())
-										},
+										settings.element_style(el.local_name()),
 										NodeContext::image(el.id.value(), Arc::new(image)),
 									)?;
 									taffy_tree.add_child(current, node)?;
@@ -735,16 +729,17 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 						}
 					}
 					NodeContent::Svg(ref tree) => {
-						let size = tree.size();
+						let width = tree.size().width();
+						let height = tree.size().height();
 						let scale = scale_to_fit(
-							size.width(),
-							size.height(),
-							max_width.unwrap_or(size.width()).min(page_width),
-							max_height.unwrap_or(size.height()).min(page_height),
+							width,
+							height,
+							max_width.unwrap_or(page_width).min(page_width),
+							max_height.unwrap_or(page_height).min(page_height),
 						);
 						taffy::Size {
-							width: size.width() * scale,
-							height: size.height() * scale,
+							width: width * scale,
+							height: height * scale,
 						}
 					}
 					NodeContent::Image(ref image) => {
@@ -753,9 +748,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 						let scale = scale_to_fit(
 							width,
 							height,
-							max_width.unwrap_or(width).min(page_width),
-							max_height.unwrap_or(height).min(page_height),
-						);
+							max_width.unwrap_or(page_width).min(page_width),
+							max_height.unwrap_or(page_height).min(page_height),
+						)
+						.min(settings.scale);
 						taffy::Size {
 							width: width * scale,
 							height: height * scale,
@@ -977,17 +973,17 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							}
 						}
 						NodeContent::Svg(tree) => {
-							let size = tree.size();
+							let svg_size = tree.size();
 							let scale = scale_to_fit(
-								size.width(),
-								size.height(),
+								svg_size.width(),
+								svg_size.height(),
 								l.size.width,
 								l.size.height,
 							);
-							let pixmap_size = tree
-								.size()
+							let render_scale = scale.min(1.);
+							let pixmap_size = svg_size
 								.to_int_size()
-								.scale_by(scale)
+								.scale_by(render_scale)
 								.ok_or(IllustratorLayoutError::ScaleSvgFailed(scale))?;
 
 							let byte_size = pixmap_size.width() as usize
@@ -995,14 +991,14 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 								* tiny_skia::BYTES_PER_PIXEL;
 							buffer.clear();
 							buffer.resize(byte_size, 0u8);
-
 							let mut target = tiny_skia::PixmapMut::from_bytes(
 								&mut buffer,
 								pixmap_size.width(),
 								pixmap_size.height(),
 							)
 							.unwrap();
-							let transform = tiny_skia::Transform::from_scale(scale, scale);
+							let transform =
+								tiny_skia::Transform::from_scale(render_scale, render_scale);
 							resvg::render(tree, transform, &mut target);
 
 							let pixmap = pixelator.create(
@@ -1014,8 +1010,8 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 								U26F6::from_num(ctx.element),
 								cursor,
 								taffy::Size {
-									width: size.width() * scale,
-									height: size.height() * scale,
+									width: (svg_size.width() * scale).round(),
+									height: (svg_size.height() * scale).round(),
 								},
 								DisplayPixmap {
 									pixmap,
@@ -1025,23 +1021,31 @@ impl<'layout> PageLayouter<'layout, PageLayouterLoaded> {
 							);
 						}
 						NodeContent::Image(image) => {
-							let width = image.width();
-							let height = image.height();
+							let image_width = image.width();
+							let image_height = image.height();
+							let scale = scale_to_fit(
+								image_width as f32,
+								image_height as f32,
+								l.size.width,
+								l.size.height,
+							);
 
-							let pixmap = pixelator
-								.create([width, height].into(), PixmapData::RgbA(image.as_raw()));
+							let pixmap = pixelator.create(
+								[image_width, image_height].into(),
+								PixmapData::RgbA(image.as_raw()),
+							);
 
 							breaker.add_content(
 								U26F6::from_num(ctx.element),
 								cursor,
 								taffy::Size {
-									width: width as f32,
-									height: height as f32,
+									width: (image_width as f32 * scale).round(),
+									height: (image_height as f32 * scale).round(),
 								},
 								DisplayPixmap {
 									pixmap,
-									pixmap_width: width,
-									pixmap_height: height,
+									pixmap_width: image_width,
+									pixmap_height: image_height,
 								},
 							);
 						}
