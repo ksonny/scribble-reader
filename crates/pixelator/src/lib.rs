@@ -148,7 +148,7 @@ impl PixelatorTextures for PixelatorAssistant {
 
 	fn update(&self, pixmap: PixmapRef, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
 		let format = match data {
-			PixmapData::RgbA(_) => TextureFormat::Rgba8Unorm,
+			PixmapData::RgbA(_) => TextureFormat::Rgba8UnormSrgb,
 			PixmapData::Luma(_) => TextureFormat::R8Unorm,
 		};
 		let mut textures = self.textures.lock().unwrap();

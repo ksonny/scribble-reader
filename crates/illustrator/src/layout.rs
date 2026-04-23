@@ -565,11 +565,16 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 							| usvg::ImageKind::PNG(data)
 							| usvg::ImageKind::GIF(data)
 							| usvg::ImageKind::WEBP(data) => {
-								if let Some(image) = image::load_from_memory(data.as_slice())
+								if let Some(mut image) = image::load_from_memory(data.as_slice())
 									.inspect_err(|e| log::error!("Failed to load image {src}: {e}"))
 									.ok()
 									.map(|image| image.into_rgba8())
 								{
+									let _ = image
+										.set_color_space(image::metadata::Cicp::SRGB)
+										.inspect_err(|e| {
+											log::warn!("Failed to set image colorspace: {e}")
+										});
 									let node = taffy_tree.new_leaf_with_context(
 										settings.element_style(el.local_name()),
 										NodeContext::image(el.id.value(), Arc::new(image)),
