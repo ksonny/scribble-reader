@@ -273,7 +273,7 @@ fn surface_format(
 	let format = cap
 		.formats
 		.iter()
-		.find(|f| !f.is_srgb())
+		.find(|f| matches!(f, wgpu::TextureFormat::Rgba8Unorm))
 		.or_else(|| cap.formats.first())
 		.cloned()
 		.ok_or(RendererError::NoTextureFormat)?;
