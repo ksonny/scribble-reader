@@ -293,6 +293,7 @@ impl<'a> SculpterPrinter<'a> {
 					* (atlas_width * atlas_height) as usize;
 
 				let mut data = std::mem::take(inner).into_raw();
+				data.clear();
 				data.resize(new_len, 0u8);
 				*inner = GrayImage::from_raw(atlas_width, atlas_height, data)
 					.ok_or(SculpterPrinterError::ResizeAtlasTextureFailed)?;
