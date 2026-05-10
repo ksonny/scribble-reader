@@ -32,7 +32,7 @@ lazy_static = "1.5.0"
 log = "0.4.28"
 lucide-icons = "1.14.0"
 pollster = "0.4.0"
-quick-xml = { version = "0.39.2", features = ["serialize", "escape-html"] }
+quick-xml = { version = "0.39.4", features = ["serialize", "escape-html"] }
 resvg = { version = "0.47.0", default-features = false, features = ["raster-images"] }
 rusqlite = { version = "0.39.0", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.3.0"
