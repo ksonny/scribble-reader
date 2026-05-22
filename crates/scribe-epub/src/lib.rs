@@ -10,6 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use quick_xml::XmlVersion;
 use quick_xml::escape::unescape;
 use quick_xml::events::BytesStart;
 use quick_xml::name::QName;
@@ -277,9 +278,19 @@ pub fn parse_container<R: BufRead>(
 	use quick_xml::events::Event;
 
 	let mut buf = Vec::new();
+	let mut version = XmlVersion::Implicit1_0;
 
 	loop {
 		match reader.read_event_into(&mut buf)? {
+			Event::Decl(d) => match d.version()?.as_ref() {
+				b"1.0" => {
+					version = XmlVersion::Explicit1_0;
+				}
+				b"1.1" => {
+					version = XmlVersion::Explicit1_1;
+				}
+				_ => {}
+			},
 			Event::Start(e) | Event::Empty(e) => {
 				let el = ContainerElement::from(e.name());
 				if !matches!(el, ContainerElement::RootFile) {
@@ -289,7 +300,7 @@ pub fn parse_container<R: BufRead>(
 				let path = e.attributes().find_map(|attr| {
 					let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
 					(attr.key.as_ref() == b"full-path").then(|| {
-						attr.decode_and_unescape_value(reader.decoder())
+						attr.decoded_and_normalized_value(version, reader.decoder())
 							.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 							.unwrap_or_default()
 					})
@@ -385,6 +396,8 @@ pub fn parse_package<R: BufRead>(
 
 	let package_root = package_root.to_path_buf();
 
+	let mut version = XmlVersion::Implicit1_0;
+
 	let mut resource_ids = BTreeSet::new();
 
 	let mut metadata = Metadata::default();
@@ -397,6 +410,16 @@ pub fn parse_package<R: BufRead>(
 
 	loop {
 		match reader.read_event_into(&mut buf)? {
+			Event::Decl(d) => match d.version()?.as_ref() {
+				b"1.0" => {
+					version = XmlVersion::Explicit1_0;
+				}
+				b"1.1" => {
+					version = XmlVersion::Explicit1_1;
+				}
+				_ => {}
+			},
+
 			Event::Start(e) => {
 				let el = PackageElement::from(e.name());
 
@@ -445,7 +468,7 @@ pub fn parse_package<R: BufRead>(
 						.find_map(|attr| {
 							let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
 							(attr.key.as_ref() == b"content").then(|| {
-								attr.decode_and_unescape_value(reader.decoder())
+								attr.decoded_and_normalized_value(version, reader.decoder())
 									.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 									.unwrap_or_default()
 							})
@@ -482,7 +505,7 @@ pub fn parse_package<R: BufRead>(
 						continue;
 					};
 					let Ok(value) = attr
-						.decode_and_unescape_value(reader.decoder())
+						.decoded_and_normalized_value(version, reader.decoder())
 						.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 					else {
 						continue;
@@ -561,7 +584,7 @@ pub fn parse_package<R: BufRead>(
 						continue;
 					};
 					let Ok(value) = attr
-						.decode_and_unescape_value(reader.decoder())
+						.decoded_and_normalized_value(version, reader.decoder())
 						.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 					else {
 						continue;
@@ -677,6 +700,8 @@ pub fn parse_nav<R: BufRead>(
 		.map(|r| (r.href.as_str(), r.id.clone()))
 		.collect::<BTreeMap<_, _>>();
 
+	let mut version = XmlVersion::Implicit1_0;
+
 	let mut doc_title = None;
 	let mut entries = Vec::new();
 	let mut stack = Vec::new();
@@ -689,6 +714,15 @@ pub fn parse_nav<R: BufRead>(
 
 	loop {
 		match reader.read_event_into(&mut buf)? {
+			Event::Decl(d) => match d.version()?.as_ref() {
+				b"1.0" => {
+					version = XmlVersion::Explicit1_0;
+				}
+				b"1.1" => {
+					version = XmlVersion::Explicit1_1;
+				}
+				_ => {}
+			},
 			Event::Start(e) => {
 				let el = NavElement::from(&e);
 				path.push(el);
@@ -711,7 +745,7 @@ pub fn parse_nav<R: BufRead>(
 					let href = e.attributes().find_map(|attr| {
 						let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
 						(attr.key.as_ref() == key).then(|| {
-							attr.decode_and_unescape_value(reader.decoder())
+							attr.decoded_and_normalized_value(version, reader.decoder())
 								.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 								.unwrap_or_default()
 						})
@@ -856,6 +890,8 @@ pub fn parse_ncx<R: BufRead>(
 		.map(|r| (r.href.as_str(), r.id.clone()))
 		.collect::<BTreeMap<_, _>>();
 
+	let mut version = XmlVersion::Implicit1_0;
+
 	let mut doc_title = None;
 	let mut entries = Vec::new();
 	let mut stack = Vec::new();
@@ -866,6 +902,15 @@ pub fn parse_ncx<R: BufRead>(
 
 	loop {
 		match reader.read_event_into(&mut buf)? {
+			Event::Decl(d) => match d.version()?.as_ref() {
+				b"1.0" => {
+					version = XmlVersion::Explicit1_0;
+				}
+				b"1.1" => {
+					version = XmlVersion::Explicit1_1;
+				}
+				_ => {}
+			},
 			Event::Start(e) => {
 				let el = NcxElement::from(e.name());
 
@@ -908,7 +953,7 @@ pub fn parse_ncx<R: BufRead>(
 					let src = e.attributes().find_map(|attr| {
 						let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
 						(attr.key.as_ref() == b"src").then(|| {
-							attr.decode_and_unescape_value(reader.decoder())
+							attr.decoded_and_normalized_value(version, reader.decoder())
 								.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 								.unwrap_or_default()
 						})
