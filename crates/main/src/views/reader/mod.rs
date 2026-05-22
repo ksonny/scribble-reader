@@ -733,7 +733,7 @@ impl egui::Widget for BookDetailsUI {
 	}
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct SettingsChange {
 	state_changed: bool,
 	profile_changed: bool,
@@ -929,9 +929,11 @@ impl egui::Widget for ActionSelectableUi<'_> {
 		} else {
 			UiIcon::new(Icon::Square).build()
 		};
-		let response = ui.add(Button::new(icon).selected(*self.current_value == self.alternative));
+		let mut response =
+			ui.add(Button::new(icon).selected(*self.current_value == self.alternative));
 		if response.clicked() {
 			*self.current_value = self.alternative;
+			response.mark_changed()
 		}
 		response
 	}
