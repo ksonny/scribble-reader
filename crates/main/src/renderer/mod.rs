@@ -24,35 +24,43 @@ pub(crate) enum RendererError {
 	RequestAdapter(#[from] wgpu::wgt::RequestAdapterError),
 	#[error("Failed to get surface format")]
 	NoTextureFormat,
-	#[error("Failed to get surface alpha mode")]
-	NoAlphaMode,
 	#[error("Surface not available, probably suspended")]
 	SurfaceNotAvailable,
-	#[error("Surface lost")]
-	SurfaceLost,
+	#[error("Surface lost and failed to recreate")]
+	SurfaceLostUnrecoverably,
 }
 
 struct SurfaceState<'window> {
 	window: Arc<Window>,
 	format: wgpu::TextureFormat,
-	alpha_mode: wgpu::CompositeAlphaMode,
 	surface: wgpu::Surface<'window>,
 }
 
 impl<'window> SurfaceState<'window> {
-	fn configure_surface(&self, device: &wgpu::Device, width: u32, height: u32) {
+	fn configure_surface(
+		&self,
+		adapter: &wgpu::Adapter,
+		device: &wgpu::Device,
+		width: u32,
+		height: u32,
+	) {
 		let surface_configuration = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 			format: self.format,
-			width,
-			height,
-			present_mode: wgpu::PresentMode::AutoVsync,
-			alpha_mode: self.alpha_mode,
 			view_formats: vec![self.format],
-			desired_maximum_frame_latency: 2,
+			..self
+				.surface
+				.get_default_config(adapter, width, height)
+				.expect("This surface isn't supported by adapter")
 		};
 		self.surface.configure(device, &surface_configuration);
 	}
+}
+
+pub(crate) enum RenderResult {
+	Success,
+	Reconfigured,
+	FrameSkipped,
 }
 
 pub(crate) struct Renderer<'window> {
@@ -72,32 +80,20 @@ impl Renderer<'_> {
 		window: Window,
 		egui_ctx: &egui::Context,
 	) -> Result<Self, RendererError> {
-		let window = Arc::new(window);
-		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-			backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
-			flags: Default::default(),
-			memory_budget_thresholds: Default::default(),
-			backend_options: Default::default(),
-			display: Some(Box::new(display)),
-		});
-		let surface = instance.create_surface(window.clone())?;
-
-		let adapter =
-			wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface)).await?;
-
+		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
+			Box::new(display),
+		));
+		let adapter = instance
+			.request_adapter(&wgpu::RequestAdapterOptions::default())
+			.await?;
 		let (device, queue) = adapter
-			.request_device(&wgpu::DeviceDescriptor {
-				label: None,
-				required_features: wgpu::Features::empty(),
-				required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
-				memory_hints: wgpu::MemoryHints::default(),
-				trace: wgpu::Trace::Off,
-				experimental_features: wgpu::ExperimentalFeatures::disabled(),
-			})
+			.request_device(&wgpu::DeviceDescriptor::default())
 			.await?;
 
+		let window = Arc::new(window);
+		let surface = instance.create_surface(window.clone())?;
+		let format = surface_format(surface.get_capabilities(&adapter))?;
 		let size = window.inner_size();
-		let (format, alpha_mode) = surface_format(&surface, &adapter)?;
 
 		let pixmap_renderer = pixelator::Renderer::new(
 			device.clone(),
@@ -113,11 +109,10 @@ impl Renderer<'_> {
 
 		let surface_state = SurfaceState {
 			window,
-			surface,
 			format,
-			alpha_mode,
+			surface,
 		};
-		surface_state.configure_surface(&device, size.width, size.height);
+		surface_state.configure_surface(&adapter, &device, size.width, size.height);
 
 		Ok(Renderer {
 			instance,
@@ -138,22 +133,19 @@ impl Renderer<'_> {
 		}
 
 		let window = Arc::new(window);
-
-		let surface = self.instance.create_surface(window.clone())?;
-
 		let size = window.inner_size();
-		let (format, alpha_mode) = surface_format(&surface, &self.adapter)?;
+		let surface = self.instance.create_surface(window.clone())?;
+		let format = surface_format(surface.get_capabilities(&self.adapter))?;
 
 		self.pixmap_renderer.resize(size.width, size.height);
 		self.gui_renderer.resume(window.clone());
 
 		let surface_state = SurfaceState {
 			window,
-			surface,
 			format,
-			alpha_mode,
+			surface,
 		};
-		surface_state.configure_surface(&self.device, size.width, size.height);
+		surface_state.configure_surface(&self.adapter, &self.device, size.width, size.height);
 		self.surface_state = Some(surface_state);
 
 		Ok(())
@@ -181,35 +173,62 @@ impl Renderer<'_> {
 		}
 	}
 
-	pub(crate) fn render(&mut self) -> Result<(), RendererError> {
+	pub(crate) fn render(&mut self) -> Result<RenderResult, RendererError> {
 		let surface_state = self
 			.surface_state
 			.as_mut()
 			.ok_or(RendererError::SurfaceNotAvailable)?;
 		if let Some(size) = self.resized {
-			surface_state.configure_surface(&self.device, size.width, size.height);
+			surface_state.configure_surface(&self.adapter, &self.device, size.width, size.height);
 		}
 
 		let frame = match surface_state.surface.get_current_texture() {
-			wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
-			wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+			wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+			wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
 				let size = surface_state.window.inner_size();
-				surface_state.configure_surface(&self.device, size.width, size.height);
-				surface_texture
+				surface_state.configure_surface(
+					&self.adapter,
+					&self.device,
+					size.width,
+					size.height,
+				);
+				frame
+			}
+			wgpu::CurrentSurfaceTexture::Outdated => {
+				let size = surface_state.window.inner_size();
+				surface_state.configure_surface(
+					&self.adapter,
+					&self.device,
+					size.width,
+					size.height,
+				);
+				return Ok(RenderResult::Reconfigured);
+			}
+			wgpu::CurrentSurfaceTexture::Lost => {
+				if let Some(SurfaceState { window, format, .. }) = self.surface_state.take() {
+					let size = window.inner_size();
+					let surface = self.instance.create_surface(window.clone())?;
+					let surface_state = SurfaceState {
+						window,
+						format,
+						surface,
+					};
+					surface_state.configure_surface(
+						&self.adapter,
+						&self.device,
+						size.width,
+						size.height,
+					);
+					self.surface_state = Some(surface_state);
+					return Ok(RenderResult::Reconfigured);
+				} else {
+					// Create surface from scratch
+					return Err(RendererError::SurfaceLostUnrecoverably);
+				}
 			}
 			wgpu::CurrentSurfaceTexture::Timeout
 			| wgpu::CurrentSurfaceTexture::Occluded
-			| wgpu::CurrentSurfaceTexture::Validation => return Ok(()),
-			wgpu::CurrentSurfaceTexture::Outdated => {
-				let size = surface_state.window.inner_size();
-				surface_state.configure_surface(&self.device, size.width, size.height);
-				return Ok(());
-			}
-			wgpu::CurrentSurfaceTexture::Lost => {
-				let size = surface_state.window.inner_size();
-				surface_state.configure_surface(&self.device, size.width, size.height);
-				return Err(RendererError::SurfaceLost);
-			}
+			| wgpu::CurrentSurfaceTexture::Validation => return Ok(RenderResult::FrameSkipped),
 		};
 
 		let view = frame
@@ -253,7 +272,7 @@ impl Renderer<'_> {
 
 		self.gui_renderer.cleanup();
 
-		Ok(())
+		Ok(RenderResult::Success)
 	}
 
 	pub(crate) fn painter<'a>(&'a mut self, ui_input: &'a mut UiInput) -> Painter<'a> {
@@ -265,11 +284,7 @@ impl Renderer<'_> {
 	}
 }
 
-fn surface_format(
-	surface: &wgpu::Surface<'_>,
-	adapter: &wgpu::Adapter,
-) -> Result<(wgpu::TextureFormat, wgpu::CompositeAlphaMode), RendererError> {
-	let cap = surface.get_capabilities(adapter);
+fn surface_format(cap: wgpu::SurfaceCapabilities) -> Result<wgpu::TextureFormat, RendererError> {
 	let format = cap
 		.formats
 		.iter()
@@ -277,10 +292,5 @@ fn surface_format(
 		.or_else(|| cap.formats.first())
 		.cloned()
 		.ok_or(RendererError::NoTextureFormat)?;
-	let alpha_mode = cap
-		.alpha_modes
-		.first()
-		.cloned()
-		.ok_or(RendererError::NoAlphaMode)?;
-	Ok((format, alpha_mode))
+	Ok(format)
 }
