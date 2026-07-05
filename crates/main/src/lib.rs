@@ -35,6 +35,7 @@ use wrangler::content::ContentWranglerAssistant;
 use crate::fps_calculator::FpsCalculator;
 use crate::gestures::Gesture;
 use crate::gestures::GestureTracker;
+use crate::renderer::RenderResult;
 use crate::renderer::Renderer;
 use crate::renderer::RendererError;
 use crate::ui::UiInput;
@@ -276,13 +277,20 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				self.view.draw(painter);
 
 				match renderer.render() {
-					Ok(()) => {
+					Ok(RenderResult::Success) => {
 						self.fps.tick();
+					}
+					Ok(RenderResult::Reconfigured) => {
+						log::debug!("Surface reconfigured, request render");
+						self.request_redraw(event_loop);
+					}
+					Ok(RenderResult::FrameSkipped) => {
+						// Do nothing.
 					}
 					Err(e @ RendererError::SurfaceNotAvailable) => {
 						log::warn!("Failure render: {e}");
 					}
-					Err(e @ RendererError::SurfaceLost) => {
+					Err(e @ RendererError::SurfaceLostUnrecoverably) => {
 						log::warn!("Failure render: {e}");
 					}
 					Err(e) => {
