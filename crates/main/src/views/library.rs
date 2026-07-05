@@ -405,7 +405,7 @@ impl ViewHandle for LibraryView {
 			let _ = write!(statusline, "{} {} / {}", self.shelves.sort_by, page, pages);
 
 			let working = self.scribe.working();
-			let top_panel = Panel::top("top").show_inside(ui, |ui| {
+			let top_panel = Panel::top("top").show(ui, |ui| {
 				MainMenuBar::new(self, menu_items)
 					.with_loading(working)
 					.with_status(Some(&statusline))
@@ -415,10 +415,9 @@ impl ViewHandle for LibraryView {
 
 			self.statusline = Some(statusline);
 
-			Panel::bottom("bottom")
-				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+			Panel::bottom("bottom").show(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 
-			CentralPanel::default().show_inside(ui, |ui| {
+			CentralPanel::default().show(ui, |ui| {
 				if is_open {
 					ui.disable();
 				}

@@ -255,12 +255,12 @@ impl ViewHandle for ExperimentsView {
 					None,
 				];
 
-				let top_panel = Panel::top("top")
-					.show_inside(ui, |ui| MainMenuBar::new(self, menu_items).ui(ui));
+				let top_panel =
+					Panel::top("top").show(ui, |ui| MainMenuBar::new(self, menu_items).ui(ui));
 				let is_open = top_panel.inner.context_menu_opened();
 
 				Panel::bottom("bottom")
-					.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+					.show(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 			});
 	}
 

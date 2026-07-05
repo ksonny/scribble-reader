@@ -534,7 +534,7 @@ impl ViewHandle for ReaderView {
 				None,
 			];
 
-			let top_panel = egui::Panel::top("top").show_inside(ui, |ui| {
+			let top_panel = egui::Panel::top("top").show(ui, |ui| {
 				let response = MainMenuBar::new(self, menu_items)
 					.with_loading(working)
 					.ui(ui);
@@ -554,13 +554,13 @@ impl ViewHandle for ReaderView {
 			}
 
 			let bottom_panel = egui::Panel::bottom("bottom")
-				.show_inside(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
+				.show(ui, |ui| ToolBar::new(self, tool_items, is_open).ui(ui));
 			if !is_open {
 				self.active_rects.push(bottom_panel.response.interact_rect);
 			}
 
 			if matches!(self.mode, ReaderMode::Navigation) {
-				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
+				let central_panel = egui::CentralPanel::default().show(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
@@ -595,7 +595,7 @@ impl ViewHandle for ReaderView {
 				self.mode,
 				ReaderMode::ActionSettings | ReaderMode::ProfileSettings
 			) {
-				let central_panel = egui::CentralPanel::default().show_inside(ui, |ui| {
+				let central_panel = egui::CentralPanel::default().show(ui, |ui| {
 					if is_open {
 						ui.disable();
 					}
