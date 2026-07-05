@@ -386,10 +386,6 @@ impl TreeSink for NodeTreeBuilder {
 			}
 			NodeOrText::AppendText(t) => {
 				log::trace!("append({parent:?}, '{t}')");
-				if t.trim().is_empty() {
-					log::trace!("Skip empty text");
-					return;
-				}
 				let last_child = tree.children(parent).and_then(|v| v.last().cloned());
 				if let Some(node_id) = last_child {
 					match tree.get_context_mut(node_id) {
@@ -418,10 +414,6 @@ impl TreeSink for NodeTreeBuilder {
 			}
 			NodeOrText::AppendText(t) => {
 				log::trace!("append_before_sibling({sibling:?}, '{t}')");
-				if t.trim().is_empty() {
-					log::trace!("Skip empty text");
-					return;
-				}
 				let older_sibling = tree
 					.parent(*sibling)
 					.and_then(|parent| tree.children(parent))

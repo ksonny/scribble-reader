@@ -294,10 +294,22 @@ pub struct Sculpter<'font> {
 impl Sculpter<'_> {
 	pub fn shape<'input>(
 		&mut self,
-		inputs: impl Iterator<Item = SculpterInput<'input>>,
+		inputs: impl ExactSizeIterator<Item = SculpterInput<'input>>,
 	) -> Result<SculpterHandle, SculpterShapeError> {
+		let len = inputs.len();
 		let glyphs_start = self.glyphs.len();
-		for SculpterInput { style, input } in inputs {
+		for (i, SculpterInput { style, input }) in inputs.enumerate() {
+			let input = if i == 0 {
+				input.trim_start()
+			} else if i + 1 == len {
+				input.trim_end()
+			} else {
+				input
+			};
+			if input.is_empty() {
+				continue;
+			}
+
 			let font_opts = style.font_opts;
 			let font_size = style.font_size;
 			let line_height_em = style.line_height_em;
