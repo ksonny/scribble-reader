@@ -15,10 +15,10 @@ bytemuck = { version = "1.24.0", features = ["derive"] }
 chrono = { version = "0.4.45", default-features = false, features = ["alloc", "clock", "now", "std", "serde"] }
 config = { version = "0.15.23", default-features = false, features = ["toml"] }
 dotenv = "0.15.0"
-egui = "0.34.1"
-egui-wgpu = "0.34.1"
-egui-winit = "0.34.1"
-egui_extras = { version = "0.34.1", features = ["image"] }
+egui = "0.35.0"
+egui-wgpu = "0.35.0"
+egui-winit = "0.35.0"
+egui_extras = { version = "0.35.0", features = ["image"] }
 env_logger = "0.11.8"
 etagere = "0.3.0"
 expand-tilde = "0.6.1"
@@ -66,7 +66,7 @@ lto = "thin"
 
 [patch.crates-io]
 winit = { git = "https://github.com/ksonny/winit", rev = "3dfe4bd368ea8763e902653ef598e219d2a0dccd" }
-egui = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
-egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
-egui-winit = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
-egui_extras = { git = "https://github.com/ksonny/egui", rev = "2543404253469eed5bba3d70600dbd77d5c9ffe0" }
+egui = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
+egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
+egui-winit = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
+egui_extras = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
