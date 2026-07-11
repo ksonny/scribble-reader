@@ -10,8 +10,8 @@ use egui::Rect;
 use egui::RichText;
 use illustrator::IllustratorAssistant;
 use illustrator::IllustratorCreateError;
+use illustrator::IllustratorLanucher;
 use illustrator::IllustratorRequestError;
-use illustrator::create_illustrator;
 use lucide_icons::Icon;
 use pixelator::PixelatorAssistant;
 use pixelator::PixmapInstance;
@@ -137,11 +137,8 @@ impl Default for ViewState {
 
 pub(crate) struct ReaderView {
 	config: IllustratorConfig,
-	keeper: RecordKeeper,
-	fonts: SculpterFonts,
-	content: ContentWranglerAssistant,
-	pixelator: PixelatorAssistant,
 	bell: AppBell,
+	launcher: IllustratorLanucher<AppBell>,
 	book_id: BookId,
 
 	records: RecordKeeperAssistant,
@@ -170,19 +167,19 @@ impl ReaderView {
 		viewport: Viewport,
 	) -> Result<Self, ReaderViewCreateError> {
 		let records = keeper.assistant()?;
+
 		let state: ViewState = records
 			.fetch_view_state(Self::STATE_KEY)
 			.inspect_err(|e| log::warn!("Error fetching state: {e}"))
 			.unwrap_or_default()
 			.unwrap_or_default();
 
+		let launcher = IllustratorLanucher::new(keeper, fonts, content, pixelator, bell.clone());
+
 		let mut view = Self {
 			config,
-			keeper,
-			fonts,
-			content,
-			pixelator,
 			bell,
+			launcher,
 			book_id,
 
 			records,
@@ -213,15 +210,7 @@ impl ReaderView {
 			.cloned()
 			.unwrap_or_default();
 		log::debug!("Create with profile {}", &self.state.profile);
-		let illustrator = create_illustrator(
-			self.keeper.assistant()?,
-			self.fonts.clone(),
-			self.content.clone(),
-			self.pixelator.clone(),
-			self.bell.clone(),
-			profile,
-			self.book_id,
-		)?;
+		let illustrator = self.launcher.launch(profile, self.book_id)?;
 		illustrator.rescale(self.viewport.scale_factor)?;
 		illustrator.resize(self.viewport.screen_width, self.viewport.screen_height)?;
 

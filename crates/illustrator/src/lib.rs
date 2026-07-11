@@ -28,6 +28,7 @@ use pixelator::PixmapRef;
 use scribe::Book;
 use scribe::BookId;
 use scribe::Location;
+use scribe::RecordKeeper;
 use scribe::RecordKeeperAssistant;
 use scribe::config::IllustratorProfile;
 use scribe_epub::EpubMetadata;
@@ -59,7 +60,7 @@ pub enum Request {
 }
 
 pub struct IllustratorAssistant {
-	handle: JoinHandle<Result<(), IllustratorWorkerError>>,
+	handle: JoinHandle<Result<(), IllustratorError>>,
 	req_tx: Sender<Request>,
 	working: Arc<AtomicBool>,
 	title: Option<Arc<String>>,
@@ -237,7 +238,7 @@ pub struct BookState {
 	pub percent_read: u32,
 }
 
-struct Worker {
+struct IllustratorBuilder {
 	profile: Arc<IllustratorProfile>,
 	fonts: SculpterFonts,
 	records: RecordKeeperAssistant,
@@ -250,7 +251,7 @@ struct Worker {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum IllustratorWorkerError {
+pub enum IllustratorError {
 	#[error("record keeper error: {0}")]
 	RecordKeeper(#[from] scribe::RecordKeeperError),
 	#[error("zip error: {0}")]
@@ -267,26 +268,21 @@ pub enum IllustratorWorkerError {
 	Epub(#[from] scribe_epub::EpubError),
 }
 
-impl From<std::io::Error> for IllustratorWorkerError {
+impl From<std::io::Error> for IllustratorError {
 	#[track_caller]
 	fn from(err: std::io::Error) -> Self {
 		Self::Io(err, std::panic::Location::caller())
 	}
 }
 
-impl Worker {
+impl IllustratorBuilder {
 	fn launch(
 		self,
 		bell: impl Bell + Send + 'static,
 		req_rx: Receiver<Request>,
+		mut params: Params,
 		book: Book,
-	) -> Result<(), IllustratorWorkerError> {
-		let mut params = Params {
-			page_width: 800,
-			page_height: 600,
-			scale: 1.0,
-		};
-
+	) -> Result<(), IllustratorError> {
 		let start = Instant::now();
 		let document = DocumentId::new(book.path.to_string_lossy().to_string());
 		let (bytes, _) = pollster::block_on(self.content.load(document))?;
@@ -524,7 +520,7 @@ impl Worker {
 		settings: &StyleSettings<'settings>,
 		package: &Package,
 		spine_index: u32,
-	) -> Result<PageLayouter<'layout>, IllustratorWorkerError> {
+	) -> Result<PageLayouter<'layout>, IllustratorError> {
 		let resource = package
 			.metadata_by_spine(spine_index as usize)
 			.expect("Unexpected missing resource");
@@ -564,63 +560,91 @@ impl Worker {
 	}
 }
 
+pub struct IllustratorLanucher<B: Bell + Clone + Send + 'static> {
+	records: RecordKeeper,
+	fonts: SculpterFonts,
+	content: ContentWranglerAssistant,
+	pixelator: PixelatorAssistant,
+	bell: B,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IllustratorCreateError {
 	#[error(transparent)]
 	RecordKeeper(#[from] scribe::RecordKeeperError),
 }
 
-#[must_use = "Must track handle or illustrator dies"]
-pub fn create_illustrator(
-	records: RecordKeeperAssistant,
-	fonts: SculpterFonts,
-	content: ContentWranglerAssistant,
-	pixelator: PixelatorAssistant,
-	bell: impl Bell + Send + 'static,
-	profile: Arc<IllustratorProfile>,
-	book_id: BookId,
-) -> Result<IllustratorAssistant, IllustratorCreateError> {
-	log::debug!("Open book {book_id}");
+impl<B: Bell + Clone + Send + 'static> IllustratorLanucher<B> {
+	pub fn new(
+		records: RecordKeeper,
+		fonts: SculpterFonts,
+		content: ContentWranglerAssistant,
+		pixelator: PixelatorAssistant,
+		bell: B,
+	) -> Self {
+		Self {
+			records,
+			fonts,
+			content,
+			pixelator,
+			bell,
+		}
+	}
 
-	let book = records.fetch_book(book_id)?;
+	pub fn launch(
+		&self,
+		profile: Arc<IllustratorProfile>,
+		book_id: BookId,
+	) -> Result<IllustratorAssistant, IllustratorCreateError> {
+		let records = self.records.assistant()?;
+		let fonts = self.fonts.clone();
+		let content = self.content.clone();
+		let pixelator = self.pixelator.clone();
+		let bell = self.bell.clone();
 
-	let fonts = fonts.clone();
+		let book = records.fetch_book(book_id)?;
 
-	let cache = Arc::new(Mutex::new(PageContentCache::default()));
-	let navigation = Arc::new(Mutex::new(None));
-	let title = book.title.clone();
-	let state = Arc::new(Mutex::new(BookState {
-		location: book.location(),
-		percent_read: book.percent_read.unwrap_or(0),
-	}));
-	let working = Arc::new(AtomicBool::new(true));
+		let cache = Arc::new(Mutex::new(PageContentCache::default()));
+		let navigation = Arc::new(Mutex::new(None));
+		let title = book.title.clone();
+		let state = Arc::new(Mutex::new(BookState {
+			location: book.location(),
+			percent_read: book.percent_read.unwrap_or(0),
+		}));
+		let working = Arc::new(AtomicBool::new(true));
 
-	let (req_tx, req_rx) = channel();
+		let (req_tx, req_rx) = channel();
 
-	let worker = Worker {
-		profile,
-		fonts,
-		records,
-		content,
-		pixelator,
-		cache: cache.clone(),
-		state: state.clone(),
-		navigation: navigation.clone(),
-		working: working.clone(),
-	};
+		let params = Params {
+			page_width: 800,
+			page_height: 600,
+			scale: 1.0,
+		};
 
-	let handle = std::thread::spawn(move || -> Result<(), IllustratorWorkerError> {
-		log::debug!("Launch illustrator");
-		worker.launch(bell, req_rx, book)
-	});
+		let builder = IllustratorBuilder {
+			profile,
+			fonts,
+			records,
+			content,
+			pixelator,
+			cache: cache.clone(),
+			state: state.clone(),
+			navigation: navigation.clone(),
+			working: working.clone(),
+		};
+		let handle = std::thread::spawn(move || -> Result<(), IllustratorError> {
+			log::debug!("Launch illustrator");
+			builder.launch(bell, req_rx, params, book)
+		});
 
-	Ok(IllustratorAssistant {
-		handle,
-		req_tx,
-		working,
-		title,
-		state,
-		navigation,
-		cache,
-	})
+		Ok(IllustratorAssistant {
+			handle,
+			req_tx,
+			working,
+			title,
+			state,
+			navigation,
+			cache,
+		})
+	}
 }
