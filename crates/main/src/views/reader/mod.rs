@@ -209,7 +209,7 @@ impl ReaderView {
 			.get(&self.state.profile)
 			.cloned()
 			.unwrap_or_default();
-		log::debug!("Create with profile {}", &self.state.profile);
+		log::debug!("Create with profile {}", self.state.profile);
 		let illustrator = self.launcher.launch(profile, self.book_id)?;
 		illustrator.rescale(self.viewport.scale_factor)?;
 		illustrator.resize(self.viewport.screen_width, self.viewport.screen_height)?;
@@ -880,7 +880,7 @@ impl egui::Widget for SettingsPanelUi<'_> {
 			.response
 		} else {
 			ui.vertical_centered_justified(|ui| {
-				for (profile, _) in self.config.as_ref().iter() {
+				for profile in self.config.as_ref().keys() {
 					let is_active = self.state.profile.as_str() == profile;
 					let response = ui.add(
 						Button::new(RichText::new(profile).size(theme::M_SIZE)).selected(is_active),

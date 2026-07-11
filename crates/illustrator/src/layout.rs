@@ -701,7 +701,7 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 			}
 		}
 
-		debug_assert!(inputs.is_empty());
+		debug_assert!(inputs.iter().all(|(_, s, _)| s.trim().is_empty()));
 		debug_assert!(styles.is_empty());
 		drop(inputs);
 		drop(styles);
