@@ -27,6 +27,12 @@ pub enum PixelatorPatchError {
 	PatchOutsideTexture,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PixelatorWithTextureError {
+	#[error("Pixmap target is deallocated")]
+	TextureDeallocated,
+}
+
 #[allow(private_bounds)]
 pub trait PixelatorTextures: PixelatorTextureSupport {
 	#[must_use = "Output needs to be saved or texture is deallocated"]
@@ -199,6 +205,19 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 			},
 			size,
 		);
+		Ok(())
+	}
+
+	fn with_texture(
+		&self,
+		pixmap: PixmapRef,
+		mut f: impl FnMut(&wgpu::Texture),
+	) -> Result<(), PixelatorWithTextureError> {
+		let textures = self.lock_textures();
+		let entry = textures
+			.get(pixmap.as_ref())
+			.ok_or(PixelatorWithTextureError::TextureDeallocated)?;
+		f(&entry.texture);
 		Ok(())
 	}
 }
