@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use egui_wgpu::wgpu::{
-	self,
-};
+use egui_wgpu::wgpu;
 use egui_winit::winit;
 use wgpu::Device;
 use wgpu::Queue;

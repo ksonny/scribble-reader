@@ -2926,6 +2926,7 @@ dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
  "log",
+ "thiserror 2.0.18",
  "wgpu",
 ]
 

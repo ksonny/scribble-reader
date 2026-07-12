@@ -5,20 +5,19 @@ use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use wgpu::util::DeviceExt;
 
 use crate::Flags;
 use crate::PaintPosition;
 use crate::PixelatorAssistant;
+use crate::PixelatorTextureSupport;
 use crate::PixelatorTextures;
-use crate::PixmapData;
-use crate::PixmapDimensions;
 use crate::PixmapId;
 use crate::PixmapInstance;
 use crate::PixmapRef;
 use crate::PixmapTexture;
-use crate::upload_texture;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -310,7 +309,7 @@ impl Renderer {
 		}
 		drop(params_buffers);
 
-		// Drop unused and unreferenced textures
+		// Drop unreferenced textures
 		for pixmap_id in pixmap_id_set {
 			if textures
 				.get(&pixmap_id)
@@ -357,82 +356,18 @@ impl PixmapBrush<'_> {
 	}
 }
 
-impl PixelatorTextures for PixmapBrush<'_> {
-	fn create(&self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
-		let pixmap_id = PixmapId::take();
-		let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
-
-		let pixmap: PixmapRef = pixmap_id.into();
-		let weak_ref = Arc::downgrade(&pixmap.0);
-
-		self.textures.lock().unwrap().insert(
-			pixmap_id,
-			PixmapTexture {
-				weak_ref,
-				pixmap_dim: dims,
-				flags,
-				texture,
-			},
-		);
-
-		pixmap
+impl PixelatorTextureSupport for PixmapBrush<'_> {
+	fn device(&self) -> &wgpu::Device {
+		self.device
 	}
 
-	fn update(&self, pixmap: PixmapRef, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
-		let format = match data {
-			PixmapData::RgbA(_) => wgpu::TextureFormat::Rgba8Unorm,
-			PixmapData::Luma(_) => wgpu::TextureFormat::R8Unorm,
-		};
-		let mut textures = self.textures.lock().unwrap();
-		if let Some(entry) = textures.get_mut(pixmap.as_ref())
-			&& entry.pixmap_dim == dims
-			&& entry.texture.format() == format
-		{
-			// Match, write new data to texture
-			let (bytes, flags, data) = match data {
-				PixmapData::RgbA(data) => (4, Flags::empty(), data),
-				PixmapData::Luma(data) => (1, Flags::GRAYSCALE, data),
-			};
-			let size = wgpu::Extent3d {
-				width: dims.width(),
-				height: dims.height(),
-				depth_or_array_layers: 1,
-			};
-			self.queue.write_texture(
-				wgpu::TexelCopyTextureInfo {
-					texture: &entry.texture,
-					mip_level: 0,
-					origin: wgpu::Origin3d::ZERO,
-					aspect: wgpu::TextureAspect::All,
-				},
-				data,
-				wgpu::TexelCopyBufferLayout {
-					offset: 0,
-					bytes_per_row: Some(bytes * dims.width()),
-					rows_per_image: Some(dims.height()),
-				},
-				size,
-			);
-			entry.flags = flags;
-			pixmap
-		} else {
-			// No match found or different parameters, allocate new texture
-			let pixmap_id = PixmapId::take();
+	fn queue(&self) -> &wgpu::Queue {
+		self.queue
+	}
 
-			let pixmap: PixmapRef = pixmap_id.into();
-			let weak_ref = Arc::downgrade(&pixmap.0);
-
-			let (texture, flags) = upload_texture(self.device, self.queue, &dims, data);
-			textures.insert(
-				pixmap_id,
-				PixmapTexture {
-					weak_ref,
-					pixmap_dim: dims,
-					texture,
-					flags,
-				},
-			);
-			pixmap
-		}
+	fn lock_textures(&self) -> MutexGuard<'_, BTreeMap<PixmapId, PixmapTexture>> {
+		self.textures.lock().unwrap()
 	}
 }
+
+impl PixelatorTextures for PixmapBrush<'_> {}
