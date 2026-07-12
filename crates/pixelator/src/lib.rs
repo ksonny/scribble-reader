@@ -46,6 +46,12 @@ impl PixmapId {
 pub struct PixmapRef(Arc<PixmapId>);
 
 #[derive(Debug)]
+pub enum PixmapFormat {
+	RgbA,
+	Luma,
+}
+
+#[derive(Debug)]
 pub enum PixmapData<'data> {
 	RgbA(&'data [u8]),
 	Luma(&'data [u8]),

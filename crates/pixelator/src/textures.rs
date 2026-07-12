@@ -5,6 +5,7 @@ use std::sync::MutexGuard;
 use crate::Flags;
 use crate::PixmapData;
 use crate::PixmapDimensions;
+use crate::PixmapFormat;
 use crate::PixmapId;
 use crate::PixmapOrigin;
 use crate::PixmapRef;
@@ -31,6 +32,45 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 	#[must_use = "Output needs to be saved or texture is deallocated"]
 	fn create(&self, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
 		let (texture, flags) = upload_texture(self.device(), self.queue(), &dims, data);
+		let pixmap_id = PixmapId::take();
+		let pixmap: PixmapRef = pixmap_id.into();
+		let weak_ref = Arc::downgrade(&pixmap.0);
+
+		self.lock_textures().insert(
+			pixmap_id,
+			PixmapTexture {
+				weak_ref,
+				pixmap_dim: dims,
+				flags,
+				texture,
+			},
+		);
+
+		pixmap
+	}
+
+	#[must_use = "Output needs to be saved or texture is deallocated"]
+	fn create_empty(&self, dims: PixmapDimensions, format: PixmapFormat) -> PixmapRef {
+		let (format, flags) = match format {
+			PixmapFormat::RgbA => (wgpu::TextureFormat::Rgba8Unorm, Flags::empty()),
+			PixmapFormat::Luma => (wgpu::TextureFormat::R8Unorm, Flags::GRAYSCALE),
+		};
+		let size = wgpu::Extent3d {
+			width: dims.width(),
+			height: dims.height(),
+			depth_or_array_layers: 1,
+		};
+		let texture = self.device().create_texture(&wgpu::TextureDescriptor {
+			label: Some("pixmap texture"),
+			size,
+			mip_level_count: 1,
+			sample_count: 1,
+			dimension: wgpu::TextureDimension::D2,
+			format,
+			usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+			view_formats: &[],
+		});
+
 		let pixmap_id = PixmapId::take();
 		let pixmap: PixmapRef = pixmap_id.into();
 		let weak_ref = Arc::downgrade(&pixmap.0);
