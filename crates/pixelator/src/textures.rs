@@ -6,6 +6,7 @@ use crate::Flags;
 use crate::PixmapData;
 use crate::PixmapDimensions;
 use crate::PixmapId;
+use crate::PixmapOrigin;
 use crate::PixmapRef;
 use crate::PixmapTexture;
 
@@ -13,6 +14,16 @@ pub(crate) trait PixelatorTextureSupport {
 	fn device(&self) -> &wgpu::Device;
 	fn queue(&self) -> &wgpu::Queue;
 	fn lock_textures(&self) -> MutexGuard<'_, BTreeMap<PixmapId, PixmapTexture>>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PixelatorPatchError {
+	#[error("Patch target is deallocated")]
+	TextureDeallocated,
+	#[error("Patch target has different format than patch")]
+	TextureFormatMissmatch,
+	#[error("Patch position outside target texture")]
+	PatchOutsideTexture,
 }
 
 #[allow(private_bounds)]
@@ -94,6 +105,61 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 			);
 			pixmap
 		}
+	}
+
+	fn patch(
+		&self,
+		pixmap: PixmapRef,
+		origin: PixmapOrigin,
+		dims: PixmapDimensions,
+		data: PixmapData,
+	) -> Result<(), PixelatorPatchError> {
+		let format = match data {
+			PixmapData::RgbA(_) => wgpu::TextureFormat::Rgba8UnormSrgb,
+			PixmapData::Luma(_) => wgpu::TextureFormat::R8Unorm,
+		};
+		let mut textures = self.lock_textures();
+		let Some(entry) = textures.get_mut(pixmap.as_ref()) else {
+			return Err(PixelatorPatchError::TextureDeallocated);
+		};
+		if entry.texture.format() == format {
+			return Err(PixelatorPatchError::TextureFormatMissmatch);
+		}
+		if entry.pixmap_dim.width() < origin.x() + dims.width()
+			|| entry.pixmap_dim.height() < origin.y() + dims.height()
+		{
+			return Err(PixelatorPatchError::PatchOutsideTexture);
+		}
+
+		let (bytes, data) = match data {
+			PixmapData::RgbA(data) => (4, data),
+			PixmapData::Luma(data) => (1, data),
+		};
+		let size = wgpu::Extent3d {
+			width: dims.width(),
+			height: dims.height(),
+			depth_or_array_layers: 1,
+		};
+		self.queue().write_texture(
+			wgpu::TexelCopyTextureInfo {
+				texture: &entry.texture,
+				mip_level: 0,
+				origin: wgpu::Origin3d {
+					x: origin.x(),
+					y: origin.y(),
+					z: 0,
+				},
+				aspect: wgpu::TextureAspect::All,
+			},
+			data,
+			wgpu::TexelCopyBufferLayout {
+				offset: 0,
+				bytes_per_row: Some(bytes * dims.width()),
+				rows_per_image: Some(dims.height()),
+			},
+			size,
+		);
+		Ok(())
 	}
 }
 

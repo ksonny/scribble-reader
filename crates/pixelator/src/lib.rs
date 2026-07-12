@@ -92,6 +92,19 @@ impl From<[u32; 2]> for PixmapDimensions {
 }
 
 #[derive(Debug, Default)]
+pub struct PixmapOrigin([u32; 2]);
+
+impl PixmapOrigin {
+	pub(crate) fn x(&self) -> u32 {
+		self.0[0]
+	}
+
+	pub(crate) fn y(&self) -> u32 {
+		self.0[1]
+	}
+}
+
+#[derive(Debug, Default)]
 pub struct PaintPosition([f32; 2]);
 
 impl PaintPosition {
