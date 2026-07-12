@@ -26,7 +26,6 @@ use crate::gestures;
 
 pub fn create_egui_ctx() -> Context {
 	let egui_ctx = Context::default();
-	egui_extras::install_image_loaders(&egui_ctx);
 
 	egui_ctx.add_font(FontInsert::new(
 		"lucide-icons",

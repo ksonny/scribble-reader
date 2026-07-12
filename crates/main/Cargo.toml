@@ -12,7 +12,6 @@ dotenv.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
 egui-winit.workspace = true
-egui_extras.workspace = true
 env_logger.workspace = true
 illustrator.workspace = true
 image.workspace = true

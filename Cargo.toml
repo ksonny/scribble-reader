@@ -18,7 +18,6 @@ dotenv = "0.15.0"
 egui = "0.35.0"
 egui-wgpu = "0.35.0"
 egui-winit = "0.35.0"
-egui_extras = { version = "0.35.0", features = ["image"] }
 env_logger = "0.11.8"
 etagere = "0.3.0"
 expand-tilde = "0.6.1"
@@ -69,4 +68,3 @@ winit = { git = "https://github.com/ksonny/winit", rev = "3dfe4bd368ea8763e90265
 egui = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
 egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
 egui-winit = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
-egui_extras = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
