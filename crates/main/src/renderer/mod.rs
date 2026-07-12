@@ -8,7 +8,9 @@ use winit::event_loop::OwnedDisplayHandle;
 use egui_wgpu::wgpu::{
 	self,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Weak;
 use winit::window::Window;
 
 pub(crate) use crate::renderer::painter::Painter;
@@ -28,6 +30,11 @@ pub(crate) enum RendererError {
 	SurfaceNotAvailable,
 	#[error("Surface lost and failed to recreate")]
 	SurfaceLostUnrecoverably,
+}
+
+pub(crate) struct EguiMapped {
+	weak_ref: Weak<pixelator::PixmapId>,
+	texture: egui::load::SizedTexture,
 }
 
 struct SurfaceState<'window> {
@@ -70,6 +77,7 @@ pub(crate) struct Renderer<'window> {
 	queue: wgpu::Queue,
 	pixmap_renderer: pixelator::Renderer,
 	gui_renderer: gui_renderer::Renderer,
+	gui_mapped_pixmaps: BTreeMap<pixelator::PixmapId, EguiMapped>,
 	surface_state: Option<SurfaceState<'window>>,
 	resized: Option<PhysicalSize<u32>>,
 }
@@ -121,8 +129,9 @@ impl Renderer<'_> {
 			queue,
 			pixmap_renderer,
 			gui_renderer,
-			resized: None,
+			gui_mapped_pixmaps: BTreeMap::new(),
 			surface_state: Some(surface_state),
+			resized: None,
 		})
 	}
 
@@ -272,11 +281,29 @@ impl Renderer<'_> {
 
 		self.gui_renderer.cleanup();
 
+		// Drop unreferenced mappings
+		self.gui_mapped_pixmaps
+			.extract_if(.., |_, v| {
+				if v.weak_ref.strong_count() == 0 {
+					log::info!("DROP TEXTURE {:?}", v.texture.id);
+					self.gui_renderer.free_texture(&v.texture.id);
+					true
+				} else {
+					false
+				}
+			})
+			.for_each(drop);
+
 		Ok(RenderResult::Success)
 	}
 
 	pub(crate) fn painter<'a>(&'a mut self, ui_input: &'a mut UiInput) -> Painter<'a> {
-		Painter::new(ui_input, &mut self.gui_renderer, &mut self.pixmap_renderer)
+		Painter::new(
+			ui_input,
+			&mut self.gui_renderer,
+			&mut self.pixmap_renderer,
+			&mut self.gui_mapped_pixmaps,
+		)
 	}
 
 	pub(crate) fn pixelator(&self) -> PixelatorAssistant {

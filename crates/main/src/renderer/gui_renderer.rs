@@ -112,4 +112,16 @@ impl Renderer {
 			self.gui_renderer.free_texture(id);
 		}
 	}
+
+	pub(crate) fn register_native_texture(
+		&mut self,
+		texture: &wgpu::TextureView,
+	) -> egui::TextureId {
+		self.gui_renderer
+			.register_native_texture(&self.device, texture, wgpu::FilterMode::Linear)
+	}
+
+	pub(crate) fn free_texture(&mut self, texture_id: &egui::TextureId) {
+		self.gui_renderer.free_texture(texture_id);
+	}
 }

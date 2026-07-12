@@ -313,12 +313,16 @@ impl Renderer {
 		for pixmap_id in pixmap_id_set {
 			if textures
 				.get(&pixmap_id)
-				.is_some_and(|t| t.weak_ref.upgrade().is_none())
+				.is_some_and(|t| t.weak_ref.strong_count() == 0)
 			{
 				log::debug!("Drop pixmap {:?}", pixmap_id);
 				textures.remove(&pixmap_id);
 			}
 		}
+	}
+
+	pub fn lock_textures(&self) -> MutexGuard<'_, BTreeMap<PixmapId, PixmapTexture>> {
+		self.textures.lock().unwrap()
 	}
 }
 

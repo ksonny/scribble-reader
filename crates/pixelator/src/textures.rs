@@ -27,12 +27,6 @@ pub enum PixelatorPatchError {
 	PatchOutsideTexture,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum PixelatorWithTextureError {
-	#[error("Pixmap target is deallocated")]
-	TextureDeallocated,
-}
-
 #[allow(private_bounds)]
 pub trait PixelatorTextures: PixelatorTextureSupport {
 	#[must_use = "Output needs to be saved or texture is deallocated"]
@@ -40,7 +34,7 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 		let (texture, flags) = upload_texture(self.device(), self.queue(), &dims, data);
 		let pixmap_id = PixmapId::take();
 		let pixmap: PixmapRef = pixmap_id.into();
-		let weak_ref = Arc::downgrade(&pixmap.0);
+		let weak_ref = pixmap.downgrade();
 
 		self.lock_textures().insert(
 			pixmap_id,
@@ -97,7 +91,7 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 	#[must_use = "Output needs to be saved or texture is deallocated"]
 	fn update(&self, pixmap: PixmapRef, dims: PixmapDimensions, data: PixmapData) -> PixmapRef {
 		let format = match data {
-			PixmapData::RgbA(_) => wgpu::TextureFormat::Rgba8UnormSrgb,
+			PixmapData::RgbA(_) => wgpu::TextureFormat::Rgba8Unorm,
 			PixmapData::Luma(_) => wgpu::TextureFormat::R8Unorm,
 		};
 		let mut textures = self.lock_textures();
@@ -155,20 +149,20 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 
 	fn patch(
 		&self,
-		pixmap: PixmapRef,
+		pixmap: &PixmapRef,
 		origin: PixmapOrigin,
 		dims: PixmapDimensions,
 		data: PixmapData,
 	) -> Result<(), PixelatorPatchError> {
-		let format = match data {
-			PixmapData::RgbA(_) => wgpu::TextureFormat::Rgba8UnormSrgb,
-			PixmapData::Luma(_) => wgpu::TextureFormat::R8Unorm,
+		let (format, bytes, data) = match data {
+			PixmapData::RgbA(data) => (wgpu::TextureFormat::Rgba8Unorm, 4, data),
+			PixmapData::Luma(data) => (wgpu::TextureFormat::R8Unorm, 1, data),
 		};
 		let mut textures = self.lock_textures();
 		let Some(entry) = textures.get_mut(pixmap.as_ref()) else {
 			return Err(PixelatorPatchError::TextureDeallocated);
 		};
-		if entry.texture.format() == format {
+		if entry.texture.format() != format {
 			return Err(PixelatorPatchError::TextureFormatMissmatch);
 		}
 		if entry.pixmap_dim.width() < origin.x() + dims.width()
@@ -177,10 +171,6 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 			return Err(PixelatorPatchError::PatchOutsideTexture);
 		}
 
-		let (bytes, data) = match data {
-			PixmapData::RgbA(data) => (4, data),
-			PixmapData::Luma(data) => (1, data),
-		};
 		let size = wgpu::Extent3d {
 			width: dims.width(),
 			height: dims.height(),
@@ -208,17 +198,12 @@ pub trait PixelatorTextures: PixelatorTextureSupport {
 		Ok(())
 	}
 
-	fn with_texture(
-		&self,
-		pixmap: PixmapRef,
-		mut f: impl FnMut(&wgpu::Texture),
-	) -> Result<(), PixelatorWithTextureError> {
+	fn dims(&self, pixmap: &PixmapRef) -> Result<PixmapDimensions, PixelatorPatchError> {
 		let textures = self.lock_textures();
-		let entry = textures
-			.get(pixmap.as_ref())
-			.ok_or(PixelatorWithTextureError::TextureDeallocated)?;
-		f(&entry.texture);
-		Ok(())
+		let Some(entry) = textures.get(pixmap.as_ref()) else {
+			return Err(PixelatorPatchError::TextureDeallocated);
+		};
+		Ok(entry.pixmap_dim.clone())
 	}
 }
 

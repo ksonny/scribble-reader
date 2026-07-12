@@ -77,12 +77,3 @@ impl Book {
 		}
 	}
 }
-
-#[derive(Debug, Clone, Default)]
-pub enum Thumbnail {
-	#[default]
-	None,
-	Bytes {
-		bytes: Arc<[u8]>,
-	},
-}

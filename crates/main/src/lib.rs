@@ -168,8 +168,14 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 	fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
 		match event {
 			AppEvent::OpenLibrary => {
+				let Some(pixelator) = self.renderer.as_ref().map(|r| r.pixelator()) else {
+					self.view.error("Renderer not available");
+					return;
+				};
+
 				log::debug!("Open library");
-				self.view.library(self.keeper.clone(), self.scribe.clone());
+				self.view
+					.library(self.keeper.clone(), self.scribe.clone(), pixelator);
 			}
 			AppEvent::OpenReader(book_id) => {
 				let Some(pixelator) = self.renderer.as_ref().map(|r| r.pixelator()) else {

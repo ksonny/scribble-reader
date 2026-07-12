@@ -83,9 +83,14 @@ impl AppView {
 		}
 	}
 
-	pub(crate) fn library(&mut self, records: RecordKeeper, scribe: LibraryScribeAssistant) {
+	pub(crate) fn library(
+		&mut self,
+		records: RecordKeeper,
+		scribe: LibraryScribeAssistant,
+		pixelator: PixelatorAssistant,
+	) {
 		self.close();
-		match library::LibraryView::create(self.bell.clone(), records, scribe) {
+		match library::LibraryView::create(self.bell.clone(), records, scribe, pixelator) {
 			Ok(view) => self.view = Views::Library(view),
 			Err(e) => {
 				log::error!("Library view error: {}", e);

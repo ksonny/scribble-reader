@@ -1,9 +1,10 @@
+#![allow(dead_code)]
 use std::array;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::fmt::Write;
-use std::fs;
+use std::io;
 use std::sync::Arc;
 
 use chrono::DateTime;
@@ -17,15 +18,20 @@ use egui::Panel;
 use egui::ProgressBar;
 use egui::RichText;
 use egui::Vec2;
-use egui::load::Bytes;
+use image::ImageReader;
 use lucide_icons::Icon;
+use pixelator::PixelatorAssistant;
+use pixelator::PixelatorPatchError;
+use pixelator::PixelatorTextures;
+use pixelator::PixmapData;
+use pixelator::PixmapDimensions;
+use pixelator::PixmapRef;
 use scribe::Book;
 use scribe::BookId;
 use scribe::LibraryScribeAssistant;
 use scribe::RecordKeeper;
 use scribe::RecordKeeperAssistant;
 use scribe::RecordKeeperError;
-use scribe::Thumbnail;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -56,7 +62,6 @@ struct BookCard {
 	opened_at: Option<DateTime<Utc>>,
 	modified_at: DateTime<Utc>,
 	added_at: DateTime<Utc>,
-	thumbnail: Thumbnail,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
@@ -108,23 +113,191 @@ struct ViewState {
 	page: u32,
 }
 
-#[derive(Debug)]
+#[derive(Default, Clone)]
+struct PixmapRect {
+	xmin: u32,
+	ymin: u32,
+	xmax: u32,
+	ymax: u32,
+}
+
+impl PixmapRect {
+	fn width(&self) -> u32 {
+		self.xmax - self.xmin
+	}
+
+	fn height(&self) -> u32 {
+		self.ymax - self.ymin
+	}
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ThumbnailAtlasError {
+	#[error(transparent)]
+	PixelatorPatch(#[from] PixelatorPatchError),
+}
+
+#[derive(Default, Debug)]
+enum CacheKeep {
+	#[default]
+	No,
+	Keep,
+}
+
+struct ThumbnailEntry {
+	key: Option<BookId>,
+	keep: CacheKeep,
+	rect: PixmapRect,
+	used: PixmapDimensions,
+}
+
+const THUMBNAIL_WIDTH: u32 = 320;
+const THUMBNAIL_HEIGHT: u32 = 320;
+const TEXTURE_SIZE: u32 = 2048;
+const V_LEN: u32 = TEXTURE_SIZE / THUMBNAIL_WIDTH;
+const H_LEN: u32 = TEXTURE_SIZE / THUMBNAIL_HEIGHT;
+const ENTRIES: u32 = V_LEN * H_LEN;
+
+struct ThumbnailAtlas {
+	pixmap: PixmapRef,
+	write_ptr: u32,
+	texture_id: Option<egui::TextureId>,
+	entries: [ThumbnailEntry; ENTRIES as usize],
+}
+
+impl ThumbnailAtlas {
+	fn new(pixelator: &PixelatorAssistant) -> Self {
+		let pixmap = pixelator.create_empty(
+			[TEXTURE_SIZE, TEXTURE_SIZE].into(),
+			pixelator::PixmapFormat::RgbA,
+		);
+
+		let entries = array::from_fn(|i| {
+			let (x, y) = (i as u32 % V_LEN, i as u32 / H_LEN);
+
+			let xmin = x * THUMBNAIL_WIDTH;
+			let ymin = y * THUMBNAIL_HEIGHT;
+			let xmax = xmin + THUMBNAIL_WIDTH;
+			let ymax = ymin + THUMBNAIL_HEIGHT;
+			debug_assert!(xmax <= TEXTURE_SIZE);
+			debug_assert!(ymax <= TEXTURE_SIZE);
+
+			ThumbnailEntry {
+				key: None,
+				keep: CacheKeep::No,
+				used: [0, 0].into(),
+				rect: PixmapRect {
+					xmin,
+					ymin,
+					xmax,
+					ymax,
+				},
+			}
+		});
+
+		Self {
+			pixmap,
+			write_ptr: 0,
+			texture_id: None,
+			entries,
+		}
+	}
+
+	fn contains(&mut self, key: &BookId) -> bool {
+		self.entries
+			.iter()
+			.any(|e| e.key.is_some_and(|k| k == *key))
+	}
+
+	fn get(&mut self, key: &BookId) -> Option<PixmapRect> {
+		let entry = self
+			.entries
+			.iter_mut()
+			.find(|e| e.key.is_some_and(|k| k == *key))?;
+		entry.keep = CacheKeep::Keep;
+
+		Some(PixmapRect {
+			xmin: entry.rect.xmin,
+			ymin: entry.rect.ymin,
+			xmax: entry.rect.xmin + entry.used.width(),
+			ymax: entry.rect.ymin + entry.used.height(),
+		})
+	}
+
+	fn remove(&mut self, key: &BookId) {
+		let Some(entry) = self
+			.entries
+			.iter_mut()
+			.find(|e| e.key.is_some_and(|k| k == *key))
+		else {
+			return;
+		};
+		entry.key = None;
+	}
+
+	fn insert(
+		&mut self,
+		pixelator: &PixelatorAssistant,
+		id: BookId,
+		image: image::RgbaImage,
+	) -> Result<(), ThumbnailAtlasError> {
+		let mut ptr = self.write_ptr as usize;
+		let len = self.entries.len();
+		for _ in 0..(2 * len) {
+			ptr = (ptr + 1) % len;
+			let entry = &mut self.entries[ptr];
+			if entry.key.is_some() && matches!(entry.keep, CacheKeep::Keep) {
+				entry.keep = CacheKeep::No;
+			} else {
+				if image.width() > THUMBNAIL_WIDTH || image.height() > THUMBNAIL_HEIGHT {
+					log::warn!("Threw away thumbnail for book {id} exceeding max size");
+					return Ok(());
+				}
+
+				self.write_ptr = ptr as u32;
+				entry.key = Some(id);
+				entry.keep = CacheKeep::Keep;
+				entry.used = [image.width(), image.height()].into();
+				pixelator.patch(
+					&self.pixmap,
+					[entry.rect.xmin, entry.rect.ymin].into(),
+					entry.used.clone(),
+					PixmapData::RgbA(image.as_raw()),
+				)?;
+				return Ok(());
+			}
+		}
+		unreachable!("Failed to put entry in after 2 laps")
+	}
+}
+
+impl Shelves {
+	// * allocate big texture (figure out thumbnail size and how many could be fit)
+	// * struct for keepng track of which thumbnail is where
+	// * batch upload thumbnail to texture
+}
+
 struct Shelves {
 	books: BTreeMap<BookId, Book>,
 	sorted: Vec<(BookId, SortKey)>,
 	sort_by: SortBy,
-	thumbnails: BTreeMap<BookId, Thumbnail>,
+	thumbnails: ThumbnailAtlas,
 }
 
 impl Shelves {
-	fn open(books: BTreeMap<BookId, Book>, sort_by: SortBy) -> Self {
+	fn open(
+		pixelator: &PixelatorAssistant,
+		books: BTreeMap<BookId, Book>,
+		sort_by: SortBy,
+	) -> Self {
 		log::info!("Open library with {} books", books.len());
+		let thumbnails = ThumbnailAtlas::new(pixelator);
 		let sorted = books.iter().map(|(id, b)| (*id, SortKey::new(b))).collect();
 		let mut shelves = Self {
 			books,
 			sort_by,
 			sorted,
-			thumbnails: BTreeMap::new(),
+			thumbnails,
 		};
 		shelves.sort_books();
 		shelves
@@ -173,6 +346,7 @@ pub(crate) struct LibraryView {
 	bell: AppBell,
 	records: RecordKeeperAssistant,
 	scribe: LibraryScribeAssistant,
+	pixelator: PixelatorAssistant,
 	shelves: Shelves,
 	state: ViewState,
 	cards: [Option<BookCard>; LIBRARY_LIST_SIZE],
@@ -186,6 +360,7 @@ impl LibraryView {
 		bell: AppBell,
 		records: RecordKeeper,
 		scribe: LibraryScribeAssistant,
+		pixelator: PixelatorAssistant,
 	) -> Result<Self, RecordKeeperError> {
 		let records = records.assistant()?;
 
@@ -200,13 +375,14 @@ impl LibraryView {
 				BTreeMap::new()
 			}
 		};
-		let mut shelves = Shelves::open(books, state.sort_by);
-		let cards = read_cards(&mut shelves, &records, state.page);
+		let mut shelves = Shelves::open(&pixelator, books, state.sort_by);
+		let cards = read_cards(&mut shelves, &records, &pixelator, state.page);
 
 		Ok(Self {
 			bell,
 			records,
 			scribe,
+			pixelator,
 			shelves,
 			state,
 			cards,
@@ -216,7 +392,12 @@ impl LibraryView {
 
 	fn prev_page(&mut self) {
 		self.state.page = self.state.page.saturating_sub(1);
-		self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
+		self.cards = read_cards(
+			&mut self.shelves,
+			&self.records,
+			&self.pixelator,
+			self.state.page,
+		);
 		let _ = self
 			.records
 			.record_view_state(Self::STATE_KEY, &self.state)
@@ -225,7 +406,7 @@ impl LibraryView {
 
 	fn next_page(&mut self) {
 		let page = self.state.page + 1;
-		let cards = read_cards(&mut self.shelves, &self.records, page);
+		let cards = read_cards(&mut self.shelves, &self.records, &self.pixelator, page);
 		if cards.iter().any(|c| c.is_some()) {
 			self.state.page = page;
 			self.cards = cards;
@@ -243,7 +424,12 @@ impl LibraryView {
 			SortBy::Added => SortBy::Opened,
 		};
 		self.shelves.sort_books();
-		self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
+		self.cards = read_cards(
+			&mut self.shelves,
+			&self.records,
+			&self.pixelator,
+			self.state.page,
+		);
 
 		self.state.sort_by = self.shelves.sort_by;
 		let _ = self
@@ -256,6 +442,7 @@ impl LibraryView {
 fn read_cards(
 	shelves: &mut Shelves,
 	records: &RecordKeeperAssistant,
+	pixelator: &PixelatorAssistant,
 	page: u32,
 ) -> [Option<BookCard>; LIBRARY_LIST_SIZE] {
 	let start = page * LIBRARY_LIST_SIZE as u32;
@@ -265,44 +452,47 @@ fn read_cards(
 	array::from_fn(|i| {
 		let id = book_ids.get(i)?;
 
-		let thumb = shelves
-			.thumbnails
-			.entry(*id)
-			.or_insert_with(|| match load_thumbnail(records, *id) {
-				Ok(thumb) => thumb,
+		if !shelves.thumbnails.contains(id) {
+			match load_thumbnail(records, *id) {
+				Ok(Some(img)) => {
+					let _ = shelves
+						.thumbnails
+						.insert(pixelator, *id, img)
+						.inspect_err(|e| log::error!("Thumbnail error: {e}"));
+				}
+				Ok(None) => {}
 				Err(e) => {
 					log::error!("Error loading thumbnail: {e}");
-					Thumbnail::None
 				}
-			})
-			.clone();
+			}
+		}
+
 		let book = shelves.book(*id)?;
 
-		Some(BookCard::new(book, thumb, shelves.sort_by))
+		Some(BookCard::new(book, shelves.sort_by))
 	})
+}
+
+#[derive(Debug, thiserror::Error)]
+enum LoadThumbnailError {
+	#[error(transparent)]
+	RecordKeeper(#[from] RecordKeeperError),
+	#[error("Error loading thumbnail: {0}")]
+	Io(#[from] io::Error),
+	#[error("Error decoding image: {0}")]
+	Image(#[from] image::ImageError),
 }
 
 fn load_thumbnail(
 	records: &RecordKeeperAssistant,
 	id: BookId,
-) -> Result<Thumbnail, RecordKeeperError> {
+) -> Result<Option<image::RgbaImage>, LoadThumbnailError> {
 	if let Some(thumbnail) = records.fetch_thumbnail(id)?
 		&& let Some(path) = thumbnail.path.as_deref()
 	{
-		match fs::read(path) {
-			Ok(bytes) => {
-				let thumbnail = Thumbnail::Bytes {
-					bytes: bytes.into(),
-				};
-				Ok(thumbnail)
-			}
-			Err(e) => {
-				log::warn!("Failed to load thumbnail at {}: {e}", path.display());
-				Ok(Thumbnail::None)
-			}
-		}
+		Ok(Some(ImageReader::open(path)?.decode()?.to_rgba8()))
 	} else {
-		Ok(Thumbnail::None)
+		Ok(None)
 	}
 }
 
@@ -347,7 +537,12 @@ impl OnAction<ToolAction> for LibraryView {
 }
 
 impl ViewHandle for LibraryView {
-	fn draw<'a, 'b>(&'a mut self, painter: Painter<'b>) {
+	fn draw<'a, 'b>(&'a mut self, mut painter: Painter<'b>) {
+		let thumbnail_texture = painter
+			.with_egui_texture(&self.shelves.thumbnails.pixmap)
+			.inspect_err(|e| log::error!("With egui texture error: {e}"))
+			.ok();
+
 		painter.draw_ui(|ui| {
 			let menu_items = &[
 				MenuItem {
@@ -428,7 +623,29 @@ impl ViewHandle for LibraryView {
 				ui.vertical(|ui| {
 					for card in self.cards.iter().flatten() {
 						ui.allocate_ui([ui.available_width(), card_height].into(), |ui| {
-							if ui.add(card.ui()).clicked() {
+							let thumb = thumbnail_texture.and_then(|texture| {
+								self.shelves.thumbnails.get(&card.id).map(|r| {
+									let width = texture.size.x;
+									let height = texture.size.y;
+									(
+										egui::load::SizedTexture {
+											id: texture.id,
+											size: [r.width() as f32, r.height() as f32].into(),
+										},
+										egui::Rect {
+											min: egui::Pos2 {
+												x: r.xmin as f32 / width,
+												y: r.ymin as f32 / height,
+											},
+											max: egui::Pos2 {
+												x: r.xmax as f32 / width,
+												y: r.ymax as f32 / height,
+											},
+										},
+									)
+								})
+							});
+							if ui.add(card.ui(thumb)).clicked() {
 								self.bell.send_event(AppEvent::OpenReader(card.id));
 							}
 						});
@@ -450,7 +667,12 @@ impl ViewHandle for LibraryView {
 						self.shelves.remove(*id);
 					}
 				};
-				self.cards = read_cards(&mut self.shelves, &self.records, self.state.page);
+				self.cards = read_cards(
+					&mut self.shelves,
+					&self.records,
+					&self.pixelator,
+					self.state.page,
+				);
 				EventResult::RequestRedraw
 			}
 			AppEvent::KeyUp => {
@@ -489,7 +711,7 @@ impl ViewHandle for LibraryView {
 }
 
 impl BookCard {
-	fn new(book: &Book, thumbnail: Thumbnail, sort_by: SortBy) -> Self {
+	fn new(book: &Book, sort_by: SortBy) -> Self {
 		BookCard {
 			id: book.id,
 			title: book.title.clone(),
@@ -499,13 +721,13 @@ impl BookCard {
 			opened_at: book.opened_at,
 			modified_at: book.modified_at,
 			added_at: book.added_at,
-			thumbnail,
 		}
 	}
 }
 
 struct BookCardUi<'a> {
 	card: &'a BookCard,
+	thumbnail: Option<(egui::load::SizedTexture, egui::Rect)>,
 }
 
 impl egui::Widget for BookCardUi<'_> {
@@ -518,15 +740,14 @@ impl egui::Widget for BookCardUi<'_> {
 				let cover_width = height * 0.75;
 				ui.allocate_ui([cover_width, height].into(), |ui| {
 					ui.set_width(cover_width);
-					ui.centered_and_justified(|ui| match &card.thumbnail {
-						Thumbnail::Bytes { bytes } => {
-							ui.add(egui::Image::new(egui::ImageSource::Bytes {
-								uri: format!("bytes://thumbnail_{}.png", card.id.into_inner())
-									.into(),
-								bytes: Bytes::Shared(bytes.clone()),
-							}))
-						}
-						Thumbnail::None => ui.label(
+					ui.centered_and_justified(|ui| match self.thumbnail {
+						Some((texture, uv)) => ui.add(
+							egui::Image::new(texture)
+								.shrink_to_fit()
+								.maintain_aspect_ratio(true)
+								.uv(uv),
+						),
+						None => ui.label(
 							UiIcon::new(Icon::Book)
 								.size(cover_width)
 								.color(Color32::GRAY)
@@ -606,7 +827,13 @@ impl egui::Widget for BookCardUi<'_> {
 }
 
 impl BookCard {
-	pub(crate) fn ui<'a>(&'a self) -> BookCardUi<'a> {
-		BookCardUi { card: self }
+	pub(crate) fn ui<'a>(
+		&'a self,
+		thumbnail: Option<(egui::load::SizedTexture, egui::Rect)>,
+	) -> BookCardUi<'a> {
+		BookCardUi {
+			card: self,
+			thumbnail,
+		}
 	}
 }

@@ -13,6 +13,7 @@ use bitflags::bitflags;
 
 pub use crate::renderer::PixmapBrush;
 pub use crate::renderer::Renderer;
+pub use crate::textures::PixelatorPatchError;
 use crate::textures::PixelatorTextureSupport;
 pub use crate::textures::PixelatorTextures;
 
@@ -25,15 +26,25 @@ bitflags! {
 }
 
 #[derive(Debug)]
-struct PixmapTexture {
+pub struct PixmapTexture {
 	weak_ref: Weak<PixmapId>,
 	pixmap_dim: PixmapDimensions,
 	flags: Flags,
 	texture: wgpu::Texture,
 }
 
+impl PixmapTexture {
+	pub fn texture(&self) -> &wgpu::Texture {
+		&self.texture
+	}
+
+	pub fn pixmap_dims(&self) -> &PixmapDimensions {
+		&self.pixmap_dim
+	}
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct PixmapId(u64);
+pub struct PixmapId(u64);
 
 impl PixmapId {
 	fn take() -> PixmapId {
@@ -41,9 +52,6 @@ impl PixmapId {
 		Self(COUNTER.fetch_add(1, Ordering::AcqRel))
 	}
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PixmapRef(Arc<PixmapId>);
 
 #[derive(Debug)]
 pub enum PixmapFormat {
@@ -66,6 +74,16 @@ pub struct PixmapInstance {
 	pub uv_dim: [u32; 2],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixmapRef(Arc<PixmapId>);
+
+impl PixmapRef {
+	pub fn downgrade(&self) -> Weak<PixmapId> {
+		let Self(inner) = self;
+		std::sync::Arc::downgrade(inner)
+	}
+}
+
 impl From<PixmapId> for PixmapRef {
 	fn from(value: PixmapId) -> Self {
 		Self(Arc::new(value))
@@ -78,7 +96,7 @@ impl AsRef<PixmapId> for PixmapRef {
 	}
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PixmapDimensions([u32; 2]);
 
 impl PixmapDimensions {
@@ -107,6 +125,12 @@ impl PixmapOrigin {
 
 	pub(crate) fn y(&self) -> u32 {
 		self.0[1]
+	}
+}
+
+impl From<[u32; 2]> for PixmapOrigin {
+	fn from(value: [u32; 2]) -> Self {
+		Self(value)
 	}
 }
 
