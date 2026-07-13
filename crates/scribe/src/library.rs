@@ -440,7 +440,7 @@ fn create_thumbnail(path: &Path, bytes: &[u8]) -> Result<(), CreateThumbnailErro
 
 	let encoder = PngEncoder::new_with_quality(
 		&mut file,
-		png::CompressionType::Fast,
+		png::CompressionType::Uncompressed,
 		png::FilterType::default(),
 	);
 	img.write_with_encoder(encoder)?;
