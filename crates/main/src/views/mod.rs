@@ -83,9 +83,14 @@ impl AppView {
 		}
 	}
 
-	pub(crate) fn library(&mut self, records: RecordKeeper, scribe: LibraryScribeAssistant) {
+	pub(crate) fn library(
+		&mut self,
+		records: RecordKeeper,
+		scribe: LibraryScribeAssistant,
+		pixelator: PixelatorAssistant,
+	) {
 		self.close();
-		match library::LibraryView::create(self.bell.clone(), records, scribe) {
+		match library::LibraryView::create(self.bell.clone(), records, scribe, pixelator) {
 			Ok(view) => self.view = Views::Library(view),
 			Err(e) => {
 				log::error!("Library view error: {}", e);
@@ -135,6 +140,14 @@ impl AppView {
 
 	pub(crate) fn error(&mut self, error: &str) {
 		self.view = Views::Error(error.to_string());
+	}
+
+	pub(crate) fn is_loading(&self) -> bool {
+		matches!(self.view, Views::Loading)
+	}
+
+	pub(crate) fn is_error(&self) -> bool {
+		matches!(self.view, Views::Error(_))
 	}
 }
 

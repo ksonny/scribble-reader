@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use egui_wgpu::wgpu::{
-	self,
-};
+use egui_wgpu::wgpu;
 use egui_winit::winit;
 use wgpu::Device;
 use wgpu::Queue;
@@ -113,5 +111,17 @@ impl Renderer {
 		for id in &textures.free {
 			self.gui_renderer.free_texture(id);
 		}
+	}
+
+	pub(crate) fn register_native_texture(
+		&mut self,
+		texture: &wgpu::TextureView,
+	) -> egui::TextureId {
+		self.gui_renderer
+			.register_native_texture(&self.device, texture, wgpu::FilterMode::Linear)
+	}
+
+	pub(crate) fn free_texture(&mut self, texture_id: &egui::TextureId) {
+		self.gui_renderer.free_texture(texture_id);
 	}
 }

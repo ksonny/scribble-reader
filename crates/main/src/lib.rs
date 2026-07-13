@@ -156,6 +156,10 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				}
 			}
 		};
+
+		if self.view.is_loading() || self.view.is_error() {
+			self.bell.send_event(AppEvent::OpenLibrary);
+		}
 	}
 
 	fn suspended(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -168,8 +172,14 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 	fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
 		match event {
 			AppEvent::OpenLibrary => {
+				let Some(pixelator) = self.renderer.as_ref().map(|r| r.pixelator()) else {
+					self.view.error("Renderer not available");
+					return;
+				};
+
 				log::debug!("Open library");
-				self.view.library(self.keeper.clone(), self.scribe.clone());
+				self.view
+					.library(self.keeper.clone(), self.scribe.clone(), pixelator);
 			}
 			AppEvent::OpenReader(book_id) => {
 				let Some(pixelator) = self.renderer.as_ref().map(|r| r.pixelator()) else {
@@ -400,8 +410,6 @@ pub fn start(
 		.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
 		.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
 		.build();
-
-	bell.send_event(AppEvent::OpenLibrary);
 
 	let mut app = App {
 		input,

@@ -8,5 +8,6 @@ edition.workspace = true
 bitflags.workspace = true
 bytemuck.workspace = true
 log.workspace = true
+thiserror.workspace = true
 wgpu.workspace = true
 
