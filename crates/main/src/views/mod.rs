@@ -141,6 +141,14 @@ impl AppView {
 	pub(crate) fn error(&mut self, error: &str) {
 		self.view = Views::Error(error.to_string());
 	}
+
+	pub(crate) fn is_loading(&self) -> bool {
+		matches!(self.view, Views::Loading)
+	}
+
+	pub(crate) fn is_error(&self) -> bool {
+		matches!(self.view, Views::Error(_))
+	}
 }
 
 impl ViewHandle for AppView {

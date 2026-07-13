@@ -156,6 +156,10 @@ impl<'window> ApplicationHandler<AppEvent> for App<'window> {
 				}
 			}
 		};
+
+		if self.view.is_loading() || self.view.is_error() {
+			self.bell.send_event(AppEvent::OpenLibrary);
+		}
 	}
 
 	fn suspended(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -406,8 +410,6 @@ pub fn start(
 		.add_fallback(fonts::NOTO_SANS_MATH_TTF)?
 		.add_fallback(fonts::NOTO_SANS_SYMBOLS_VF_TTF)?
 		.build();
-
-	bell.send_event(AppEvent::OpenLibrary);
 
 	let mut app = App {
 		input,
