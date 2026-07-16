@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use fixed::types::I26F6;
-use rustybuzz::shape_with_plan;
 
 use crate::SculpterShapeError;
+use crate::Variation;
 
 #[derive(Debug)]
 pub(crate) struct GlyphPosition {
@@ -16,7 +16,7 @@ pub(crate) struct GlyphPosition {
 }
 
 impl GlyphPosition {
-	fn from(value: &rustybuzz::GlyphPosition, em_per_unit: I26F6) -> Self {
+	fn from(value: &harfrust::GlyphPosition, em_per_unit: I26F6) -> Self {
 		Self {
 			x_advance: I26F6::from_bits(value.x_advance) * em_per_unit,
 			x_offset: I26F6::from_bits(value.x_offset) * em_per_unit,
@@ -54,26 +54,23 @@ impl std::fmt::Debug for GlyphPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShapeFaceRef(pub(crate) u16);
 
-#[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
-struct PlanKey(ShapeFaceRef, rustybuzz::Script);
-
 struct SculpterFace<'font> {
-	face: rustybuzz::Face<'font>,
+	face: harfrust::FontRef<'font>,
+	shaper_data: harfrust::ShaperData,
+	shaper_instance: Option<harfrust::ShaperInstance>,
 	em_per_unit: I26F6,
 }
 
 pub struct SculptureShaper<'font> {
 	faces: Vec<SculpterFace<'font>>,
-	plans: BTreeMap<PlanKey, rustybuzz::ShapePlan>,
 	fallback: Vec<ShapeFaceRef>,
-	buffer: Option<rustybuzz::UnicodeBuffer>,
+	buffer: Option<harfrust::UnicodeBuffer>,
 }
 
 impl<'font> SculptureShaper<'font> {
 	pub(crate) fn new() -> Self {
 		Self {
 			faces: Vec::new(),
-			plans: BTreeMap::new(),
 			fallback: Vec::new(),
 			buffer: None,
 		}
@@ -81,13 +78,19 @@ impl<'font> SculptureShaper<'font> {
 
 	pub(crate) fn add(
 		&mut self,
-		face: rustybuzz::Face<'font>,
+		face: harfrust::FontRef<'font>,
+		variations: Option<&[Variation]>,
 		units_per_em: I26F6,
 		fallback: bool,
 	) -> ShapeFaceRef {
 		let face_ref = ShapeFaceRef(self.faces.len() as u16);
+		let shaper_data = harfrust::ShaperData::new(&face);
+		let shaper_instance =
+			variations.map(|vs| harfrust::ShaperInstance::from_variations(&face, vs));
 		self.faces.push(SculpterFace {
 			face,
+			shaper_data,
+			shaper_instance,
 			em_per_unit: I26F6::ONE / units_per_em,
 		});
 		if fallback {
@@ -104,19 +107,26 @@ impl<'font> SculptureShaper<'font> {
 	) -> Result<usize, SculpterShapeError> {
 		let mut buffer = self.buffer.take().unwrap_or_default();
 		buffer.set_flags(
-			rustybuzz::BufferFlags::BEGINNING_OF_TEXT & rustybuzz::BufferFlags::END_OF_TEXT,
+			harfrust::BufferFlags::BEGINNING_OF_TEXT & harfrust::BufferFlags::END_OF_TEXT,
 		);
 		buffer.push_str(input);
-		buffer.set_direction(rustybuzz::Direction::LeftToRight);
+		buffer.set_direction(harfrust::Direction::LeftToRight);
 		buffer.guess_segment_properties();
 		// Looks a bit stupid, script() defaults to UNKNOWN so may be INVALID
-		if buffer.script() == rustybuzz::script::UNKNOWN {
-			buffer.set_script(rustybuzz::script::UNKNOWN);
+		if buffer.script() == harfrust::script::UNKNOWN {
+			buffer.set_script(harfrust::script::UNKNOWN);
 		}
 
-		let (face, shape_plan) =
-			get_or_create_shape_plan(&mut self.plans, &self.faces, &buffer, face_ref)?;
-		let shaped = shape_with_plan(&face.face, shape_plan, buffer);
+		let face = self
+			.faces
+			.get(face_ref.0 as usize)
+			.ok_or(SculpterShapeError::FaceNotFound)?;
+		let shaper = face
+			.shaper_data
+			.shaper(&face.face)
+			.instance(face.shaper_instance.as_ref())
+			.build();
+		let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
 		let glyphs_start = glyphs.len();
 		let glyphs_added = shaped.len();
 		glyphs.reserve(shaped.len());
@@ -177,8 +187,8 @@ impl<'font> SculptureShaper<'font> {
 				break;
 			}
 
-			buffer.set_direction(rustybuzz::Direction::LeftToRight);
-			buffer.set_script(rustybuzz::script::UNKNOWN);
+			buffer.set_direction(harfrust::Direction::LeftToRight);
+			buffer.set_script(harfrust::script::UNKNOWN);
 
 			for cluster in invalid.keys() {
 				let c_idx = input.floor_char_boundary(*cluster as usize);
@@ -189,9 +199,17 @@ impl<'font> SculptureShaper<'font> {
 				buffer.add(c, *cluster);
 			}
 
-			let (face, shape_plan) =
-				get_or_create_shape_plan(&mut self.plans, &self.faces, &buffer, face_ref)?;
-			let shaped = shape_with_plan(&face.face, shape_plan, buffer);
+			let face = self
+				.faces
+				.get(face_ref.0 as usize)
+				.ok_or(SculpterShapeError::FaceNotFound)?;
+			// TODO: Cache shaper too?
+			let shaper = face
+				.shaper_data
+				.shaper(&face.face)
+				.instance(face.shaper_instance.as_ref())
+				.build();
+			let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
 
 			for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
 				if info.glyph_id > 0 {
@@ -235,25 +253,4 @@ impl<'font> SculptureShaper<'font> {
 
 		Ok(())
 	}
-}
-
-fn get_or_create_shape_plan<'a, 'font>(
-	plans: &'a mut BTreeMap<PlanKey, rustybuzz::ShapePlan>,
-	faces: &'a [SculpterFace<'font>],
-	buffer: &rustybuzz::UnicodeBuffer,
-	face_ref: ShapeFaceRef,
-) -> Result<(&'a SculpterFace<'font>, &'a rustybuzz::ShapePlan), SculpterShapeError> {
-	let face = faces
-		.get(face_ref.0 as usize)
-		.ok_or(SculpterShapeError::FaceNotFound)?;
-
-	let key = PlanKey(face_ref, buffer.script());
-	let plan = plans.entry(key).or_insert_with(|| {
-		let dir = buffer.direction();
-		let script = Some(buffer.script());
-		let language = buffer.language();
-		rustybuzz::ShapePlan::new(&face.face, dir, script, language.as_ref(), &[])
-	});
-
-	Ok((face, plan))
 }

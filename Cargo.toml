@@ -22,6 +22,7 @@ env_logger = "0.11.8"
 etagere = "0.3.0"
 expand-tilde = "0.6.1"
 fixed = "1.31.0"
+harfrust = "0.12.0"
 html5ever = "0.39.0"
 image = { version = "0.25.10", features = ["png", "jpeg", "ico"] }
 imagesize = { version = "0.15.0", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
@@ -32,10 +33,10 @@ log = "0.4.32"
 lucide-icons = "1.17.0"
 pollster = "1.0.1"
 quick-xml = { version = "0.41.0", features = ["serialize", "escape-html"] }
+read-fonts = "0.41.0"
 resvg = { version = "0.47.0", default-features = false, features = ["raster-images"] }
 rusqlite = { version = "0.40.1", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.6.0"
-rustybuzz = "0.20.1"
 serde = { version = "1.0.226", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 serde_rusqlite = "0.43.0"
