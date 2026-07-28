@@ -11,12 +11,12 @@ use crate::Axis;
 use crate::Family;
 use crate::FontOptions;
 
-#[derive(Debug)]
 pub(crate) struct FontEntry {
 	pub(crate) hash: u64,
 	pub(crate) units_per_em: I26F6,
 	pub(crate) families: Vec<(String, ttf_parser::Language)>,
 	pub(crate) italic: bool,
+	pub(crate) shaper_data: harfrust::ShaperData,
 	pub(crate) data: Cow<'static, [u8]>,
 	pub(crate) font_index: u32,
 }
@@ -29,9 +29,9 @@ impl FontEntry {
 	}
 }
 
-#[derive(Debug)]
 pub(crate) struct FontFallback {
 	pub(crate) units_per_em: I26F6,
+	pub(crate) shaper_data: harfrust::ShaperData,
 	pub(crate) data: Cow<'static, [u8]>,
 	pub(crate) font_index: u32,
 }
@@ -40,6 +40,8 @@ pub(crate) struct FontFallback {
 pub enum SculpterFontErrors {
 	#[error(transparent)]
 	FaceParsing(#[from] ttf_parser::FaceParsingError),
+	#[error(transparent)]
+	ReadFonts(#[from] read_fonts::ReadError),
 }
 
 pub struct SculpterFontsBuilder {
@@ -121,7 +123,6 @@ impl SculpterFontsBuilder {
 	}
 }
 
-#[derive(Debug)]
 struct SculpterFontsInner {
 	fonts: BTreeMap<u64, FontEntry>,
 	font_fallbacks: Vec<FontFallback>,
@@ -129,7 +130,7 @@ struct SculpterFontsInner {
 	family_sans_serif: Cow<'static, str>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SculpterFonts(Arc<SculpterFontsInner>);
 
 impl SculpterFonts {
@@ -167,11 +168,15 @@ fn create_font_entry<D: Into<Cow<'static, [u8]>>>(
 	let families = collect_families(&face);
 	let italic = face.is_italic();
 
+	let shaper_face = read_fonts::FontRef::from_index(&data, font_index)?;
+	let shaper_data = harfrust::ShaperData::new(&shaper_face);
+
 	Ok(FontEntry {
 		hash,
 		units_per_em,
 		families,
 		italic,
+		shaper_data,
 		data,
 		font_index,
 	})
@@ -185,8 +190,12 @@ fn create_font_fallback<D: Into<Cow<'static, [u8]>>>(
 	let face = ttf_parser::Face::parse(&data, font_index)?;
 	let units_per_em = I26F6::from_bits(face.units_per_em() as i32);
 
+	let shaper_face = read_fonts::FontRef::from_index(&data, font_index)?;
+	let shaper_data = harfrust::ShaperData::new(&shaper_face);
+
 	Ok(FontFallback {
 		units_per_em,
+		shaper_data,
 		data,
 		font_index,
 	})

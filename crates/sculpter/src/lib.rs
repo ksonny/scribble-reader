@@ -204,6 +204,7 @@ pub fn create_sculpter<'a>(
 
 		let shaper_ref = shaper.add(
 			shaper_face,
+			&font.shaper_data,
 			Some(&option.variations),
 			font.units_per_em,
 			false,
@@ -227,7 +228,13 @@ pub fn create_sculpter<'a>(
 		let printer_font =
 			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
 
-		let shaper_ref = shaper.add(shaper_face, None, font.units_per_em, true);
+		let shaper_ref = shaper.add(
+			shaper_face,
+			&font.shaper_data,
+			None,
+			font.units_per_em,
+			true,
+		);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
 	}

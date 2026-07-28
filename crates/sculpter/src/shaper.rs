@@ -56,7 +56,7 @@ pub struct ShapeFaceRef(pub(crate) u16);
 
 struct SculpterFace<'font> {
 	face: harfrust::FontRef<'font>,
-	shaper_data: harfrust::ShaperData,
+	shaper_data: &'font harfrust::ShaperData,
 	shaper_instance: Option<harfrust::ShaperInstance>,
 	em_per_unit: I26F6,
 }
@@ -79,12 +79,12 @@ impl<'font> SculptureShaper<'font> {
 	pub(crate) fn add(
 		&mut self,
 		face: harfrust::FontRef<'font>,
+		shaper_data: &'font harfrust::ShaperData,
 		variations: Option<&[Variation]>,
 		units_per_em: I26F6,
 		fallback: bool,
 	) -> ShapeFaceRef {
 		let face_ref = ShapeFaceRef(self.faces.len() as u16);
-		let shaper_data = harfrust::ShaperData::new(&face);
 		let shaper_instance =
 			variations.map(|vs| harfrust::ShaperInstance::from_variations(&face, vs));
 		self.faces.push(SculpterFace {
