@@ -62,6 +62,7 @@ impl SculpterFontsBuilder {
 	pub fn add_font<D: Into<Cow<'static, [u8]>>>(
 		self,
 		data: D,
+		font_index: u32,
 	) -> Result<Self, SculpterFontErrors> {
 		let Self {
 			mut fonts,
@@ -70,7 +71,7 @@ impl SculpterFontsBuilder {
 			family_sans_serif,
 		} = self;
 
-		let e = create_font_entry(data)?;
+		let e = create_font_entry(data, font_index)?;
 		fonts.insert(e.hash, e);
 
 		Ok(Self {
@@ -84,6 +85,7 @@ impl SculpterFontsBuilder {
 	pub fn add_fallback<D: Into<Cow<'static, [u8]>>>(
 		self,
 		data: D,
+		font_index: u32,
 	) -> Result<Self, SculpterFontErrors> {
 		let Self {
 			fonts,
@@ -92,7 +94,7 @@ impl SculpterFontsBuilder {
 			family_sans_serif,
 		} = self;
 
-		let e = create_font_fallback(data)?;
+		let e = create_font_fallback(data, font_index)?;
 		font_fallbacks.push(e);
 
 		Ok(Self {
@@ -151,13 +153,16 @@ impl SculpterFonts {
 	}
 }
 
-fn create_font_entry<D: Into<Cow<'static, [u8]>>>(d: D) -> Result<FontEntry, SculpterFontErrors> {
+fn create_font_entry<D: Into<Cow<'static, [u8]>>>(
+	d: D,
+	font_index: u32,
+) -> Result<FontEntry, SculpterFontErrors> {
 	let data = d.into();
 	let mut s = DefaultHasher::new();
 	data.hash(&mut s);
 	let hash = s.finish();
 
-	let face = ttf_parser::Face::parse(&data, 0)?;
+	let face = ttf_parser::Face::parse(&data, font_index)?;
 	let units_per_em = I26F6::from_bits(face.units_per_em() as i32);
 	let families = collect_families(&face);
 	let italic = face.is_italic();
@@ -168,21 +173,22 @@ fn create_font_entry<D: Into<Cow<'static, [u8]>>>(d: D) -> Result<FontEntry, Scu
 		families,
 		italic,
 		data,
-		font_index: 0,
+		font_index,
 	})
 }
 
 fn create_font_fallback<D: Into<Cow<'static, [u8]>>>(
 	d: D,
+	font_index: u32,
 ) -> Result<FontFallback, SculpterFontErrors> {
 	let data = d.into();
-	let face = ttf_parser::Face::parse(&data, 0)?;
+	let face = ttf_parser::Face::parse(&data, font_index)?;
 	let units_per_em = I26F6::from_bits(face.units_per_em() as i32);
 
 	Ok(FontFallback {
 		units_per_em,
 		data,
-		font_index: 0,
+		font_index,
 	})
 }
 
