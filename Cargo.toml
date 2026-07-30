@@ -67,6 +67,6 @@ lto = "thin"
 
 [patch.crates-io]
 winit = { git = "https://github.com/ksonny/winit", rev = "3dfe4bd368ea8763e902653ef598e219d2a0dccd" }
-egui = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
-egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
-egui-winit = { git = "https://github.com/ksonny/egui", rev = "b4020df086ff2fff8523643961a2747c7d6480fe" }
+egui = { git = "https://github.com/ksonny/egui", rev = "4ba9e4261152bcc6da8be18ca0f2e7c2a764c768" }
+egui-wgpu = { git = "https://github.com/ksonny/egui/", rev = "4ba9e4261152bcc6da8be18ca0f2e7c2a764c768" }
+egui-winit = { git = "https://github.com/ksonny/egui", rev = "4ba9e4261152bcc6da8be18ca0f2e7c2a764c768" }
