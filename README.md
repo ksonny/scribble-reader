@@ -14,7 +14,7 @@ It is also a sufficiently complicated problem for a hobby project. :D
 * Focused - Its made for reading
 * Efficient - 0.1 fps in sleep mode
 * Supports Epub v2 & v3 mostly
-* [rustybuzz](https://github.com/harfbuzz/rustybuzz) text shaping
+* [harfrust](https://github.com/harfbuzz/harfrust) text shaping
 * [ab-glyph](https://github.com/alexheretic/ab-glyph) glyph rasterizing
 
 ## Download

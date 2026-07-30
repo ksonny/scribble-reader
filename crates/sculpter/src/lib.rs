@@ -6,7 +6,6 @@ use std::ops::Range;
 
 use ab_glyph::VariableFont;
 use fixed::types::I26F6;
-use ttf_parser::Tag;
 
 pub use crate::fonts::SculpterFontErrors;
 pub use crate::fonts::SculpterFonts;
@@ -68,12 +67,6 @@ impl Axis {
 	}
 }
 
-impl From<Axis> for Tag {
-	fn from(value: Axis) -> Self {
-		Tag::from_bytes(value.as_bytes())
-	}
-}
-
 impl Display for Axis {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
@@ -95,6 +88,15 @@ pub struct Variation {
 impl Variation {
 	pub fn new(axis: Axis, value: Fixed) -> Self {
 		Self { axis, value }
+	}
+}
+
+impl From<&Variation> for harfrust::Variation {
+	fn from(value: &Variation) -> Self {
+		harfrust::Variation::from((
+			harfrust::Tag::new(value.axis.as_bytes()),
+			value.value.to_num(),
+		))
 	}
 }
 
@@ -163,12 +165,12 @@ impl Default for SculpterOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterCreateError {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error("No font found with family name {0}")]
 	NoFontFound(String),
 	#[error(transparent)]
 	InvalidFont(#[from] ab_glyph::InvalidFont),
+	#[error(transparent)]
+	ReadFont(#[from] read_fonts::ReadError),
 }
 
 pub fn create_sculpter<'a>(
@@ -184,26 +186,21 @@ pub fn create_sculpter<'a>(
 		let font = fonts
 			.find_font(option)
 			.ok_or(SculpterCreateError::NoFontFound(option.family.to_string()))?;
-		let mut shaper_face =
-			rustybuzz::Face::from_face(ttf_parser::Face::parse(&font.data, font.font_index)?);
+		let shaper_face = harfrust::FontRef::from_index(&font.data, font.font_index)?;
 		let mut printer_font =
 			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
 
 		for v in &option.variations {
-			if shaper_face
-				.set_variation(v.axis.into(), v.value.to_num())
-				.is_none()
-			{
-				log::warn!(
-					"Font {} does not have variable axis {}",
-					option.family,
-					v.axis
-				);
-			}
 			printer_font.set_variation(v.axis.as_bytes(), v.value.to_num());
 		}
 
-		let shaper_ref = shaper.add(shaper_face, font.units_per_em, false);
+		let shaper_ref = shaper.add(
+			shaper_face,
+			&font.shaper_data,
+			Some(&option.variations),
+			font.units_per_em,
+			false,
+		);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
 
@@ -219,12 +216,17 @@ pub fn create_sculpter<'a>(
 	}
 
 	for font in fonts.font_fallbacks() {
-		let shaper_face =
-			rustybuzz::Face::from_face(ttf_parser::Face::parse(&font.data, font.font_index)?);
+		let shaper_face = harfrust::FontRef::from_index(&font.data, font.font_index)?;
 		let printer_font =
 			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
 
-		let shaper_ref = shaper.add(shaper_face, font.units_per_em, true);
+		let shaper_ref = shaper.add(
+			shaper_face,
+			&font.shaper_data,
+			None,
+			font.units_per_em,
+			true,
+		);
 		let printer_ref = printer.add(printer_font);
 		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
 	}
@@ -271,8 +273,6 @@ struct Style {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterShapeError {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error("Face not found")]
 	FaceNotFound,
 }
@@ -410,8 +410,6 @@ pub struct TextBlock {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterPrinterError {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error("Face not found")]
 	FaceNotFound,
 	#[error("Font size outside range: {0}")]
