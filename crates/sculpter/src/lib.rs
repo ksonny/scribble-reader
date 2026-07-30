@@ -67,12 +67,6 @@ impl Axis {
 	}
 }
 
-impl From<Axis> for ttf_parser::Tag {
-	fn from(value: Axis) -> Self {
-		ttf_parser::Tag::from_bytes(value.as_bytes())
-	}
-}
-
 impl Display for Axis {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
@@ -171,8 +165,6 @@ impl Default for SculpterOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterCreateError {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error("No font found with family name {0}")]
 	NoFontFound(String),
 	#[error(transparent)]
@@ -281,8 +273,6 @@ struct Style {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterShapeError {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error("Face not found")]
 	FaceNotFound,
 }
@@ -420,8 +410,6 @@ pub struct TextBlock {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterPrinterError {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error("Face not found")]
 	FaceNotFound,
 	#[error("Font size outside range: {0}")]

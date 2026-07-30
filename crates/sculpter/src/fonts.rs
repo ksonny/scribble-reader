@@ -6,6 +6,9 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use fixed::types::I26F6;
+use language_tags::LanguageTag;
+use read_fonts::TableProvider;
+use skrifa::MetadataProvider;
 
 use crate::Axis;
 use crate::Family;
@@ -14,7 +17,7 @@ use crate::FontOptions;
 pub(crate) struct FontEntry {
 	pub(crate) hash: u64,
 	pub(crate) units_per_em: I26F6,
-	pub(crate) families: Vec<(String, ttf_parser::Language)>,
+	pub(crate) families: Vec<(String, Option<LanguageTag>)>,
 	pub(crate) italic: bool,
 	pub(crate) shaper_data: harfrust::ShaperData,
 	pub(crate) data: Cow<'static, [u8]>,
@@ -38,8 +41,6 @@ pub(crate) struct FontFallback {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SculpterFontErrors {
-	#[error(transparent)]
-	FaceParsing(#[from] ttf_parser::FaceParsingError),
 	#[error(transparent)]
 	ReadFonts(#[from] read_fonts::ReadError),
 }
@@ -163,13 +164,18 @@ fn create_font_entry<D: Into<Cow<'static, [u8]>>>(
 	data.hash(&mut s);
 	let hash = s.finish();
 
-	let face = ttf_parser::Face::parse(&data, font_index)?;
-	let units_per_em = I26F6::from_bits(face.units_per_em() as i32);
-	let families = collect_families(&face);
-	let italic = face.is_italic();
+	let face = read_fonts::FontRef::from_index(&data, font_index)?;
+	let units_per_em = I26F6::from_bits(face.head()?.units_per_em() as i32);
+	let families = collect_families(&face)?;
 
-	let shaper_face = read_fonts::FontRef::from_index(&data, font_index)?;
-	let shaper_data = harfrust::ShaperData::new(&shaper_face);
+	let attrs = face.attributes();
+	let italic = match attrs.style {
+		skrifa::attribute::Style::Normal => false,
+		skrifa::attribute::Style::Italic => true,
+		skrifa::attribute::Style::Oblique(angle) => angle.is_some_and(|a| a != 0.),
+	};
+
+	let shaper_data = harfrust::ShaperData::new(&face);
 
 	Ok(FontEntry {
 		hash,
@@ -187,11 +193,9 @@ fn create_font_fallback<D: Into<Cow<'static, [u8]>>>(
 	font_index: u32,
 ) -> Result<FontFallback, SculpterFontErrors> {
 	let data = d.into();
-	let face = ttf_parser::Face::parse(&data, font_index)?;
-	let units_per_em = I26F6::from_bits(face.units_per_em() as i32);
-
-	let shaper_face = read_fonts::FontRef::from_index(&data, font_index)?;
-	let shaper_data = harfrust::ShaperData::new(&shaper_face);
+	let face = read_fonts::FontRef::from_index(&data, font_index)?;
+	let units_per_em = I26F6::from_bits(face.head()?.units_per_em() as i32);
+	let shaper_data = harfrust::ShaperData::new(&face);
 
 	Ok(FontFallback {
 		units_per_em,
@@ -201,35 +205,53 @@ fn create_font_fallback<D: Into<Cow<'static, [u8]>>>(
 	})
 }
 
-fn collect_families(face: &ttf_parser::Face<'_>) -> Vec<(String, ttf_parser::Language)> {
-	use ttf_parser::name_id::FAMILY;
-	use ttf_parser::name_id::TYPOGRAPHIC_FAMILY;
-
+fn collect_families(
+	face: &read_fonts::FontRef<'_>,
+) -> Result<Vec<(String, Option<LanguageTag>)>, read_fonts::ReadError> {
 	let mut families = Vec::new();
 
 	families.extend(
-		face.names()
-			.into_iter()
-			.filter(|name| name.name_id == TYPOGRAPHIC_FAMILY && name.is_unicode())
-			.filter_map(|name| Some((name.to_string()?, name.language()))),
+		face.localized_strings(skrifa::string::StringId::TYPOGRAPHIC_FAMILY_NAME)
+			.map(|name| {
+				(
+					name.to_string(),
+					name.language().and_then(|l| LanguageTag::parse(l).ok()),
+				)
+			}),
 	);
 
 	if families.is_empty() {
 		families.extend(
-			face.names()
-				.into_iter()
-				.filter(|name| name.name_id == FAMILY && name.is_unicode())
-				.filter_map(|name| Some((name.to_string()?, name.language()))),
+			face.localized_strings(skrifa::string::StringId::FAMILY_NAME)
+				.map(|name| {
+					(
+						name.to_string(),
+						name.language().and_then(|l| LanguageTag::parse(l).ok()),
+					)
+				}),
 		);
 	}
 
-	if let Some(index) = families
-		.iter()
-		.position(|f| f.1 == ttf_parser::Language::English_UnitedStates)
-		&& index != 0
-	{
-		families.swap(0, index);
+	// Promote "best" name to first
+	let en_us = LanguageTag::parse("en-US").unwrap();
+	let en = LanguageTag::parse("en").unwrap();
+	let mut best_rank = 0;
+	let mut best_index = 0;
+	for (i, s) in families.iter().enumerate() {
+		let rank = match s {
+			(_, Some(l)) if l == &en_us => 3,
+			(_, Some(l)) if l == &en => 2,
+			(_, None) => 1,
+			_ => continue,
+		};
+		if rank > best_rank {
+			best_rank = rank;
+			best_index = i;
+		}
+	}
+	if best_index != 0 {
+		families.swap(0, best_index);
 	}
 
-	families
+	Ok(families)
 }
