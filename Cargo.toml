@@ -35,7 +35,7 @@ lucide-icons = "1.17.0"
 pollster = "1.0.1"
 quick-xml = { version = "0.41.0", features = ["serialize", "escape-html"] }
 read-fonts = "0.41.0"
-resvg = { version = "0.47.0", default-features = false, features = ["raster-images"] }
+resvg = { version = "0.48.1", default-features = false, features = ["raster-images"] }
 rusqlite = { version = "0.40.1", features = ["bundled", "blob", "rusqlite-macros", "chrono"] }
 rusqlite_migration = "2.6.0"
 serde = { version = "1.0.226", features = ["derive", "rc"] }
