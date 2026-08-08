@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use fixed::types::I26F6;
 
+use crate::SculpterFontStack;
 use crate::SculpterShapeError;
-use crate::Variation;
 
 #[derive(Debug)]
 pub(crate) struct GlyphPosition {
@@ -54,49 +54,43 @@ impl std::fmt::Debug for GlyphPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShapeFaceRef(pub(crate) u16);
 
-struct SculpterFace<'font> {
-	face: harfrust::FontRef<'font>,
-	shaper_data: &'font harfrust::ShaperData,
-	shaper_instance: Option<harfrust::ShaperInstance>,
+struct SculpterFace<'sculpter> {
+	shaper: harfrust::Shaper<'sculpter>,
 	em_per_unit: I26F6,
 }
 
-pub struct SculptureShaper<'font> {
-	faces: Vec<SculpterFace<'font>>,
+pub struct SculptureShaper<'sculpter> {
+	faces: Vec<SculpterFace<'sculpter>>,
 	fallback: Vec<ShapeFaceRef>,
 	buffer: Option<harfrust::UnicodeBuffer>,
 }
 
-impl<'font> SculptureShaper<'font> {
-	pub(crate) fn new() -> Self {
+impl<'sculpter> SculptureShaper<'sculpter> {
+	pub(crate) fn new(stack: &'sculpter SculpterFontStack<'_>) -> Self {
+		let mut faces = Vec::new();
+		let mut fallback = Vec::new();
+
+		for entry in stack.entries() {
+			let shaper = entry
+				.shaper_data
+				.shaper(&entry.font)
+				.instance(entry.shaper_instance.as_ref())
+				.build();
+
+			faces.push(SculpterFace {
+				shaper,
+				em_per_unit: I26F6::ONE / entry.units_per_em,
+			});
+			if entry.fallback {
+				fallback.push(entry.face_ref);
+			}
+		}
+
 		Self {
-			faces: Vec::new(),
-			fallback: Vec::new(),
+			faces,
+			fallback,
 			buffer: None,
 		}
-	}
-
-	pub(crate) fn add(
-		&mut self,
-		face: harfrust::FontRef<'font>,
-		shaper_data: &'font harfrust::ShaperData,
-		variations: Option<&[Variation]>,
-		units_per_em: I26F6,
-		fallback: bool,
-	) -> ShapeFaceRef {
-		let face_ref = ShapeFaceRef(self.faces.len() as u16);
-		let shaper_instance =
-			variations.map(|vs| harfrust::ShaperInstance::from_variations(&face, vs));
-		self.faces.push(SculpterFace {
-			face,
-			shaper_data,
-			shaper_instance,
-			em_per_unit: I26F6::ONE / units_per_em,
-		});
-		if fallback {
-			self.fallback.push(face_ref);
-		}
-		face_ref
 	}
 
 	pub fn shape(
@@ -121,12 +115,7 @@ impl<'font> SculptureShaper<'font> {
 			.faces
 			.get(face_ref.0 as usize)
 			.ok_or(SculpterShapeError::FaceNotFound)?;
-		let shaper = face
-			.shaper_data
-			.shaper(&face.face)
-			.instance(face.shaper_instance.as_ref())
-			.build();
-		let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
+		let shaped = face.shaper.shape(buffer, harfrust::ShapeOptions::new());
 		let glyphs_start = glyphs.len();
 		let glyphs_added = shaped.len();
 		glyphs.reserve(shaped.len());
@@ -203,13 +192,7 @@ impl<'font> SculptureShaper<'font> {
 				.faces
 				.get(face_ref.0 as usize)
 				.ok_or(SculpterShapeError::FaceNotFound)?;
-			// TODO: Cache shaper too?
-			let shaper = face
-				.shaper_data
-				.shaper(&face.face)
-				.instance(face.shaper_instance.as_ref())
-				.build();
-			let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
+			let shaped = face.shaper.shape(buffer, harfrust::ShapeOptions::new());
 
 			for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
 				if info.glyph_id > 0 {
