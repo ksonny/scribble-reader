@@ -277,7 +277,8 @@ impl Renderer<'_> {
 
 		drop(rpass);
 		self.queue.submit(Some(encoder.finish()));
-		frame.present();
+		surface_state.window.pre_present_notify();
+		self.queue.present(frame);
 
 		self.gui_renderer.cleanup();
 
@@ -315,7 +316,12 @@ fn surface_format(cap: wgpu::SurfaceCapabilities) -> Result<wgpu::TextureFormat,
 	let format = cap
 		.formats
 		.iter()
-		.find(|f| matches!(f, wgpu::TextureFormat::Rgba8Unorm))
+		.find(|f| {
+			matches!(
+				f,
+				wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+			)
+		})
 		.or_else(|| cap.formats.first())
 		.cloned()
 		.ok_or(RendererError::NoTextureFormat)?;

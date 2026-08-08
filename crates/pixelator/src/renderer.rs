@@ -119,7 +119,7 @@ impl Renderer {
 			vertex: wgpu::VertexState {
 				module: &shader,
 				entry_point: Some("vs_main"),
-				buffers: &[wgpu::VertexBufferLayout {
+				buffers: &[Some(wgpu::VertexBufferLayout {
 					array_stride: mem::size_of::<PixmapInstance>() as u64,
 					step_mode: wgpu::VertexStepMode::Instance,
 					attributes: &[
@@ -144,7 +144,7 @@ impl Renderer {
 							shader_location: 3,
 						},
 					],
-				}],
+				})],
 				compilation_options: wgpu::PipelineCompilationOptions::default(),
 			},
 			fragment: Some(wgpu::FragmentState {
