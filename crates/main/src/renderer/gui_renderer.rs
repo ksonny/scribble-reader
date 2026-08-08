@@ -85,9 +85,11 @@ impl Renderer {
 		self.paint_jobs = self
 			.ctx
 			.tessellate(output.shapes, self.screen.pixels_per_point);
-		for (id, image_delta) in &self.textures.set {
-			self.gui_renderer
-				.update_texture(&self.device, &self.queue, *id, image_delta);
+		for (id, image_deltas) in self.textures.set.drain() {
+			for image_delta in image_deltas {
+				self.gui_renderer
+					.update_texture(&self.device, &self.queue, id, &image_delta);
+			}
 		}
 	}
 
