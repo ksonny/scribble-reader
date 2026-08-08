@@ -3405,11 +3405,9 @@ version = "0.1.16"
 dependencies = [
  "chrono",
  "config",
- "dotenv",
  "egui",
  "egui-wgpu",
  "egui-winit",
- "env_logger",
  "illustrator",
  "image",
  "integer-sqrt",
@@ -3425,7 +3423,6 @@ dependencies = [
  "wgpu",
  "winit",
  "wrangler",
- "xdg",
 ]
 
 [[package]]
@@ -3438,6 +3435,20 @@ dependencies = [
  "scribble-reader",
  "winit",
  "wrangler",
+]
+
+[[package]]
+name = "scribble-reader-desktop"
+version = "0.1.16"
+dependencies = [
+ "dotenv",
+ "env_logger",
+ "log",
+ "scribble-reader",
+ "scribe",
+ "winit",
+ "wrangler",
+ "xdg",
 ]
 
 [[package]]

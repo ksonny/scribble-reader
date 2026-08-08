@@ -11,6 +11,7 @@ use sculpter::DisplayGlyph;
 use sculpter::Fixed;
 use sculpter::FontOptions;
 use sculpter::FontStyle;
+use sculpter::SculpterFontStack;
 use sculpter::SculpterFonts;
 use sculpter::SculpterInput;
 use sculpter::SculpterOptions;
@@ -92,31 +93,35 @@ impl OnAction<ToolAction> for ExperimentsView {
 				if self.render_items.is_none() {
 					let scale_factor = Fixed::from_num(self.viewport.scale_factor);
 
-					let font_regular = FontOptions {
-						family: sculpter::Family::SansSerif,
-						variations: vec![sculpter::Variation {
+					let font_regular = FontOptions::new(
+						sculpter::Family::SansSerif,
+						vec![sculpter::Variation {
 							axis: Axis::Wght,
 							value: Fixed::lit("400.0"),
 						}],
-					};
-					let font_bold = FontOptions {
-						family: sculpter::Family::SansSerif,
-						variations: vec![sculpter::Variation {
+					);
+					let font_bold = FontOptions::new(
+						sculpter::Family::SansSerif,
+						vec![sculpter::Variation {
 							axis: Axis::Wght,
 							value: Fixed::lit("700.0"),
 						}],
+					);
+					let font_stack = {
+						let mut s = SculpterFontStack::new(&self.fonts);
+						s.add(&font_regular)
+							.inspect_err(|err| log::error!("Error: {err}"))
+							.unwrap();
+						s.add(&font_bold)
+							.inspect_err(|err| log::error!("Error: {err}"))
+							.unwrap();
+						s
 					};
-					let mut sculpter = create_sculpter(
-						&self.fonts,
-						&[&font_regular, &font_bold],
-						SculpterOptions::default(),
-					)
-					.inspect_err(|err| log::error!("Error: {err}"))
-					.unwrap();
+					let mut sculpter = create_sculpter(&font_stack, SculpterOptions::default());
 
 					let inputs = [SculpterInput {
 						style: FontStyle {
-							font_opts: &font_regular,
+							face_ref: font_stack.face_ref(&font_regular).unwrap(),
 							font_size: Fixed::lit("18.0") * scale_factor,
 							line_height_em: Fixed::lit("1.25"),
 						},

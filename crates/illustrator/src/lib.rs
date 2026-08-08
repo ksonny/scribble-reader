@@ -35,6 +35,7 @@ use scribe_epub::EpubMetadata;
 use scribe_epub::Navigation;
 use scribe_epub::Package;
 use sculpter::AtlasImage;
+use sculpter::SculpterFontStack;
 use sculpter::SculpterFonts;
 use sculpter::SculpterOptions;
 use sculpter::TextBlock;
@@ -260,8 +261,8 @@ pub enum IllustratorError {
 	Io(std::io::Error, &'static std::panic::Location<'static>),
 	#[error("layout error: {0}")]
 	Layout(#[from] IllustratorLayoutError),
-	#[error("create sculpter error: {0}")]
-	SculpterCreate(#[from] sculpter::SculpterCreateError),
+	#[error("font stack error: {0}")]
+	SculpterFontStack(#[from] sculpter::SculpterFontStackError),
 	#[error("sculpter print error: {0}")]
 	SculpterPrinter(#[from] sculpter::SculpterPrinterError),
 	#[error("epub error: {0}")]
@@ -333,17 +334,20 @@ impl IllustratorBuilder {
 		};
 
 		let start = Instant::now();
+		let font_stack = {
+			let mut stack = SculpterFontStack::new(&self.fonts);
+			stack.add(&into_font_options(&self.profile.font_regular))?;
+			stack.add(&into_font_options(&self.profile.font_bold))?;
+			stack.add(&into_font_options(&self.profile.font_italic))?;
+			stack.add_fallbacks()?;
+			stack
+		};
 		let sculpter = sculpter::create_sculpter(
-			&self.fonts,
-			&[
-				&into_font_options(&self.profile.font_regular),
-				&into_font_options(&self.profile.font_bold),
-				&into_font_options(&self.profile.font_italic),
-			],
+			&font_stack,
 			SculpterOptions {
 				atlas_sub_pixel_mask: I26F6::from_bits(!0b1),
 			},
-		)?;
+		);
 		log::debug!(
 			"Created sculpter in {}",
 			Instant::now().duration_since(start).as_secs_f64()
@@ -365,7 +369,7 @@ impl IllustratorBuilder {
 							clear_cache = false;
 						}
 
-						let settings = StyleSettings::new(&self.profile, &params);
+						let settings = StyleSettings::new(&font_stack, &self.profile, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -410,7 +414,7 @@ impl IllustratorBuilder {
 					if load_next {
 						let next_spine = current_loc.spine + 1;
 						log::debug!("Load chapter {next_spine} into cache");
-						let settings = StyleSettings::new(&self.profile, &params);
+						let settings = StyleSettings::new(&font_stack, &self.profile, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,
@@ -423,7 +427,7 @@ impl IllustratorBuilder {
 					if load_prev {
 						let prev_spine = current_loc.spine.saturating_sub(1);
 						log::debug!("Load chapter {prev_spine} into cache");
-						let settings = StyleSettings::new(&self.profile, &params);
+						let settings = StyleSettings::new(&font_stack, &self.profile, &params);
 						reusable_layouter = self.load_chapter_to_cache(
 							reusable_layouter,
 							&mut archive,

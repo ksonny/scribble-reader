@@ -5,6 +5,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use ab_glyph::VariableFont;
 use fixed::types::I26F6;
 use language_tags::LanguageTag;
 use read_fonts::TableProvider;
@@ -13,10 +14,10 @@ use skrifa::MetadataProvider;
 use crate::Axis;
 use crate::Family;
 use crate::FontOptions;
+use crate::shaper::ShapeFaceRef;
 
 pub(crate) struct FontEntry {
 	pub(crate) hash: u64,
-	pub(crate) units_per_em: I26F6,
 	pub(crate) families: Vec<(String, Option<LanguageTag>)>,
 	pub(crate) italic: bool,
 	pub(crate) shaper_data: harfrust::ShaperData,
@@ -33,7 +34,6 @@ impl FontEntry {
 }
 
 pub(crate) struct FontFallback {
-	pub(crate) units_per_em: I26F6,
 	pub(crate) shaper_data: harfrust::ShaperData,
 	pub(crate) data: Cow<'static, [u8]>,
 	pub(crate) font_index: u32,
@@ -165,7 +165,6 @@ fn create_font_entry<D: Into<Cow<'static, [u8]>>>(
 	let hash = s.finish();
 
 	let face = read_fonts::FontRef::from_index(&data, font_index)?;
-	let units_per_em = I26F6::from_bits(face.head()?.units_per_em() as i32);
 	let families = collect_families(&face)?;
 
 	let attrs = face.attributes();
@@ -179,7 +178,6 @@ fn create_font_entry<D: Into<Cow<'static, [u8]>>>(
 
 	Ok(FontEntry {
 		hash,
-		units_per_em,
 		families,
 		italic,
 		shaper_data,
@@ -194,11 +192,9 @@ fn create_font_fallback<D: Into<Cow<'static, [u8]>>>(
 ) -> Result<FontFallback, SculpterFontErrors> {
 	let data = d.into();
 	let face = read_fonts::FontRef::from_index(&data, font_index)?;
-	let units_per_em = I26F6::from_bits(face.head()?.units_per_em() as i32);
 	let shaper_data = harfrust::ShaperData::new(&face);
 
 	Ok(FontFallback {
-		units_per_em,
 		shaper_data,
 		data,
 		font_index,
@@ -254,4 +250,124 @@ fn collect_families(
 	}
 
 	Ok(families)
+}
+
+pub(crate) struct FontStackEntry<'font> {
+	pub(crate) face_ref: ShapeFaceRef,
+	pub(crate) font: harfrust::FontRef<'font>,
+	pub(crate) shaper_data: &'font harfrust::ShaperData,
+	pub(crate) shaper_instance: Option<harfrust::ShaperInstance>,
+	pub(crate) printer_font: ab_glyph::FontRef<'font>,
+	pub(crate) units_per_em: I26F6,
+	pub(crate) hash: Option<u64>,
+	pub(crate) fallback: bool,
+}
+
+pub struct SculpterFontStack<'font> {
+	fonts: &'font SculpterFonts,
+	stack: Vec<FontStackEntry<'font>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SculpterFontStackError {
+	#[error("No font found with family name {0}")]
+	NoFontFound(String),
+	#[error(transparent)]
+	InvalidFont(#[from] ab_glyph::InvalidFont),
+	#[error(transparent)]
+	ReadFont(#[from] read_fonts::ReadError),
+}
+
+impl<'font> SculpterFontStack<'font> {
+	pub fn new(fonts: &'font SculpterFonts) -> Self {
+		Self {
+			fonts,
+			stack: Vec::new(),
+		}
+	}
+
+	pub fn add(
+		&mut self,
+		font_opts: &FontOptions<'_>,
+	) -> Result<ShapeFaceRef, SculpterFontStackError> {
+		let entry = self
+			.fonts
+			.find_font(font_opts)
+			.ok_or(SculpterFontStackError::NoFontFound(
+				font_opts.family.to_string(),
+			))?;
+		let face_ref = ShapeFaceRef(self.stack.len() as u16);
+		let font = harfrust::FontRef::from_index(&entry.data, entry.font_index)?;
+		let shaper_instance = harfrust::ShaperInstance::from_variations(
+			&font,
+			font_opts.variations.iter().map(harfrust::Variation::from),
+		);
+		let printer_font = {
+			let mut f = ab_glyph::FontRef::try_from_slice_and_index(&entry.data, entry.font_index)?;
+			for v in &font_opts.variations {
+				f.set_variation(v.axis.as_bytes(), v.value.to_num());
+			}
+			f
+		};
+		let units_per_em = I26F6::from_bits(font.head()?.units_per_em() as i32);
+		let hash = {
+			let mut s = DefaultHasher::new();
+			font_opts.hash(&mut s);
+			s.finish()
+		};
+
+		self.stack.push(FontStackEntry {
+			face_ref,
+			font,
+			shaper_data: &entry.shaper_data,
+			shaper_instance: Some(shaper_instance),
+			printer_font,
+			units_per_em,
+			fallback: false,
+			hash: Some(hash),
+		});
+
+		Ok(face_ref)
+	}
+
+	pub fn add_fallbacks(&mut self) -> Result<(), SculpterFontStackError> {
+		for entry in self.fonts.font_fallbacks() {
+			let face_ref = ShapeFaceRef(self.stack.len() as u16);
+			let font = harfrust::FontRef::from_index(&entry.data, entry.font_index)?;
+			let printer_font =
+				ab_glyph::FontRef::try_from_slice_and_index(&entry.data, entry.font_index)?;
+			let units_per_em = I26F6::from_bits(font.head()?.units_per_em() as i32);
+
+			self.stack.push(FontStackEntry {
+				face_ref,
+				font,
+				shaper_data: &entry.shaper_data,
+				shaper_instance: None,
+				printer_font,
+				units_per_em,
+				fallback: true,
+				hash: None,
+			});
+		}
+		Ok(())
+	}
+
+	pub fn face_ref(&self, font_opts: &FontOptions<'_>) -> Option<ShapeFaceRef> {
+		let hash = {
+			let mut s = DefaultHasher::new();
+			font_opts.hash(&mut s);
+			s.finish()
+		};
+		self.stack
+			.iter()
+			.find_map(|e| e.hash.is_some_and(|h| h == hash).then_some(e.face_ref))
+	}
+
+	pub fn fallback(&self) -> ShapeFaceRef {
+		ShapeFaceRef(0)
+	}
+
+	pub(crate) fn entries(&self) -> &[FontStackEntry<'font>] {
+		&self.stack
+	}
 }
