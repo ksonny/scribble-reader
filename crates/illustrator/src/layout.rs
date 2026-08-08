@@ -22,9 +22,11 @@ use sculpter::Fixed;
 use sculpter::FontOptions;
 use sculpter::FontStyle;
 use sculpter::Sculpter;
+use sculpter::SculpterFontStack;
 use sculpter::SculpterHandle;
 use sculpter::SculpterInput;
 use sculpter::SculpterPrinterError;
+use sculpter::ShapeFaceRef;
 use sculpter::Variation;
 use taffy::prelude::*;
 use zip::ZipArchive;
@@ -106,9 +108,9 @@ impl TextStyle {
 pub(crate) struct StyleSettings<'a> {
 	profile: &'a IllustratorProfile,
 
-	font_regular: FontOptions<'a>,
-	font_italic: FontOptions<'a>,
-	font_bold: FontOptions<'a>,
+	font_regular: ShapeFaceRef,
+	font_italic: ShapeFaceRef,
+	font_bold: ShapeFaceRef,
 
 	scale: f32,
 	page_width: u32,
@@ -116,10 +118,22 @@ pub(crate) struct StyleSettings<'a> {
 }
 
 impl<'a> StyleSettings<'a> {
-	pub(crate) fn new(profile: &'a IllustratorProfile, params: &Params) -> Self {
-		let font_regular = into_font_options(&profile.font_regular);
-		let font_italic = into_font_options(&profile.font_italic);
-		let font_bold = into_font_options(&profile.font_bold);
+	pub(crate) fn new(
+		font_stack: &SculpterFontStack,
+		profile: &'a IllustratorProfile,
+		params: &Params,
+	) -> Self {
+		let font_fallback = font_stack.fallback();
+
+		let font_regular = font_stack
+			.face_ref(&into_font_options(&profile.font_regular))
+			.unwrap_or(font_fallback);
+		let font_italic = font_stack
+			.face_ref(&into_font_options(&profile.font_italic))
+			.unwrap_or(font_fallback);
+		let font_bold = font_stack
+			.face_ref(&into_font_options(&profile.font_bold))
+			.unwrap_or(font_fallback);
 
 		Self {
 			profile,
@@ -134,7 +148,7 @@ impl<'a> StyleSettings<'a> {
 		}
 	}
 
-	fn text_style(&'a self, style: TextStyle) -> FontStyle<'a> {
+	fn text_style(&'a self, style: TextStyle) -> FontStyle {
 		use sculpter::Fixed;
 
 		let font_size = Fixed::from_num(self.font_size());
@@ -142,42 +156,42 @@ impl<'a> StyleSettings<'a> {
 
 		match style {
 			TextStyle::Body => FontStyle {
-				font_opts: &self.font_regular,
+				face_ref: self.font_regular,
 				font_size,
 				line_height_em,
 			},
 			TextStyle::Bold => FontStyle {
-				font_opts: &self.font_bold,
+				face_ref: self.font_bold,
 				font_size,
 				line_height_em,
 			},
 			TextStyle::Italic => FontStyle {
-				font_opts: &self.font_italic,
+				face_ref: self.font_italic,
 				font_size,
 				line_height_em,
 			},
 			TextStyle::H1 => FontStyle {
-				font_opts: &self.font_regular,
+				face_ref: self.font_regular,
 				font_size: font_size * Fixed::from_num(self.profile.h1.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H2 => FontStyle {
-				font_opts: &self.font_regular,
+				face_ref: self.font_regular,
 				font_size: font_size * Fixed::from_num(self.profile.h2.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H3 => FontStyle {
-				font_opts: &self.font_regular,
+				face_ref: self.font_regular,
 				font_size: font_size * Fixed::from_num(self.profile.h3.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H4 => FontStyle {
-				font_opts: &self.font_regular,
+				face_ref: self.font_regular,
 				font_size: font_size * Fixed::from_num(self.profile.h4.font_size_em),
 				line_height_em,
 			},
 			TextStyle::H5 => FontStyle {
-				font_opts: &self.font_regular,
+				face_ref: self.font_regular,
 				font_size: font_size * Fixed::from_num(self.profile.h5.font_size_em),
 				line_height_em,
 			},

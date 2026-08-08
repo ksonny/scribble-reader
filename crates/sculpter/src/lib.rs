@@ -1,13 +1,13 @@
 use std::fmt::Display;
-use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::ops::Range;
 
-use ab_glyph::VariableFont;
 use fixed::types::I26F6;
 
 pub use crate::fonts::SculpterFontErrors;
+pub use crate::fonts::SculpterFontStack;
+pub use crate::fonts::SculpterFontStackError;
 pub use crate::fonts::SculpterFonts;
 pub use crate::fonts::SculpterFontsBuilder;
 use crate::lines::StyledLines;
@@ -16,7 +16,7 @@ pub use crate::printer::AtlasVersion;
 use crate::printer::SculpterPrinter;
 use crate::shaper::GlyphPlan;
 use crate::shaper::SculptureShaper;
-use crate::shaper::ShapeFaceRef;
+pub use crate::shaper::ShapeFaceRef;
 
 mod fonts;
 mod lines;
@@ -102,8 +102,8 @@ impl From<&Variation> for harfrust::Variation {
 
 #[derive(Debug)]
 pub struct FontOptions<'a> {
-	pub family: Family<'a>,
-	pub variations: Vec<Variation>,
+	family: Family<'a>,
+	variations: Vec<Variation>,
 }
 
 impl<'a> FontOptions<'a> {
@@ -141,8 +141,8 @@ impl Display for FontOptions<'_> {
 }
 
 #[derive(Debug)]
-pub struct FontStyle<'a> {
-	pub font_opts: &'a FontOptions<'a>,
+pub struct FontStyle {
+	pub face_ref: ShapeFaceRef,
 	pub font_size: Fixed,
 	pub line_height_em: Fixed,
 }
@@ -173,66 +173,17 @@ pub enum SculpterCreateError {
 	ReadFont(#[from] read_fonts::ReadError),
 }
 
-pub fn create_sculpter<'a>(
-	fonts: &'a SculpterFonts,
-	font_options: &[&FontOptions<'_>],
+pub fn create_sculpter<'a, 'font>(
+	font_stack: &'a SculpterFontStack<'font>,
 	options: SculpterOptions,
 ) -> Result<Sculpter<'a>, SculpterCreateError> {
-	let mut shaper = SculptureShaper::new();
+	let shaper = SculptureShaper::new(font_stack);
 	let mut printer = SculpterPrinter::new([8192; 2]);
-
-	let mut faces = Vec::with_capacity(font_options.len());
-	for option in font_options {
-		let font = fonts
-			.find_font(option)
-			.ok_or(SculpterCreateError::NoFontFound(option.family.to_string()))?;
-		let shaper_face = harfrust::FontRef::from_index(&font.data, font.font_index)?;
-		let mut printer_font =
-			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
-
-		for v in &option.variations {
-			printer_font.set_variation(v.axis.as_bytes(), v.value.to_num());
-		}
-
-		let shaper_ref = shaper.add(
-			shaper_face,
-			&font.shaper_data,
-			Some(&option.variations),
-			font.units_per_em,
-			false,
-		);
-		let printer_ref = printer.add(printer_font);
-		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
-
-		let hash = {
-			let mut s = DefaultHasher::new();
-			option.hash(&mut s);
-			s.finish()
-		};
-		faces.push(SculpterFace {
-			hash,
-			face_ref: shaper_ref,
-		});
-	}
-
-	for font in fonts.font_fallbacks() {
-		let shaper_face = harfrust::FontRef::from_index(&font.data, font.font_index)?;
-		let printer_font =
-			ab_glyph::FontRef::try_from_slice_and_index(&font.data, font.font_index)?;
-
-		let shaper_ref = shaper.add(
-			shaper_face,
-			&font.shaper_data,
-			None,
-			font.units_per_em,
-			true,
-		);
-		let printer_ref = printer.add(printer_font);
-		debug_assert_eq!(shaper_ref, printer_ref, "Missmatched face ref");
+	for entry in font_stack.entries() {
+		printer.add(entry.printer_font.clone());
 	}
 
 	Ok(Sculpter {
-		faces,
 		shaper,
 		printer,
 		glyphs: Vec::new(),
@@ -243,7 +194,7 @@ pub fn create_sculpter<'a>(
 
 #[derive(Debug)]
 pub struct SculpterInput<'a> {
-	pub style: FontStyle<'a>,
+	pub style: FontStyle,
 	pub input: &'a str,
 }
 
@@ -277,13 +228,7 @@ pub enum SculpterShapeError {
 	FaceNotFound,
 }
 
-pub struct SculpterFace {
-	hash: u64,
-	face_ref: ShapeFaceRef,
-}
-
 pub struct Sculpter<'font> {
-	faces: Vec<SculpterFace>,
 	shaper: SculptureShaper<'font>,
 	printer: SculpterPrinter<'font>,
 	glyphs: Vec<GlyphPlan>,
@@ -310,22 +255,9 @@ impl Sculpter<'_> {
 				continue;
 			}
 
-			let font_opts = style.font_opts;
+			let face_ref = style.face_ref;
 			let font_size = style.font_size;
 			let line_height_em = style.line_height_em;
-
-			let font_opts_h = {
-				let mut s = DefaultHasher::new();
-				font_opts.hash(&mut s);
-				s.finish()
-			};
-			let face_ref = self
-				.faces
-				.iter()
-				.find_map(|SculpterFace { hash, face_ref, .. }| {
-					(*hash == font_opts_h).then_some(*face_ref)
-				})
-				.ok_or(SculpterShapeError::FaceNotFound)?;
 
 			self.shaper.shape(face_ref, input, &mut self.glyphs)?;
 
@@ -485,7 +417,6 @@ impl Sculpter<'_> {
 impl Sculpter<'_> {
 	pub fn clear_glyphs(self) -> Self {
 		let Self {
-			faces,
 			shaper,
 			printer,
 			mut glyphs,
@@ -497,7 +428,6 @@ impl Sculpter<'_> {
 		styles.clear();
 
 		Self {
-			faces,
 			shaper,
 			printer,
 			glyphs,

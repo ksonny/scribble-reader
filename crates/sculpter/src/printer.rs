@@ -129,14 +129,12 @@ impl<'a> SculpterPrinter<'a> {
 		}
 	}
 
-	pub(crate) fn add(&mut self, font: ab_glyph::FontRef<'a>) -> ShapeFaceRef {
-		let face_ref = ShapeFaceRef(self.fonts.len() as u16);
+	pub(crate) fn add(&mut self, font: ab_glyph::FontRef<'a>) {
 		let hyphen_glyph_id = font.glyph_id('-');
 		self.fonts.push(SculpterPrinterFont {
 			font,
 			hyphen_glyph_id,
 		});
-		face_ref
 	}
 
 	pub(crate) fn print_line(
