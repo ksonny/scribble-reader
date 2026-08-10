@@ -21,6 +21,7 @@ pub use crate::shaper::ShapeFaceRef;
 mod fonts;
 mod lines;
 mod printer;
+mod raster;
 mod shaper;
 
 pub type Fixed = I26F6;
@@ -88,15 +89,6 @@ pub struct Variation {
 impl Variation {
 	pub fn new(axis: Axis, value: Fixed) -> Self {
 		Self { axis, value }
-	}
-}
-
-impl From<&Variation> for harfrust::Variation {
-	fn from(value: &Variation) -> Self {
-		harfrust::Variation::from((
-			harfrust::Tag::new(value.axis.as_bytes()),
-			value.value.to_num(),
-		))
 	}
 }
 

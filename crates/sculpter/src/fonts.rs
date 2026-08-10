@@ -10,6 +10,7 @@ use fixed::types::I26F6;
 use language_tags::LanguageTag;
 use read_fonts::TableProvider;
 use skrifa::MetadataProvider;
+use skrifa::instance::Location;
 
 use crate::Axis;
 use crate::Family;
@@ -255,6 +256,7 @@ fn collect_families(
 pub(crate) struct FontStackEntry<'font> {
 	pub(crate) face_ref: ShapeFaceRef,
 	pub(crate) font: harfrust::FontRef<'font>,
+	pub(crate) location: Location,
 	pub(crate) shaper_data: &'font harfrust::ShaperData,
 	pub(crate) shaper_instance: Option<harfrust::ShaperInstance>,
 	pub(crate) printer_font: ab_glyph::FontRef<'font>,
@@ -298,10 +300,15 @@ impl<'font> SculpterFontStack<'font> {
 			))?;
 		let face_ref = ShapeFaceRef(self.stack.len() as u16);
 		let font = harfrust::FontRef::from_index(&entry.data, entry.font_index)?;
-		let shaper_instance = harfrust::ShaperInstance::from_variations(
-			&font,
-			font_opts.variations.iter().map(harfrust::Variation::from),
-		);
+		let location = font.axes().location(font_opts.variations.iter().map(|v| {
+			skrifa::setting::VariationSetting::new(
+				skrifa::Tag::new(v.axis.as_bytes()),
+				v.value.to_num(),
+			)
+		}));
+		let shaper_instance =
+			harfrust::ShaperInstance::from_coords(&font, location.coords().iter().cloned());
+
 		let printer_font = {
 			let mut f = ab_glyph::FontRef::try_from_slice_and_index(&entry.data, entry.font_index)?;
 			for v in &font_opts.variations {
@@ -319,6 +326,7 @@ impl<'font> SculpterFontStack<'font> {
 		self.stack.push(FontStackEntry {
 			face_ref,
 			font,
+			location,
 			shaper_data: &entry.shaper_data,
 			shaper_instance: Some(shaper_instance),
 			printer_font,
@@ -341,6 +349,7 @@ impl<'font> SculpterFontStack<'font> {
 			self.stack.push(FontStackEntry {
 				face_ref,
 				font,
+				location: Location::default(),
 				shaper_data: &entry.shaper_data,
 				shaper_instance: None,
 				printer_font,

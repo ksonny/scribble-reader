@@ -51,7 +51,7 @@ impl std::fmt::Debug for GlyphPlan {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShapeFaceRef(pub(crate) u16);
 
 struct SculpterFace<'sculpter> {
