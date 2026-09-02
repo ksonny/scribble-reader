@@ -28,6 +28,7 @@ use sculpter::SculpterInput;
 use sculpter::SculpterPrinterError;
 use sculpter::ShapeFaceRef;
 use sculpter::Variation;
+use taffy::compute_leaf_layout;
 use taffy::prelude::*;
 use zip::ZipArchive;
 
@@ -724,69 +725,77 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 		taffy_tree.compute_layout_with_measure(
 			content_id,
 			taffy::Size::MAX_CONTENT,
-			|known_dimensions, available_space, _node_id, node_context, _style| {
-				if let Size {
-					width: Some(width),
-					height: Some(height),
-				} = known_dimensions
-				{
-					return Size { width, height };
-				}
-				let Some(node_context) = node_context else {
-					return taffy::Size::ZERO;
-				};
+			|inputs, _node_id, node_context, style| {
+				compute_leaf_layout(
+					inputs,
+					style,
+					|_, _| 0.0,
+					|known_dimensions, available_space| {
+						if let Size {
+							width: Some(width),
+							height: Some(height),
+						} = known_dimensions
+						{
+							return taffy::Size { width, height };
+						}
+						let Some(node_context) = node_context else {
+							return taffy::Size::ZERO;
+						};
 
-				let max_width = known_dimensions.width.or(match available_space.width {
-					AvailableSpace::MinContent => None,
-					AvailableSpace::MaxContent => Some(page_width),
-					AvailableSpace::Definite(width) => Some(width),
-				});
-				let max_height = known_dimensions.height.or(match available_space.width {
-					AvailableSpace::MinContent => None,
-					AvailableSpace::MaxContent => Some(page_height),
-					AvailableSpace::Definite(height) => Some(height),
-				});
+						let max_width = known_dimensions.width.or(match available_space.width {
+							AvailableSpace::MinContent => None,
+							AvailableSpace::MaxContent => Some(page_width),
+							AvailableSpace::Definite(width) => Some(width),
+						});
+						let max_height = known_dimensions.height.or(match available_space.width {
+							AvailableSpace::MinContent => None,
+							AvailableSpace::MaxContent => Some(page_height),
+							AvailableSpace::Definite(height) => Some(height),
+						});
 
-				match node_context.content {
-					NodeContent::Text(ref handle) => {
-						let max_width = max_width.unwrap_or(page_width);
-						let result = sculpter.measure(handle, max_width as u32, min_line_height);
-						taffy::Size {
-							width: max_width,
-							height: result.height.to_num::<f32>().ceil(),
+						match node_context.content {
+							NodeContent::Text(ref handle) => {
+								let max_width = max_width.unwrap_or(page_width);
+								let result =
+									sculpter.measure(handle, max_width as u32, min_line_height);
+								taffy::Size {
+									width: max_width,
+									height: result.height.to_num::<f32>().ceil(),
+								}
+							}
+							NodeContent::Svg(ref tree) => {
+								let width = tree.size().width();
+								let height = tree.size().height();
+								let scale = scale_to_fit(
+									width,
+									height,
+									max_width.unwrap_or(page_width).min(page_width),
+									max_height.unwrap_or(page_height).min(page_height),
+								);
+								taffy::Size {
+									width: width * scale,
+									height: height * scale,
+								}
+							}
+							NodeContent::Image(ref image) => {
+								let width = image.width() as f32;
+								let height = image.height() as f32;
+								let scale = scale_to_fit(
+									width,
+									height,
+									max_width.unwrap_or(page_width).min(page_width),
+									max_height.unwrap_or(page_height).min(page_height),
+								)
+								.min(settings.scale);
+								taffy::Size {
+									width: width * scale,
+									height: height * scale,
+								}
+							}
+							NodeContent::Block => taffy::Size::ZERO,
 						}
-					}
-					NodeContent::Svg(ref tree) => {
-						let width = tree.size().width();
-						let height = tree.size().height();
-						let scale = scale_to_fit(
-							width,
-							height,
-							max_width.unwrap_or(page_width).min(page_width),
-							max_height.unwrap_or(page_height).min(page_height),
-						);
-						taffy::Size {
-							width: width * scale,
-							height: height * scale,
-						}
-					}
-					NodeContent::Image(ref image) => {
-						let width = image.width() as f32;
-						let height = image.height() as f32;
-						let scale = scale_to_fit(
-							width,
-							height,
-							max_width.unwrap_or(page_width).min(page_width),
-							max_height.unwrap_or(page_height).min(page_height),
-						)
-						.min(settings.scale);
-						taffy::Size {
-							width: width * scale,
-							height: height * scale,
-						}
-					}
-					NodeContent::Block => taffy::Size::ZERO,
-				}
+					},
+				)
 			},
 		)?;
 
