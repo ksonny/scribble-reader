@@ -261,9 +261,9 @@ impl ContainerElement {
 
 		if prefix.is_none() {
 			match local.as_ref() {
-				b"container" => Self::Container,
-				b"rootfiles" => Self::RootFiles,
-				b"rootfile" => Self::RootFile,
+				"container" => Self::Container,
+				"rootfiles" => Self::RootFiles,
+				"rootfile" => Self::RootFile,
 				_ => Self::Unknown,
 			}
 		} else {
@@ -283,10 +283,10 @@ pub fn parse_container<R: BufRead>(
 	loop {
 		match reader.read_event_into(&mut buf)? {
 			Event::Decl(d) => match d.version()?.as_ref() {
-				b"1.0" => {
+				"1.0" => {
 					version = XmlVersion::Explicit1_0;
 				}
-				b"1.1" => {
+				"1.1" => {
 					version = XmlVersion::Explicit1_1;
 				}
 				_ => {}
@@ -299,8 +299,8 @@ pub fn parse_container<R: BufRead>(
 
 				let path = e.attributes().find_map(|attr| {
 					let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
-					(attr.key.as_ref() == b"full-path").then(|| {
-						attr.decoded_and_normalized_value(version, reader.decoder())
+					(attr.key.as_ref() == "full-path").then(|| {
+						attr.normalized_value(version)
 							.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 							.unwrap_or_default()
 					})
@@ -360,26 +360,26 @@ impl PackageElement {
 
 		if prefix.is_none() {
 			match local.as_ref() {
-				b"package" => Self::Package,
-				b"metadata" => Self::Metadata,
-				b"meta" => Self::Meta,
-				b"manifest" => Self::Manifest,
-				b"item" => Self::Item,
-				b"spine" => Self::Spine,
-				b"itemref" => Self::ItemRef,
-				b"guide" => Self::Guide,
-				b"reference" => Self::Reference,
+				"package" => Self::Package,
+				"metadata" => Self::Metadata,
+				"meta" => Self::Meta,
+				"manifest" => Self::Manifest,
+				"item" => Self::Item,
+				"spine" => Self::Spine,
+				"itemref" => Self::ItemRef,
+				"guide" => Self::Guide,
+				"reference" => Self::Reference,
 				_ => Self::Unknown,
 			}
-		} else if prefix.is_some_and(|p| p.as_ref() == b"dc") {
+		} else if prefix.is_some_and(|p| p.as_ref() == "dc") {
 			match local.as_ref() {
-				b"identifier" => Self::DcIdentifier,
-				b"title" => Self::DcTitle,
-				b"creator" => Self::DcCreator,
-				b"publisher" => Self::DcPublisher,
-				b"language" => Self::DcLanguage,
-				b"date" => Self::DcDate,
-				b"rights" => Self::DcRights,
+				"identifier" => Self::DcIdentifier,
+				"title" => Self::DcTitle,
+				"creator" => Self::DcCreator,
+				"publisher" => Self::DcPublisher,
+				"language" => Self::DcLanguage,
+				"date" => Self::DcDate,
+				"rights" => Self::DcRights,
 				_ => Self::Unknown,
 			}
 		} else {
@@ -411,10 +411,10 @@ pub fn parse_package<R: BufRead>(
 	loop {
 		match reader.read_event_into(&mut buf)? {
 			Event::Decl(d) => match d.version()?.as_ref() {
-				b"1.0" => {
+				"1.0" => {
 					version = XmlVersion::Explicit1_0;
 				}
-				b"1.1" => {
+				"1.1" => {
 					version = XmlVersion::Explicit1_1;
 				}
 				_ => {}
@@ -438,7 +438,7 @@ pub fn parse_package<R: BufRead>(
 				};
 
 				if let Some(field) = field {
-					let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+					let value = reader.read_text_into(e.name(), &mut txt_buf)?;
 					let value = unescape(&value)?.to_string();
 
 					if field.replace(value).is_some() {
@@ -456,7 +456,7 @@ pub fn parse_package<R: BufRead>(
 					let is_cover = e.attributes().any(|attr| {
 						attr.inspect_err(|e| log::warn!("Meta attr error: {e}"))
 							.is_ok_and(|attr| {
-								attr.key.as_ref() == b"name" && attr.value.as_ref() == b"cover"
+								attr.key.as_ref() == "name" && attr.value.as_ref() == "cover"
 							})
 					});
 					if !is_cover {
@@ -467,8 +467,8 @@ pub fn parse_package<R: BufRead>(
 						.attributes()
 						.find_map(|attr| {
 							let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
-							(attr.key.as_ref() == b"content").then(|| {
-								attr.decoded_and_normalized_value(version, reader.decoder())
+							(attr.key.as_ref() == "content").then(|| {
+								attr.normalized_value(version)
 									.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 									.unwrap_or_default()
 							})
@@ -505,14 +505,14 @@ pub fn parse_package<R: BufRead>(
 						continue;
 					};
 					let Ok(value) = attr
-						.decoded_and_normalized_value(version, reader.decoder())
+						.normalized_value(version)
 						.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 					else {
 						continue;
 					};
 
 					match attr.key.as_ref() {
-						b"id" => {
+						"id" => {
 							let resource_id = resource_ids
 								.get(value.as_ref())
 								.cloned()
@@ -523,7 +523,7 @@ pub fn parse_package<R: BufRead>(
 								});
 							id = Some(resource_id)
 						}
-						b"href" => {
+						"href" => {
 							let path = Path::new(value.as_ref());
 							let value = if path.is_relative() {
 								package_root.join(path).to_string_lossy().to_string()
@@ -532,8 +532,8 @@ pub fn parse_package<R: BufRead>(
 							};
 							href = Some(value)
 						}
-						b"media-type" => mime = Some(value.to_string()),
-						b"properties" => properties = Some(value.to_string()),
+						"media-type" => mime = Some(value.to_string()),
+						"properties" => properties = Some(value.to_string()),
 						_ => {}
 					}
 				}
@@ -584,13 +584,13 @@ pub fn parse_package<R: BufRead>(
 						continue;
 					};
 					let Ok(value) = attr
-						.decoded_and_normalized_value(version, reader.decoder())
+						.normalized_value(version)
 						.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 					else {
 						continue;
 					};
 
-					if attr.key.as_ref() == b"idref" {
+					if attr.key.as_ref() == "idref" {
 						idref = Some(value)
 					}
 				}
@@ -664,21 +664,21 @@ impl NavElement {
 
 		if prefix.is_none() {
 			match local.as_ref() {
-				b"nav" => {
+				"nav" => {
 					let is_toc = e.attributes().any(|attr| {
 						attr.inspect_err(|e| log::warn!("Attr error: {e}"))
 							.is_ok_and(|attr| {
-								attr.key.prefix().is_some_and(|p| p.as_ref() == b"epub")
-									&& attr.key.local_name().as_ref() == b"type"
-									&& attr.value.as_ref() == b"toc"
+								attr.key.prefix().is_some_and(|p| p.as_ref() == "epub")
+									&& attr.key.local_name().as_ref() == "type"
+									&& attr.value.as_ref() == "toc"
 							})
 					});
 					if is_toc { Self::NavToc } else { Self::Unknown }
 				}
-				b"h1" => Self::H1,
-				b"ol" => Self::Ol,
-				b"li" => Self::Li,
-				b"a" => Self::A,
+				"h1" => Self::H1,
+				"ol" => Self::Ol,
+				"li" => Self::Li,
+				"a" => Self::A,
 				_ => Self::Unknown,
 			}
 		} else {
@@ -715,10 +715,10 @@ pub fn parse_nav<R: BufRead>(
 	loop {
 		match reader.read_event_into(&mut buf)? {
 			Event::Decl(d) => match d.version()?.as_ref() {
-				b"1.0" => {
+				"1.0" => {
 					version = XmlVersion::Explicit1_0;
 				}
-				b"1.1" => {
+				"1.1" => {
 					version = XmlVersion::Explicit1_1;
 				}
 				_ => {}
@@ -741,11 +741,11 @@ pub fn parse_nav<R: BufRead>(
 					});
 					stack.push(idx);
 				} else if matches!(el, NavElement::A) {
-					let key = b"href";
+					let key = "href";
 					let href = e.attributes().find_map(|attr| {
 						let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
 						(attr.key.as_ref() == key).then(|| {
-							attr.decoded_and_normalized_value(version, reader.decoder())
+							attr.normalized_value(version)
 								.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 								.unwrap_or_default()
 						})
@@ -755,7 +755,7 @@ pub fn parse_nav<R: BufRead>(
 					{
 						path.pop(); // Read text handles end
 
-						let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+						let value = reader.read_text_into(e.name(), &mut txt_buf)?;
 						let value = unescape(&value)?.to_string();
 						entries[idx].title = Some(value);
 
@@ -779,7 +779,7 @@ pub fn parse_nav<R: BufRead>(
 				} else if matches!(el, NavElement::H1) {
 					path.pop(); // Read text handles end
 
-					let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+					let value = reader.read_text_into(e.name(), &mut txt_buf)?;
 					let value = unescape(&value)?.to_string();
 					doc_title = Some(value);
 				}
@@ -860,15 +860,15 @@ impl NcxElement {
 
 		if prefix.is_none() {
 			match local.as_ref() {
-				b"ncx" => Self::Ncx,
-				b"head" => Self::Head,
-				b"meta" => Self::Meta,
-				b"docTitle" => Self::DocTitle,
-				b"text" => Self::Text,
-				b"navMap" => Self::NavMap,
-				b"navPoint" => Self::NavPoint,
-				b"navLabel" => Self::NavLabel,
-				b"content" => Self::Content,
+				"ncx" => Self::Ncx,
+				"head" => Self::Head,
+				"meta" => Self::Meta,
+				"docTitle" => Self::DocTitle,
+				"text" => Self::Text,
+				"navMap" => Self::NavMap,
+				"navPoint" => Self::NavPoint,
+				"navLabel" => Self::NavLabel,
+				"content" => Self::Content,
 				_ => Self::Unknown,
 			}
 		} else {
@@ -903,10 +903,10 @@ pub fn parse_ncx<R: BufRead>(
 	loop {
 		match reader.read_event_into(&mut buf)? {
 			Event::Decl(d) => match d.version()?.as_ref() {
-				b"1.0" => {
+				"1.0" => {
 					version = XmlVersion::Explicit1_0;
 				}
-				b"1.1" => {
+				"1.1" => {
 					version = XmlVersion::Explicit1_1;
 				}
 				_ => {}
@@ -925,7 +925,7 @@ pub fn parse_ncx<R: BufRead>(
 				}
 
 				if matches!(el, NcxElement::Text) {
-					let value = reader.read_text_into(e.name(), &mut txt_buf)?.decode()?;
+					let value = reader.read_text_into(e.name(), &mut txt_buf)?;
 					let value = unescape(&value)?;
 
 					if matches!(path.last(), Some(NcxElement::DocTitle)) {
@@ -952,8 +952,8 @@ pub fn parse_ncx<R: BufRead>(
 				if matches!(el, NcxElement::Content) {
 					let src = e.attributes().find_map(|attr| {
 						let attr = attr.inspect_err(|e| log::warn!("Attr error: {e}")).ok()?;
-						(attr.key.as_ref() == b"src").then(|| {
-							attr.decoded_and_normalized_value(version, reader.decoder())
+						(attr.key.as_ref() == "src").then(|| {
+							attr.normalized_value(version)
 								.inspect_err(|e| log::warn!("Attr value decode error: {e}"))
 								.unwrap_or_default()
 						})
