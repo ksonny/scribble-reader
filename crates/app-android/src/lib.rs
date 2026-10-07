@@ -58,6 +58,7 @@ jni::bind_java_type! {
 	}
 }
 
+#[allow(deprecated, reason = "jni uses deprecated AtomicBool::fetch_update")]
 const _WRANGLER_NATIVE_METHODS: &[jni::NativeMethod] = &[
 	native_method! {
 		java_type = "org.lotrax.scribblereader.MainActivity",
