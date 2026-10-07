@@ -957,7 +957,7 @@ impl egui::Widget for ChapterCardUi<'_> {
 		.show(ui, |ui| {
 			ui.set_min_size(ui.available_size());
 			let title = card.title.as_ref();
-			ui.label(RichText::new(title).text_style(theme::HEADING2.clone()));
+			ui.label(RichText::new(title).text_style(theme::TYPOGRAPHY.heading2.clone()));
 			ui.interact(
 				ui.min_rect(),
 				ui.id().with(card.location.spine),

@@ -31,7 +31,7 @@ pub fn create_egui_ctx() -> Context {
 		"lucide-icons",
 		egui::FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES),
 		vec![egui::epaint::text::InsertFontFamily {
-			family: theme::ICON_FONT_FAMILY.clone(),
+			family: theme::TYPOGRAPHY.icons_font_family.clone(),
 			priority: egui::epaint::text::FontPriority::Lowest,
 		}],
 	));
@@ -89,7 +89,7 @@ pub fn create_egui_ctx() -> Context {
 				FontId::new(25.0, FontFamily::Proportional),
 			),
 			(
-				theme::HEADING2.clone(),
+				theme::TYPOGRAPHY.heading2.clone(),
 				FontId::new(theme::M_SIZE, FontFamily::Proportional),
 			),
 			(
@@ -109,16 +109,19 @@ pub fn create_egui_ctx() -> Context {
 				FontId::new(theme::S_SIZE, FontFamily::Proportional),
 			),
 			(
-				theme::ICON_STYLE.clone(),
-				FontId::new(theme::DEFAULT_SIZE, theme::ICON_FONT_FAMILY.clone()),
+				theme::TYPOGRAPHY.icons_style.clone(),
+				FontId::new(
+					theme::DEFAULT_SIZE,
+					theme::TYPOGRAPHY.icons_font_family.clone(),
+				),
 			),
 			(
-				theme::ICON_L_STYLE.clone(),
-				FontId::new(theme::L_SIZE, theme::ICON_FONT_FAMILY.clone()),
+				theme::TYPOGRAPHY.icons_style_large.clone(),
+				FontId::new(theme::L_SIZE, theme::TYPOGRAPHY.icons_font_family.clone()),
 			),
 			(
-				theme::ICON_XL_STYLE.clone(),
-				FontId::new(theme::XL_SIZE, theme::ICON_FONT_FAMILY.clone()),
+				theme::TYPOGRAPHY.icons_style_xlarge.clone(),
+				FontId::new(theme::L_SIZE, theme::TYPOGRAPHY.icons_font_family.clone()),
 			),
 		]
 		.into();
@@ -219,7 +222,7 @@ impl UiIcon<'_> {
 	pub(crate) fn new(icon: Icon) -> Self {
 		UiIcon {
 			color: Color32::BLACK,
-			icon_font: theme::ICON_FONT.clone(),
+			icon_font: theme::TYPOGRAPHY.icons_font.clone(),
 			icon,
 			text_font: FontId::new(theme::DEFAULT_SIZE, FontFamily::Proportional),
 			text: None,
@@ -239,7 +242,7 @@ impl UiIcon<'_> {
 
 	pub(crate) fn size(self, size: f32) -> Self {
 		Self {
-			icon_font: FontId::new(size, theme::ICON_FONT_FAMILY.clone()),
+			icon_font: theme::TYPOGRAPHY.icons_font.clone(),
 			text_font: FontId::new(size, FontFamily::Proportional),
 			..self
 		}
@@ -247,7 +250,7 @@ impl UiIcon<'_> {
 
 	pub(crate) fn large(self) -> Self {
 		Self {
-			icon_font: theme::ICON_L_FONT.clone(),
+			icon_font: theme::TYPOGRAPHY.icons_font.clone(),
 			text_font: FontId::new(theme::L_SIZE, FontFamily::Proportional),
 			..self
 		}
@@ -255,7 +258,7 @@ impl UiIcon<'_> {
 
 	pub(crate) fn xlarge(self) -> Self {
 		Self {
-			icon_font: theme::ICON_XL_FONT.clone(),
+			icon_font: theme::TYPOGRAPHY.icons_font.clone(),
 			text_font: FontId::new(theme::XL_SIZE, FontFamily::Proportional),
 			..self
 		}

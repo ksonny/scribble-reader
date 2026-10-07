@@ -14,7 +14,6 @@ egui-winit.workspace = true
 illustrator.workspace = true
 image.workspace = true
 integer-sqrt.workspace = true
-lazy_static.workspace = true
 log.workspace = true
 lucide-icons.workspace = true
 pixelator.workspace = true
