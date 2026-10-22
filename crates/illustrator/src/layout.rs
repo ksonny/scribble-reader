@@ -535,10 +535,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 					let container = taffy_tree.new_leaf_with_context(
 						Style {
 							display: Display::Flex,
-							justify_content: Some(AlignContent {
+							justify_content: AlignContent {
 								keyword: AlignContentKeyword::Center,
 								safety: AlignmentSafety::Unsafe,
-							}),
+							},
 							..Style::default()
 						},
 						NodeContext::block(el.id.value()),
@@ -558,10 +558,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 					let container = taffy_tree.new_leaf_with_context(
 						Style {
 							display: Display::Flex,
-							justify_content: Some(AlignContent {
+							justify_content: AlignContent {
 								keyword: AlignContentKeyword::Center,
 								safety: AlignmentSafety::Unsafe,
-							}),
+							},
 							..Style::default()
 						},
 						NodeContext::block(el.id.value()),
@@ -607,10 +607,10 @@ impl<'layout> PageLayouter<'layout, PageLayouterEmpty> {
 								let container = taffy_tree.new_leaf_with_context(
 									Style {
 										display: Display::Flex,
-										justify_content: Some(AlignContent {
+										justify_content: AlignContent {
 											keyword: AlignContentKeyword::Center,
 											safety: AlignmentSafety::Unsafe,
-										}),
+										},
 										..Style::default()
 									},
 									NodeContext::block(el.id.value()),
