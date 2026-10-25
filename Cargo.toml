@@ -46,7 +46,7 @@ thiserror = "2.0.19"
 wgpu = "30.0.0"
 winit = "0.30.13"
 xdg = "3.0.0"
-zip = "8.6.0"
+zip = "9.0.5"
 
 illustrator = { path = "./crates/illustrator" }
 pixelator = { path = "./crates/pixelator" }
