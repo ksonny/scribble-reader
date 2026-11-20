@@ -2022,9 +2022,9 @@ dependencies = [
 
 [[package]]
 name = "lucide-icons"
-version = "1.70.0"
+version = "1.73.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83bac69fc369b66f6dfcd418a34f474c6b79f6985e7cdf29f1b5319fc0050322"
+checksum = "c54114e039d68d862d3831acca8a658f091ff6d5600dcb0208cf3c339104a14f"
 
 [[package]]
 name = "lzma-rust2"
